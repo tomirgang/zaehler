@@ -28,12 +28,20 @@ impl DbSessionStore {
 
     /// Entfernt abgelaufene Sitzungen; liefert die Anzahl.
     pub async fn delete_expired(&self, now: DateTime<Utc>) -> Result<u64, sea_orm::DbErr> {
-        Ok(session::Entity::delete_many()
-            .filter(session::Column::ExpiresAt.lt(now))
-            .exec(&self.db)
-            .await?
-            .rows_affected)
+        delete_expired(&self.db, now).await
     }
+}
+
+/// Entfernt Sitzungen mit Ablauf vor `now`; idempotent.
+pub(crate) async fn delete_expired(
+    db: &DatabaseConnection,
+    now: DateTime<Utc>,
+) -> Result<u64, sea_orm::DbErr> {
+    Ok(session::Entity::delete_many()
+        .filter(session::Column::ExpiresAt.lt(now))
+        .exec(db)
+        .await?
+        .rows_affected)
 }
 
 fn backend(e: impl std::fmt::Display) -> session_store::Error {

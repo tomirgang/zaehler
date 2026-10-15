@@ -9,6 +9,10 @@ use std::collections::{HashMap, HashSet};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
+use rust_decimal::{
+    Decimal,
+    prelude::{FromPrimitive, ToPrimitive},
+};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
     QueryFilter, QueryOrder, QuerySelect, SqlErr, TransactionTrait, sea_query::Expr,
@@ -16,19 +20,21 @@ use sea_orm::{
 use uuid::Uuid;
 use zaehler_app::{
     PortError, Role, Tenant,
-    ids::{DeviceId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
+    ids::{BlobKey, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
     model::{
-        Device, DeviceData, Household, HouseholdData, HouseholdSummary, Identity, Meter,
-        MeterAggregate, MeterData, MeterSummary, MonthDay, Reading, Register, RegisterData, User,
+        Device, DeviceData, Draft, DraftOutcome, DraftStatus, Household, HouseholdData,
+        HouseholdSummary, Identity, Meter, MeterAggregate, MeterData, MeterSummary, MonthDay,
+        Reading, Register, RegisterData, User,
     },
     port::{
-        HouseholdRepository, MembershipRepository, MeterRepository, PortResult, Readiness,
-        ReadingRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
+        DraftRepository, HouseholdRepository, MaintenanceRepository, MembershipRepository,
+        MeterRepository, PortResult, Readiness, ReadingRepository, UnitOfWork, UnitOfWorkFactory,
+        UserRepository,
     },
 };
 
 use crate::{
-    entity::{household, membership, meter, meter_device, reading, register, user},
+    entity::{ai_draft, household, membership, meter, meter_device, reading, register, user},
     fixed,
 };
 
@@ -73,6 +79,55 @@ impl Readiness for SeaOrmStore {
     }
 }
 
+/// Offene Entwürfe (`pending`, `failed`).
+fn open_status() -> [&'static str; 2] {
+    [DraftStatus::Pending.as_str(), DraftStatus::Failed.as_str()]
+}
+
+#[async_trait]
+impl MaintenanceRepository for SeaOrmStore {
+    // @impl SPEC_OPS_HOUSEKEEPING
+    async fn expire_drafts(
+        &self,
+        cutoff: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> PortResult<Vec<BlobKey>> {
+        let expired = ai_draft::Entity::find()
+            .filter(ai_draft::Column::Status.is_in(open_status()))
+            .filter(ai_draft::Column::CreatedAt.lt(cutoff))
+            .all(&self.db)
+            .await
+            .map_err(db_err)?;
+        if expired.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Bedingung auf den Status: ein paralleler Lauf ändert dieselben
+        // Zeilen nicht doppelt; die Fotos löschen beide (idempotent).
+        ai_draft::Entity::update_many()
+            .col_expr(
+                ai_draft::Column::Status,
+                Expr::value(DraftStatus::Discarded.as_str()),
+            )
+            .col_expr(ai_draft::Column::FinishedAt, Expr::value(now))
+            .filter(ai_draft::Column::Id.is_in(expired.iter().map(|d| d.id)))
+            .filter(ai_draft::Column::Status.is_in(open_status()))
+            .exec(&self.db)
+            .await
+            .map_err(db_err)?;
+        expired
+            .into_iter()
+            .map(|d| BlobKey::parse(&d.photo_key).ok_or_else(|| data_err("photo_key")))
+            .collect()
+    }
+
+    // @impl SPEC_OPS_HOUSEKEEPING
+    async fn delete_expired_sessions(&self, now: DateTime<Utc>) -> PortResult<u64> {
+        crate::session_store::delete_expired(&self.db, now)
+            .await
+            .map_err(db_err)
+    }
+}
+
 struct SeaOrmUow {
     txn: DatabaseTransaction,
 }
@@ -92,6 +147,9 @@ impl UnitOfWork for SeaOrmUow {
         self
     }
     fn readings(&mut self) -> &mut dyn ReadingRepository {
+        self
+    }
+    fn drafts(&mut self) -> &mut dyn DraftRepository {
         self
     }
     async fn commit(self: Box<Self>) -> PortResult<()> {
@@ -183,7 +241,14 @@ fn to_reading(m: reading::Model) -> PortResult<Reading> {
         value: fixed::quantity_from_db(m.value_milli),
         source: m.source.parse().map_err(data_err)?,
         note: m.note,
-        photo_key: m.photo_key,
+        photo_key: m
+            .photo_key
+            .map(|k| BlobKey::parse(&k).ok_or_else(|| data_err("photo_key")))
+            .transpose()?,
+        ai_confidence: m
+            .ai_confidence
+            .and_then(Decimal::from_f64)
+            .map(|c| c.round_dp(3)),
         created_by: m.created_by.map(UserId),
     })
 }
@@ -757,8 +822,8 @@ impl ReadingRepository for SeaOrmUow {
                 read_at: Set(r.read_at),
                 value_milli: Set(fixed::quantity_to_db(r.value).map_err(data_err)?),
                 source: Set(r.source.as_str().to_owned()),
-                photo_key: Set(r.photo_key.clone()),
-                ai_confidence: Set(None),
+                photo_key: Set(r.photo_key.as_ref().map(ToString::to_string)),
+                ai_confidence: Set(r.ai_confidence.and_then(|c| c.to_f64())),
                 note: Set(r.note.clone()),
                 created_by: Set(r.created_by.map(|u| u.0)),
                 created_at: Set(Utc::now()),
@@ -795,6 +860,102 @@ impl ReadingRepository for SeaOrmUow {
             .exec(&self.txn)
             .await
             .map_err(db_err)?;
+        Ok(())
+    }
+}
+
+fn to_draft(m: ai_draft::Model) -> PortResult<Draft> {
+    Ok(Draft {
+        id: DraftId(m.id),
+        created_by: UserId(m.created_by),
+        photo_key: BlobKey::parse(&m.photo_key).ok_or_else(|| data_err("photo_key"))?,
+        model: m.model,
+        duration_ms: m.duration_ms,
+        suggestion: m
+            .suggestion
+            .map(|s| serde_json::from_str(&s).map_err(data_err))
+            .transpose()?,
+        matched_meter_id: m.matched_meter_id.map(MeterId),
+        status: m.status.parse().map_err(data_err)?,
+        created_at: m.created_at,
+    })
+}
+
+// @impl SPEC_AI_DRAFTS, SPEC_SEC_TENANT_SCOPE
+#[async_trait]
+impl DraftRepository for SeaOrmUow {
+    async fn create(&mut self, t: &Tenant, d: &Draft) -> PortResult<()> {
+        if d.photo_key.household() != t.household_id() {
+            return Err(PortError::NotFound);
+        }
+        if let Some(m) = d.matched_meter_id {
+            self.require_meter(t, m.0).await?;
+        }
+        let suggestion = d
+            .suggestion
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(data_err)?;
+        ai_draft::Entity::insert(ai_draft::ActiveModel {
+            id: Set(d.id.0),
+            household_id: Set(t.household_id().0),
+            created_by: Set(d.created_by.0),
+            photo_key: Set(d.photo_key.to_string()),
+            model: Set(d.model.clone()),
+            duration_ms: Set(d.duration_ms),
+            suggestion: Set(suggestion),
+            matched_meter_id: Set(d.matched_meter_id.map(|m| m.0)),
+            status: Set(d.status.as_str().to_owned()),
+            confirmed_reading_id: Set(None),
+            corrected: Set(None),
+            created_at: Set(d.created_at),
+            finished_at: Set(None),
+        })
+        .exec_without_returning(&self.txn)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn get_open(&mut self, t: &Tenant, id: DraftId) -> PortResult<Option<Draft>> {
+        ai_draft::Entity::find_by_id(id.0)
+            .filter(ai_draft::Column::HouseholdId.eq(t.household_id().0))
+            .filter(ai_draft::Column::Status.is_in(open_status()))
+            .one(&self.txn)
+            .await
+            .map_err(db_err)?
+            .map(to_draft)
+            .transpose()
+    }
+
+    async fn finish(
+        &mut self,
+        t: &Tenant,
+        id: DraftId,
+        outcome: DraftOutcome,
+        at: DateTime<Utc>,
+    ) -> PortResult<()> {
+        let (status, reading, corrected) = match outcome {
+            DraftOutcome::Confirmed { reading, corrected } => {
+                (DraftStatus::Confirmed, Some(reading.0), corrected)
+            }
+            DraftOutcome::Discarded => (DraftStatus::Discarded, None, None),
+        };
+        let res = ai_draft::Entity::update_many()
+            .col_expr(ai_draft::Column::Status, Expr::value(status.as_str()))
+            .col_expr(ai_draft::Column::ConfirmedReadingId, Expr::value(reading))
+            .col_expr(ai_draft::Column::Corrected, Expr::value(corrected))
+            .col_expr(ai_draft::Column::FinishedAt, Expr::value(at))
+            .filter(ai_draft::Column::Id.eq(id.0))
+            .filter(ai_draft::Column::HouseholdId.eq(t.household_id().0))
+            .filter(ai_draft::Column::Status.is_in(open_status()))
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        if res.rows_affected == 0 {
+            return Err(PortError::NotFound);
+        }
         Ok(())
     }
 }

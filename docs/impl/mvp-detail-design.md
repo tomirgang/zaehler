@@ -191,7 +191,7 @@ trait DraftRepository {
     async fn finish(&mut self, t: &Tenant, id: DraftId, f: DraftOutcome) -> Result<(), PortError>;
 }
 trait MaintenanceRepository {                                   // ohne Tenant, nur für Housekeeping
-    async fn expire_drafts(&self, cutoff: DateTime<Utc>) -> Result<Vec<BlobKey>, PortError>;
+    async fn expire_drafts(&self, cutoff: DateTime<Utc>, now: DateTime<Utc>) -> Result<Vec<BlobKey>, PortError>;
     async fn delete_expired_sessions(&self, now: DateTime<Utc>) -> Result<u64, PortError>;
 }
 trait BlobStore {
@@ -353,7 +353,7 @@ solcher Ablesungen gesperrt.
 
 ```{spec} Bildverarbeitung
 :id: SPEC_IMG_PROCESSING
-:status: draft
+:status: implemented
 :satisfies: REQ_AI_001, REQ_RDG_004, REQ_NFR_004
 :links: ADR_017
 
@@ -363,12 +363,14 @@ auf höchstens `image.max_pixels` (Standard 2 000 000) verkleinern
 (Lanczos3, Seitenverhältnis erhalten), als JPEG mit `image.jpeg_quality`
 (Standard 85) kodieren. Das Ergebnis enthält keine Metadaten (EXIF, GPS, XMP).
 Nicht dekodierbare Dateien und HEIC ergeben einen Validierungsfehler mit
-Hinweis auf JPEG. Gespeichert und an die AI gesendet wird nur das Ergebnis.
+Hinweis auf JPEG (`photo.unsupported`); Bilder mit mehr als 16 384 Pixeln
+Kantenlänge oder mehr als 512 MiB Dekodierspeicher ergeben `photo.too_large`.
+Gespeichert und an die AI gesendet wird nur das Ergebnis.
 ```
 
 ```{spec} AI-Entwürfe und Zuordnung
 :id: SPEC_AI_DRAFTS
-:status: draft
+:status: implemented
 :satisfies: REQ_AI_002, REQ_AI_003
 :links: SPEC_AI_FLOW
 
@@ -535,7 +537,8 @@ Member, `O` = Owner. `F` = HTMX-Fragment.
 | POST | `/readings/{id}/delete` | M | 303 | {need}`SPEC_RDG_DELETE` |
 | GET | `/readings/{id}/photo` | Viewer | `image/jpeg` | {need}`SPEC_SEC_UPLOADS` |
 | GET | `/capture` | M | Upload-Seite | {need}`SPEC_AI_FLOW` |
-| POST | `/capture` | M | F (Bestätigung) | {need}`SPEC_AI_DRAFTS` |
+| POST | `/capture` | M | 303 zur Bestätigung (Multipart, Feld `_csrf`) | {need}`SPEC_AI_DRAFTS` |
+| GET | `/capture/{draft}` | M | Bestätigungsformular, `?meter=` wählt die Messstelle | {need}`SPEC_AI_DRAFTS` |
 | GET | `/capture/{draft}/photo` | M | `image/jpeg` | {need}`SPEC_AI_DRAFTS` |
 | POST | `/capture/{draft}/confirm`, `/capture/{draft}/discard` | M | 303 | {need}`SPEC_AI_DRAFTS` |
 | GET, POST | `/import`, `/import/upload`, `/import/preview`, `/import/commit` | M | Seiten | {need}`SPEC_IMP_CSV_FORMAT` |
@@ -559,7 +562,7 @@ Programmversion im Pfad; in Debug-Builds gilt `Cache-Control: no-cache`.
 | `pages/dashboard.html` | Karten je Messstelle |
 | `pages/meters/{list,form,detail,swap}.html` | Messstellen |
 | `pages/readings/form.html` | Erfassung |
-| `pages/capture/{upload,confirm}.html` | Foto-Erfassung; `confirm` ist auch Fragment |
+| `pages/capture/{upload,confirm}.html` | Foto-Erfassung |
 | `pages/import/{upload,mapping,preview,result}.html` | CSV-Import |
 | `pages/settings.html`, `pages/error.html` | Einstellungen, Fehler |
 

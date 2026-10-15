@@ -266,6 +266,7 @@ fn new_reading(
         source: ReadingSource::Manual,
         note: None,
         photo_key: None,
+        ai_confidence: None,
         created_by: Some(t.user_id()),
     }
 }

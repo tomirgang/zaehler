@@ -43,7 +43,7 @@
       <td>{{ r.at }}</td>
       <td>{{ r.register }}</td>
       <td class="num">{{ r.value }}</td>
-      <td>{{ r.source }}</td>
+      <td>{{ r.source }}{% if r.has_photo %} <a href="/readings/{{ r.id }}/photo" target="_blank" rel="noopener">{{ ctx.lang.t("reading-photo") }}</a>{% endif %}</td>
       <td>{{ r.note }}</td>
       {% if ctx.can_write %}
       <td>

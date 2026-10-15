@@ -124,6 +124,291 @@ async fn create_meter(c: &mut Client, csrf: &str, name: &str) -> String {
     loc.trim_start_matches("/meters/").to_owned()
 }
 
+// @test SPEC_SEC_UPLOADS, SPEC_SEC_TENANT_SCOPE
+#[tokio::test]
+async fn reading_photos_are_served_only_to_their_household() {
+    use zaehler_app::{
+        ids::{BlobKey, MeterId, ReadingId},
+        model::{Identity, Reading},
+    };
+    use zaehler_domain::reading::ReadingSource;
+
+    let (ports, store, _clock) = memory_ports();
+    let uc = Arc::new(UseCases::new(&ports));
+    let state = WebState {
+        uc: uc.clone(),
+        readiness: store,
+        cfg: Arc::new(WebConfig::new(
+            "http://localhost:8080",
+            true,
+            false,
+            24,
+            "test",
+        )),
+        oidc: None,
+    };
+    let app = router(state, MemoryStore::default());
+    let mut anna = Client::new(&app);
+    anna.login("anna").await;
+    let csrf = anna.csrf().await;
+    let meter: MeterId = create_meter(&mut anna, &csrf, "Strom")
+        .await
+        .parse()
+        .unwrap();
+
+    // Ablesung mit Foto direkt über die Ports (Foto-Erfassung folgt mit WP_MVP_07)
+    let identity = Identity {
+        issuer: "dev".into(),
+        subject: "anna".into(),
+        email: None,
+        display_name: "anna".into(),
+        locale: "de".into(),
+    };
+    let user = uc.sign_in.execute(&identity).await.unwrap().user.id;
+    let tenant = uc.resolve_tenant.execute(user, None).await.unwrap().tenant;
+    let detail = uc.get_meter.execute(&tenant, meter).await.unwrap();
+    let id = ReadingId(uuid::Uuid::now_v7());
+    let key = BlobKey::reading_photo(tenant.household_id(), id);
+    ports
+        .blobs
+        .put(&key, bytes::Bytes::from_static(b"\xFF\xD8\xFFjpeg"))
+        .await
+        .unwrap();
+    let mut uow = ports.uow.begin().await.unwrap();
+    uow.readings()
+        .insert(
+            &tenant,
+            &[Reading {
+                id,
+                register_id: detail.aggregate.registers[0].id,
+                device_id: detail.aggregate.devices[0].id,
+                read_at: detail.readings[0].read_at + chrono::Duration::days(1),
+                value: rust_decimal::Decimal::new(10_010, 1),
+                source: ReadingSource::Photo,
+                note: None,
+                photo_key: Some(key),
+                ai_confidence: None,
+                created_by: Some(user),
+            }],
+        )
+        .await
+        .unwrap();
+    uow.commit().await.unwrap();
+
+    let html = text(anna.get(&format!("/meters/{meter}")).await).await;
+    assert!(html.contains(&format!("/readings/{id}/photo")));
+    let res = anna.get(&format!("/readings/{id}/photo")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert_eq!(res.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(
+        to_bytes(res.into_body(), 1024).await.unwrap(),
+        &b"\xFF\xD8\xFFjpeg"[..]
+    );
+    // Ablesung ohne Foto, unbekannte und ungültige IDs
+    let start = detail.readings[0].id;
+    for path in [
+        format!("/readings/{start}/photo"),
+        format!("/readings/{}/photo", uuid::Uuid::now_v7()),
+        "/readings/x/photo".to_owned(),
+    ] {
+        assert_eq!(
+            anna.get(&path).await.status(),
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+
+    let mut bob = Client::new(&app);
+    bob.login("bob").await;
+    let res = bob.get(&format!("/readings/{id}/photo")).await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+fn capture_app(max_photo_bytes: usize) -> Router {
+    use rust_decimal::Decimal;
+    use zaehler_app::{model::Recognition, testing::StubRecognizer};
+    use zaehler_domain::meter::MeterKind;
+
+    let (mut ports, store, _clock) = memory_ports();
+    ports.recognizer = Some(Arc::new(StubRecognizer(Ok(Recognition {
+        value: Some(Decimal::new(10_250, 1)),
+        serial_number: None,
+        register: Some("main".into()),
+        unit: Some("kWh".into()),
+        meter_kind: Some(MeterKind::Electricity),
+        confidence: Decimal::new(87, 2),
+    }))));
+    let state = WebState {
+        uc: Arc::new(UseCases::new(&ports)),
+        readiness: store,
+        cfg: Arc::new(
+            WebConfig::new("http://localhost:8080", true, false, 24, "test")
+                .with_max_photo_bytes(max_photo_bytes),
+        ),
+        oidc: None,
+    };
+    router(state, MemoryStore::default())
+}
+
+/// Multipart-Body mit optionalem CSRF-Feld und Datei `photo`.
+fn multipart(csrf: Option<&str>, photo: &[u8]) -> (String, Vec<u8>) {
+    let boundary = "zaehler-test-boundary";
+    let mut body = Vec::new();
+    if let Some(t) = csrf {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"_csrf\"\r\n\r\n{t}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"z.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(photo);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+async fn upload(c: &mut Client, path: &str, csrf: Option<&str>, photo: &[u8]) -> Response {
+    let (content_type, body) = multipart(csrf, photo);
+    let req = Request::post(path)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap();
+    c.send(req).await
+}
+
+/// JPEG-Signatur, aufgefüllt auf `len` Byte (der Stub-Normalisierer prüft nur
+/// die Signatur).
+fn fake_jpeg(len: usize) -> Vec<u8> {
+    let mut v = vec![0xFF, 0xD8, 0xFF];
+    v.resize(len, 0);
+    v
+}
+
+// @test SPEC_AI_FLOW, SPEC_AI_DRAFTS, SPEC_SEC_UPLOADS, SPEC_SEC_SESSION_CSRF
+#[tokio::test]
+async fn photo_capture_workflow() {
+    let app = capture_app(1024 * 1024);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let meter = create_meter(&mut c, &csrf, "Strom").await;
+
+    let page = text(c.get("/capture").await).await;
+    assert!(page.contains("enctype=\"multipart/form-data\""));
+    assert!(page.contains("capture=\"environment\""));
+
+    // ohne Token und auf anderen Routen wird Multipart abgelehnt
+    let photo = fake_jpeg(200 * 1024);
+    assert_eq!(
+        upload(&mut c, "/capture", None, &photo).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        upload(&mut c, "/capture", Some("falsch"), &photo)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        upload(
+            &mut c,
+            &format!("/meters/{meter}/readings"),
+            Some(&csrf),
+            &photo
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    // keine Bilddatei
+    let res = upload(&mut c, "/capture", Some(&csrf), b"Zaehlerstand 12345").await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("JPEG"));
+
+    // 200 KiB liegen über dem allgemeinen Formular-Limit, aber unter dem Foto-Limit
+    let res = upload(&mut c, "/capture", Some(&csrf), &photo).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let draft_page = location(&res);
+    assert!(draft_page.starts_with("/capture/"));
+
+    let html = text(c.get(&draft_page).await).await;
+    assert!(html.contains("1025"), "Vorschlag sichtbar");
+    assert!(html.contains("87 %"), "Konfidenz sichtbar");
+    assert!(html.contains(&format!("value=\"{meter}\"")), "zugeordnet");
+    let res = c.get(&format!("{draft_page}/photo")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "image/jpeg");
+
+    // Bestätigung mit Registerwahl aus dem Formular
+    let register = {
+        let start = html.find("name=\"register_id\"").unwrap();
+        let rest = &html[start..];
+        let v = rest.find("value=\"").unwrap() + 7;
+        rest[v..v + rest[v..].find('"').unwrap()].to_owned()
+    };
+    let res = c
+        .post(
+            &format!("{draft_page}/confirm"),
+            &[
+                ("_csrf", csrf.as_str()),
+                ("meter_id", meter.as_str()),
+                ("register_id", register.as_str()),
+                ("value", "1025,0"),
+                ("at", "2026-01-10T08:00"),
+                ("note", ""),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    assert_eq!(location(&res), format!("/meters/{meter}"));
+    let detail = text(c.get(&format!("/meters/{meter}")).await).await;
+    assert!(detail.contains("/photo\""), "Belegfoto verlinkt");
+    // Entwurf ist abgeschlossen
+    assert_eq!(c.get(&draft_page).await.status(), StatusCode::NOT_FOUND);
+
+    // Verwerfen
+    let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(64)).await;
+    let second = location(&res);
+    let res = c
+        .post(&format!("{second}/discard"), &[("_csrf", csrf.as_str())])
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&res), "/capture");
+    assert_eq!(
+        c.get(&format!("{second}/photo")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // fremder Haushalt
+    let mut bob = Client::new(&app);
+    bob.login("bob").await;
+    let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(64)).await;
+    let third = location(&res);
+    assert_eq!(bob.get(&third).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        bob.get(&format!("{third}/photo")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+// @test SPEC_SEC_UPLOADS
+#[tokio::test]
+async fn photo_upload_limit_returns_413() {
+    let app = capture_app(4096);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(8192)).await;
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(1024)).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+}
+
 // @test SPEC_OPS_HEALTH, SPEC_SEC_HEADERS
 #[tokio::test]
 async fn probes_assets_and_security_headers() {

@@ -4,13 +4,14 @@
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use zaehler_domain::{
     meter::{Direction, MeterKind},
     reading::ReadingSource,
 };
 
 use crate::{
-    ids::{DeviceId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
+    ids::{BlobKey, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
     tenant::Role,
 };
 
@@ -146,6 +147,93 @@ pub struct Reading {
     pub value: Decimal,
     pub source: ReadingSource,
     pub note: Option<String>,
-    pub photo_key: Option<String>,
+    pub photo_key: Option<BlobKey>,
+    /// Konfidenz der AI-Erkennung (0..1) bei `source = photo`.
+    pub ai_confidence: Option<Decimal>,
     pub created_by: Option<UserId>,
+}
+
+/// Vorschlag der Zählerstandserkennung; nicht lesbare Felder sind `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Recognition {
+    pub value: Option<Decimal>,
+    pub serial_number: Option<String>,
+    pub register: Option<String>,
+    pub unit: Option<String>,
+    pub meter_kind: Option<MeterKind>,
+    /// Selbsteinschätzung 0..1
+    pub confidence: Decimal,
+}
+
+/// Zustand eines Entwurfs der Foto-Erfassung.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftStatus {
+    /// Vorschlag liegt vor, Bestätigung offen
+    Pending,
+    /// Erkennung fehlgeschlagen oder nicht konfiguriert; manuelle Eingabe offen
+    Failed,
+    Confirmed,
+    Discarded,
+}
+
+impl DraftStatus {
+    pub const ALL: [Self; 4] = [
+        Self::Pending,
+        Self::Failed,
+        Self::Confirmed,
+        Self::Discarded,
+    ];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Failed => "failed",
+            Self::Confirmed => "confirmed",
+            Self::Discarded => "discarded",
+        }
+    }
+
+    /// Entwurf wartet auf Bestätigung oder Verwerfen.
+    #[must_use]
+    pub fn is_open(self) -> bool {
+        matches!(self, Self::Pending | Self::Failed)
+    }
+}
+
+impl std::str::FromStr for DraftStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|k| k.as_str() == s)
+            .ok_or_else(|| format!("unbekannter Status: {s}"))
+    }
+}
+
+/// Entwurf der Foto-Erfassung (SPEC_AI_DRAFTS).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Draft {
+    pub id: DraftId,
+    pub created_by: UserId,
+    pub photo_key: BlobKey,
+    /// Modell der Erkennung; `None` ohne AI-Konfiguration
+    pub model: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub suggestion: Option<Recognition>,
+    pub matched_meter_id: Option<MeterId>,
+    pub status: DraftStatus,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Abschluss eines Entwurfs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftOutcome {
+    Confirmed {
+        reading: ReadingId,
+        /// Wert weicht vom Vorschlag ab; `None` ohne Vorschlag
+        corrected: Option<bool>,
+    },
+    Discarded,
 }

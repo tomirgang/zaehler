@@ -17,7 +17,12 @@ pub struct WebConfig {
     pub cookie_secure: bool,
     pub session_ttl_hours: i64,
     pub version: &'static str,
+    /// Grenze für Foto-Uploads in Byte (SPEC_SEC_UPLOADS)
+    pub max_photo_bytes: usize,
 }
+
+/// Standard für `upload.max_photo_bytes`: 15 MiB.
+pub const DEFAULT_MAX_PHOTO_BYTES: usize = 15 * 1024 * 1024;
 
 impl WebConfig {
     #[must_use]
@@ -44,7 +49,14 @@ impl WebConfig {
             cookie_secure,
             session_ttl_hours,
             version,
+            max_photo_bytes: DEFAULT_MAX_PHOTO_BYTES,
         }
+    }
+
+    #[must_use]
+    pub fn with_max_photo_bytes(mut self, bytes: usize) -> Self {
+        self.max_photo_bytes = bytes;
+        self
     }
 }
 

@@ -5,20 +5,23 @@ use std::{collections::BTreeMap, process::Command};
 
 use serde_json::Value;
 
-const ADAPTERS: [&str; 5] = [
+const ADAPTERS: [&str; 6] = [
     "zaehler-web",
     "zaehler-db",
     "zaehler-ai",
     "zaehler-notify",
     "zaehler-storage",
+    "zaehler-media",
 ];
-const FRAMEWORKS: [&str; 6] = [
+const FRAMEWORKS: [&str; 8] = [
     "axum",
     "sea-orm",
     "reqwest",
     "askama",
     "tower-sessions",
     "object_store",
+    "image",
+    "tokio",
 ];
 
 /// Workspace-Crate → direkte (normale) Abhängigkeiten.

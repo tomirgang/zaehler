@@ -24,6 +24,20 @@ path = "data/files"
 # bucket = "zaehler"
 # endpoint = "https://s3.example.com"
 # region = "eu-central-1"
+# access_key_id = "..."      # sonst AWS_ACCESS_KEY_ID
+# secret_access_key = "..."  # besser via ZAEHLER_STORAGE__SECRET_ACCESS_KEY
+# allow_http = false
+
+[image]
+max_pixels = 2000000
+jpeg_quality = 85
+
+[housekeeping]
+interval_minutes = 60
+draft_ttl_hours = 24
+
+[upload]
+max_photo_bytes = 15728640
 
 [auth]
 # Entwicklungs-Login ohne Identity Provider; nur mit public_url auf localhost

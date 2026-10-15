@@ -3,8 +3,8 @@
 use askama::Template;
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
-    response::Response,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use chrono::Utc;
 use zaehler_app::{
@@ -72,7 +72,7 @@ struct PlausibilityFragment {
     errors: Vec<String>,
 }
 
-fn hint(lang: Lang, p: &Plausibility) -> Option<String> {
+pub(crate) fn hint(lang: Lang, p: &Plausibility) -> Option<String> {
     match p {
         Plausibility::Ok => None,
         Plausibility::Decreasing => Some(lang.t("plaus-decreasing")),
@@ -329,4 +329,30 @@ pub async fn delete(
         .map_err(|e| ctx.fail(e))?;
     ctx.flash("flash-reading-deleted").await;
     Ok(see_other(&format!("/meters/{meter_id}")))
+}
+
+/// Belegfoto einer Ablesung; nur über den Anwendungsfall mit Tenant-Prüfung
+/// und immer als `image/jpeg` (SPEC_SEC_UPLOADS).
+// @impl SPEC_SEC_UPLOADS
+pub async fn photo(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path(id): Path<String>,
+) -> Result<Response, Response> {
+    let reading_id: ReadingId = id.parse().map_err(|_| ctx.fail(AppError::NotFound))?;
+    let jpeg = state
+        .uc
+        .get_reading_photo
+        .execute(&ctx.tenant, reading_id)
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/jpeg"),
+            (header::CACHE_CONTROL, "private, max-age=3600"),
+            (header::CONTENT_DISPOSITION, "inline"),
+        ],
+        jpeg,
+    )
+        .into_response())
 }

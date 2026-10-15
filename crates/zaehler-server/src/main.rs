@@ -1,6 +1,7 @@
 //! `zaehler`: Binary für Webserver und Verwaltungsbefehle.
 
 mod config;
+mod scheduler;
 mod telemetry;
 mod wiring;
 
@@ -56,7 +57,14 @@ async fn main() -> anyhow::Result<()> {
 
 async fn serve(config: Config) -> anyhow::Result<()> {
     let metrics = telemetry::init_metrics()?;
-    let app = wiring::build(&config).await?;
+    let wiring::App {
+        router: app,
+        housekeeping,
+    } = wiring::build(&config).await?;
+    let housekeeping_task = scheduler::spawn_housekeeping(
+        housekeeping,
+        std::time::Duration::from_secs(config.housekeeping.interval_minutes * 60),
+    );
     // Separater Listener, damit /metrics nicht über den Ingress erreichbar ist.
     let metrics_app = Router::new().route(
         "/metrics",
@@ -73,6 +81,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     metrics_task.abort();
+    housekeeping_task.abort();
     Ok(())
 }
 

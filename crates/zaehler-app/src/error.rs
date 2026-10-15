@@ -10,6 +10,10 @@ pub enum PortError {
     /// Verletzung einer Eindeutigkeit (z.B. doppelte Ablesung).
     #[error("Konflikt: {0}")]
     Conflict(String),
+    /// Eingabe vom Adapter abgelehnt (z.B. Bildformat); der Code ist ein
+    /// Übersetzungsschlüssel.
+    #[error("ungültige Eingabe: {0}")]
+    Invalid(&'static str),
     #[error("Adapterfehler: {0}")]
     Backend(String),
 }
@@ -95,12 +99,26 @@ impl From<PortError> for AppError {
         match e {
             PortError::NotFound => Self::NotFound,
             PortError::Conflict(_) => Self::Conflict("conflict"),
+            PortError::Invalid(code) => Self::field("file", code),
             PortError::Backend(msg) => Self::Internal(msg),
         }
     }
 }
 
 impl AppError {
+    /// Fehler des Objektspeichers: `NotFound` bleibt erhalten, Adapterfehler
+    /// werden zu `Upstream("storage")`.
+    #[must_use]
+    pub fn from_storage(e: PortError) -> Self {
+        match e {
+            PortError::Backend(msg) => {
+                tracing::error!(error = %msg, "object storage failed");
+                Self::Upstream("storage")
+            }
+            other => other.into(),
+        }
+    }
+
     /// Einzelner Feldfehler als `Validation`.
     #[must_use]
     pub fn field(field: impl Into<String>, code: &'static str) -> Self {

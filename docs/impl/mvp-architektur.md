@@ -232,7 +232,10 @@ CSRF-Token (32 Byte, Base64URL). Alle Requests außer `GET`, `HEAD`, `OPTIONS`
 müssen das Token im Header `X-CSRF-Token` (HTMX, gesetzt über `hx-headers` am
 `body`) oder im Formularfeld `_csrf` enthalten; Vergleich in konstanter Zeit.
 Zusätzlich wird der `Origin`-Header, falls vorhanden, gegen
-`server.public_url` geprüft.
+`server.public_url` geprüft. Multipart-Bodies werden in der Middleware nicht
+gepuffert: sie sind nur für ausdrücklich genannte Routen zugelassen (MVP:
+`POST /capture`), deren Handler das Feld `_csrf` selbst prüft; auf allen
+anderen Routen ergibt Multipart 403.
 ```
 
 ```{spec} Sicherheitsheader
@@ -268,18 +271,19 @@ ausschließlich über einen Anwendungsfall mit Tenant-Prüfung und
 
 ```{spec} Objektspeicher-Port
 :id: SPEC_STORE_BLOBS
-:status: draft
+:status: implemented
 :satisfies: REQ_OPS_010, REQ_RDG_004
 :links: ADR_006
 
 Port `BlobStore` in `zaehler-app` mit `put(key, bytes)`, `get(key)`,
-`copy(from, to)`, `delete(key)`, `delete_prefix(prefix)` und
-`list_older_than(prefix, zeitpunkt)`. Schlüssel als Typ `BlobKey`, gebildet
+`copy(from, to)`, `delete(key)` (idempotent), `delete_household(household)`
+und `list_tmp_older_than(zeitpunkt)`. Schlüssel als Typ `BlobKey`, gebildet
 nur über Konstruktoren im Kern (`BlobKey::reading_photo(household, reading)`,
 `BlobKey::draft_photo(...)`, `BlobKey::tmp(...)`), immer mit Präfix
-`households/{household_id}/`. Adapter `zaehler-storage` über `object_store`
+`households/{household_id}/`; `BlobKey::parse` akzeptiert für gespeicherte
+Schlüssel nur genau diese Formen. Adapter `zaehler-storage` über `object_store`
 (`LocalFileSystem`, `AmazonS3`), Auswahl über `storage.kind`; In-Memory-Adapter
-für Tests.
+für Tests. Eine gemeinsame Testsuite prüft jede Implementierung.
 ```
 
 ```{spec} Zeitzone des Haushalts
@@ -345,7 +349,7 @@ Headern wird übernommen. Ohne Endpunkt ist der Layer nicht aktiv.
 
 ```{spec} Housekeeping
 :id: SPEC_OPS_HOUSEKEEPING
-:status: draft
+:status: implemented
 :satisfies: REQ_NFR_004, REQ_OPS_010
 
 Anwendungsfall `Housekeeping` in `zaehler-app` über

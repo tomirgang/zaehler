@@ -141,7 +141,7 @@ erzwingen Bestätigung; doppelte Ablesung ergibt `Conflict`.
 
 ```{wp} Objektspeicher und Bildverarbeitung
 :id: WP_MVP_06
-:status: open
+:status: done
 :milestone: M2
 :depends: WP_MVP_01, WP_MVP_02
 :covers: REQ_OPS_010, REQ_RDG_004, SPEC_STORE_BLOBS, SPEC_IMG_PROCESSING, SPEC_SEC_UPLOADS, SPEC_OPS_HOUSEKEEPING
@@ -154,6 +154,14 @@ Anwendungsfälle für Foto-Auslieferung mit Tenant-Prüfung; Anwendungsfall
 **Abnahme:** Medien-Fixtures (Ausrichtung, GPS, HEIC, Textdatei);
 S3-Test gegen MinIO in der CI; Housekeeping idempotent bei paralleler
 Ausführung.
+
+**Abweichung:** MinIO verteilt seit 2025 keine Images und Binärdateien der
+Community-Edition mehr (Docker Hub und quay.io ohne Zugriff, `dl.min.io`
+antwortet mit HTTP 410). Der S3-Test läuft deshalb gegen Versity Gateway
+(`versitygw`, Backend `posix`), ebenfalls S3-kompatibel. Das Verwerfen
+abgelaufener AI-Entwürfe im Housekeeping ist mit WP_MVP_07 umgesetzt, da die
+Tabelle `ai_drafts` erst dort entsteht. {need}`SPEC_SEC_UPLOADS` bleibt
+`draft`, bis das CSV-Limit mit WP_MVP_10 umgesetzt ist.
 ```
 
 ```{wp} Foto-Erfassung mit AI
@@ -173,6 +181,14 @@ Erfassung mit Foto).
 Timeout; manuelle Probe mit 20 Zählerfotos verschiedener Zählertypen und konfiguriertem Modell,
 Ergebnis (Anteil korrekt erkannter Werte) im Abschlussbericht des
 Arbeitspakets dokumentiert.
+
+**Stand:** Umsetzung und automatisierte Abnahme abgeschlossen (`wiremock`-Tests
+in `zaehler-ai`, Anwendungsfall- und HTTP-Tests). Offen ist die manuelle
+Probe mit 20 Zählerfotos und konfiguriertem Modell; bis dahin bleibt das
+Arbeitspaket `open`. Abweichend vom Detail-Design antwortet `POST /capture`
+mit 303 auf die Bestätigungsseite statt mit einem HTMX-Fragment; damit
+funktioniert der Ablauf ohne JavaScript und ein Neuladen der Seite bleibt
+möglich.
 ```
 
 ### M3: Auswertung, Dashboard, Import

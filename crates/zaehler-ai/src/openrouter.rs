@@ -42,6 +42,12 @@ impl OpenRouter {
         Ok(Self { http, cfg })
     }
 
+    /// Konfiguriertes Modell.
+    #[must_use]
+    pub fn model_name(&self) -> &str {
+        &self.cfg.model
+    }
+
     // @impl SPEC_AI_EXTRACTION
     pub async fn read_meter(&self, doc: &Document) -> Result<MeterReadingSuggestion, AiError> {
         self.extract(

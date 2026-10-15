@@ -17,6 +17,8 @@ zaehler-ai = { path = "crates/zaehler-ai" }
 zaehler-app = { path = "crates/zaehler-app" }
 zaehler-notify = { path = "crates/zaehler-notify" }
 zaehler-web = { path = "crates/zaehler-web" }
+zaehler-storage = { path = "crates/zaehler-storage" }
+zaehler-media = { path = "crates/zaehler-media" }
 
 anyhow = "1"
 askama = "0.16"
@@ -28,8 +30,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 figment = { version = "0.10", features = ["env", "toml"] }
+futures = "0.3"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
+object_store = { version = "0.14", features = ["aws"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rust_decimal = { version = "1", features = ["maths", "serde-with-str"] }
 rust_decimal_macros = "1"

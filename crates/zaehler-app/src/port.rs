@@ -4,15 +4,16 @@
 //! `async` über `async-trait`.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::{
     error::PortError,
-    ids::{DeviceId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
+    ids::{BlobKey, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
     model::{
-        DeviceData, Household, HouseholdData, HouseholdSummary, Identity, MeterAggregate,
-        MeterData, MeterSummary, Reading, RegisterData, User,
+        DeviceData, Draft, DraftOutcome, Household, HouseholdData, HouseholdSummary, Identity,
+        MeterAggregate, MeterData, MeterSummary, Reading, Recognition, RegisterData, User,
     },
     tenant::{Role, Tenant},
 };
@@ -35,6 +36,7 @@ pub trait UnitOfWork: Send {
     fn users(&mut self) -> &mut dyn UserRepository;
     fn meters(&mut self) -> &mut dyn MeterRepository;
     fn readings(&mut self) -> &mut dyn ReadingRepository;
+    fn drafts(&mut self) -> &mut dyn DraftRepository;
     async fn commit(self: Box<Self>) -> PortResult<()>;
 }
 
@@ -133,6 +135,117 @@ pub trait ReadingRepository: Send {
     /// Ablesung mit zugehöriger Messstelle.
     async fn get(&mut self, t: &Tenant, id: ReadingId) -> PortResult<Option<(MeterId, Reading)>>;
     async fn delete(&mut self, t: &Tenant, id: ReadingId) -> PortResult<()>;
+}
+
+/// Entwürfe der Foto-Erfassung (SPEC_AI_DRAFTS).
+// @impl SPEC_AI_DRAFTS
+#[async_trait]
+pub trait DraftRepository: Send {
+    /// Legt den Entwurf im Haushalt des Tenants an.
+    async fn create(&mut self, t: &Tenant, draft: &Draft) -> PortResult<()>;
+    /// Offener Entwurf (`pending` oder `failed`) des Haushalts.
+    async fn get_open(&mut self, t: &Tenant, id: DraftId) -> PortResult<Option<Draft>>;
+    /// Schließt einen offenen Entwurf ab; `PortError::NotFound`, wenn er nicht
+    /// (mehr) offen ist.
+    async fn finish(
+        &mut self,
+        t: &Tenant,
+        id: DraftId,
+        outcome: DraftOutcome,
+        at: DateTime<Utc>,
+    ) -> PortResult<()>;
+}
+
+/// Abfragen ohne Haushaltsbezug; verwendet nur der Anwendungsfall
+/// `Housekeeping`. Alle Operationen sind idempotent.
+// @impl SPEC_OPS_HOUSEKEEPING
+#[async_trait]
+pub trait MaintenanceRepository: Send + Sync {
+    /// Markiert offene Entwürfe, angelegt vor `cutoff`, als `discarded` und
+    /// liefert ihre Fotos.
+    async fn expire_drafts(
+        &self,
+        cutoff: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> PortResult<Vec<BlobKey>>;
+    /// Entfernt Sitzungen mit Ablauf vor `now`; liefert die Anzahl.
+    async fn delete_expired_sessions(&self, now: DateTime<Utc>) -> PortResult<u64>;
+}
+
+/// Objektspeicher für Fotos und temporäre Dateien. Die Operationen sind
+/// nicht transaktional (SPEC_ARCH_UOW).
+// @impl SPEC_STORE_BLOBS
+#[async_trait]
+pub trait BlobStore: Send + Sync {
+    /// Schreibt das Objekt; ein vorhandenes wird ersetzt.
+    async fn put(&self, key: &BlobKey, bytes: Bytes) -> PortResult<()>;
+    /// `PortError::NotFound`, wenn das Objekt fehlt.
+    async fn get(&self, key: &BlobKey) -> PortResult<Bytes>;
+    async fn copy(&self, from: &BlobKey, to: &BlobKey) -> PortResult<()>;
+    /// Ein fehlendes Objekt ist kein Fehler.
+    async fn delete(&self, key: &BlobKey) -> PortResult<()>;
+    /// Löscht alle Objekte unter `households/{household}/`.
+    async fn delete_household(&self, household: HouseholdId) -> PortResult<()>;
+    /// Temporäre Objekte aller Haushalte, zuletzt geschrieben vor `cutoff`.
+    async fn list_tmp_older_than(&self, cutoff: DateTime<Utc>) -> PortResult<Vec<BlobKey>>;
+}
+
+/// Foto nach der Normalisierung: JPEG ohne Metadaten, Ausrichtung angewendet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedJpeg {
+    pub bytes: Bytes,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Prüft, richtet aus, verkleinert und kodiert ein hochgeladenes Foto.
+// @impl SPEC_IMG_PROCESSING
+#[async_trait]
+pub trait ImageNormalizer: Send + Sync {
+    /// `PortError::Invalid` für nicht unterstützte oder nicht dekodierbare
+    /// Dateien.
+    async fn normalize(&self, bytes: Bytes) -> PortResult<NormalizedJpeg>;
+}
+
+/// Fehlschlag der Erkennung; bestimmt die Metrik `outcome`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecognitionError {
+    /// Zeitüberschreitung
+    Timeout,
+    /// Antwort entspricht nicht dem Schema
+    Invalid(String),
+    /// Netzwerk- oder Dienstfehler
+    Failed(String),
+}
+
+impl RecognitionError {
+    #[must_use]
+    pub fn outcome(&self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::Invalid(_) => "invalid",
+            Self::Failed(_) => "error",
+        }
+    }
+}
+
+impl std::fmt::Display for RecognitionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout => f.write_str("Zeitüberschreitung"),
+            Self::Invalid(m) => write!(f, "ungültige Antwort: {m}"),
+            Self::Failed(m) => write!(f, "Fehler: {m}"),
+        }
+    }
+}
+
+/// Erkennt den Zählerstand auf einem Foto (AI). Übertragen wird nur das
+/// normalisierte Bild, keine Nutzer- oder Haushaltsdaten (REQ_AI_006).
+#[async_trait]
+pub trait MeterRecognizer: Send + Sync {
+    /// Bezeichnung des Modells (für Entwürfe und Metriken).
+    fn model(&self) -> &str;
+    async fn recognize(&self, jpeg: &NormalizedJpeg) -> Result<Recognition, RecognitionError>;
 }
 
 pub trait Clock: Send + Sync {

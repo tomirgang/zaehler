@@ -1,0 +1,19 @@
+[package]
+name = "zaehler-media"
+description = "Driven-Adapter: Bildverarbeitung (Prüfen, Ausrichten, Verkleinern, JPEG ohne Metadaten)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+zaehler-app.workspace = true
+
+async-trait.workspace = true
+bytes.workspace = true
+image.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[lints]
+workspace = true

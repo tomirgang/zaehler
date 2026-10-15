@@ -23,8 +23,14 @@ pub struct Config {
     pub auth: AuthConfig,
     #[serde(default)]
     pub session: SessionConfig,
+    #[serde(default)]
+    pub image: ImageConfig,
+    #[serde(default)]
+    pub housekeeping: HousekeepingConfig,
+    #[serde(default)]
+    pub upload: UploadConfig,
+    /// Ohne Abschnitt `ai` ist die Erkennung abgeschaltet (REQ_AI_006).
     #[serde(skip_serializing)]
-    #[allow(dead_code)] // genutzt ab WP_MVP_07 (Foto-Erfassung)
     pub ai: Option<zaehler_ai::OpenRouterConfig>,
     #[serde(default)]
     pub notify: NotifyConfig,
@@ -68,9 +74,72 @@ pub enum StorageConfig {
     /// S3-kompatibler Objektspeicher (k8s: MinIO, Garage, Ceph RGW …).
     S3 {
         bucket: String,
+        #[serde(default)]
         endpoint: Option<String>,
+        #[serde(default)]
         region: Option<String>,
+        /// Ohne Angabe aus `AWS_ACCESS_KEY_ID`.
+        #[serde(default)]
+        access_key_id: Option<String>,
+        /// Ohne Angabe aus `AWS_SECRET_ACCESS_KEY`.
+        #[serde(default, skip_serializing)]
+        secret_access_key: Option<String>,
+        /// Endpunkt ohne TLS zulassen (z.B. Objektspeicher im selben Cluster).
+        #[serde(default)]
+        allow_http: bool,
     },
+}
+
+/// Bildverarbeitung (SPEC_IMG_PROCESSING).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageConfig {
+    pub max_pixels: u64,
+    pub jpeg_quality: u8,
+}
+
+impl Default for ImageConfig {
+    fn default() -> Self {
+        Self {
+            max_pixels: 2_000_000,
+            jpeg_quality: 85,
+        }
+    }
+}
+
+/// Housekeeping (SPEC_OPS_HOUSEKEEPING).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HousekeepingConfig {
+    pub interval_minutes: u64,
+    /// Alter, ab dem offene AI-Entwürfe verworfen werden.
+    #[serde(default = "default_draft_ttl")]
+    pub draft_ttl_hours: i64,
+}
+
+const fn default_draft_ttl() -> i64 {
+    24
+}
+
+impl Default for HousekeepingConfig {
+    fn default() -> Self {
+        Self {
+            interval_minutes: 60,
+            draft_ttl_hours: default_draft_ttl(),
+        }
+    }
+}
+
+/// Upload-Grenzen (SPEC_SEC_UPLOADS).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadConfig {
+    pub max_photo_bytes: usize,
+}
+
+impl Default for UploadConfig {
+    fn default() -> Self {
+        Self {
+            max_photo_bytes: zaehler_web::state::DEFAULT_MAX_PHOTO_BYTES,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +209,9 @@ impl Default for Config {
             oidc: None,
             auth: AuthConfig::default(),
             session: SessionConfig::default(),
+            image: ImageConfig::default(),
+            housekeeping: HousekeepingConfig::default(),
+            upload: UploadConfig::default(),
             ai: None,
             notify: NotifyConfig::default(),
         }
@@ -207,6 +279,21 @@ impl Config {
         if self.session.ttl_hours <= 0 {
             return Err("session.ttl_hours muss größer 0 sein".into());
         }
+        if self.image.max_pixels == 0 {
+            return Err("image.max_pixels muss größer 0 sein".into());
+        }
+        if !(1..=100).contains(&self.image.jpeg_quality) {
+            return Err("image.jpeg_quality muss zwischen 1 und 100 liegen".into());
+        }
+        if self.housekeeping.interval_minutes == 0 {
+            return Err("housekeeping.interval_minutes muss größer 0 sein".into());
+        }
+        if self.housekeeping.draft_ttl_hours <= 0 {
+            return Err("housekeeping.draft_ttl_hours muss größer 0 sein".into());
+        }
+        if self.upload.max_photo_bytes == 0 {
+            return Err("upload.max_photo_bytes muss größer 0 sein".into());
+        }
         Ok(())
     }
 }
@@ -237,6 +324,51 @@ mod tests {
             assert!(!c.redacted().contains("u:p"));
             Ok(())
         });
+    }
+
+    // @test SPEC_OPS_CONFIG, SPEC_STORE_BLOBS
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn s3_storage_from_env_without_secret_in_output() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("ZAEHLER_STORAGE__KIND", "s3");
+            jail.set_env("ZAEHLER_STORAGE__BUCKET", "zaehler");
+            jail.set_env("ZAEHLER_STORAGE__ENDPOINT", "http://minio:9000");
+            jail.set_env("ZAEHLER_STORAGE__ALLOW_HTTP", "true");
+            jail.set_env("ZAEHLER_STORAGE__SECRET_ACCESS_KEY", "geheim-123");
+            jail.set_env("ZAEHLER_HOUSEKEEPING__INTERVAL_MINUTES", "5");
+            let c = Config::load(None).map_err(|e| e.to_string())?;
+            let StorageConfig::S3 {
+                bucket,
+                allow_http,
+                secret_access_key,
+                ..
+            } = &c.storage
+            else {
+                panic!("S3 erwartet");
+            };
+            assert_eq!(bucket, "zaehler");
+            assert!(*allow_http);
+            assert_eq!(secret_access_key.as_deref(), Some("geheim-123"));
+            assert_eq!(c.housekeeping.interval_minutes, 5);
+            assert_eq!(c.image.jpeg_quality, 85);
+            assert!(!c.redacted().contains("geheim-123"));
+            Ok(())
+        });
+    }
+
+    // @test SPEC_OPS_CONFIG
+    #[test]
+    fn image_and_housekeeping_values_are_validated() {
+        let mut c = Config::default();
+        c.auth.dev_login = true;
+        c.image.jpeg_quality = 0;
+        assert!(c.validate().is_err());
+        c.image.jpeg_quality = 85;
+        c.housekeeping.interval_minutes = 0;
+        assert!(c.validate().is_err());
+        c.housekeeping.interval_minutes = 60;
+        assert!(c.validate().is_ok());
     }
 
     // @test SPEC_TEN_DEV_LOGIN, SPEC_SEC_SESSION_CSRF

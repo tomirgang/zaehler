@@ -26,6 +26,13 @@ zugleich ist unzulässig.
 | `storage.kind` | `ZAEHLER_STORAGE__KIND` | `fs` (`s3`) |
 | `storage.path` | `ZAEHLER_STORAGE__PATH` | `data/files` |
 | `storage.bucket`, `endpoint`, `region` | `ZAEHLER_STORAGE__…` | kein Default |
+| `storage.access_key_id`, `secret_access_key` | `ZAEHLER_STORAGE__…` | aus `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+| `storage.allow_http` | `ZAEHLER_STORAGE__ALLOW_HTTP` | `false` |
+| `image.max_pixels` | `ZAEHLER_IMAGE__MAX_PIXELS` | `2000000` |
+| `image.jpeg_quality` | `ZAEHLER_IMAGE__JPEG_QUALITY` | `85` (1 bis 100) |
+| `housekeeping.interval_minutes` | `ZAEHLER_HOUSEKEEPING__INTERVAL_MINUTES` | `60` |
+| `housekeeping.draft_ttl_hours` | `ZAEHLER_HOUSEKEEPING__DRAFT_TTL_HOURS` | `24` |
+| `upload.max_photo_bytes` | `ZAEHLER_UPLOAD__MAX_PHOTO_BYTES` | `15728640` (15 MiB) |
 | `oidc.issuer_url`, `client_id`, `client_secret` | `ZAEHLER_OIDC__…` | kein Default |
 | `auth.dev_login` | `ZAEHLER_AUTH__DEV_LOGIN` | `false`; nur mit `public_url` auf localhost zulässig |
 | `session.ttl_hours` | `ZAEHLER_SESSION__TTL_HOURS` | `720` (gleitend) |
@@ -33,5 +40,21 @@ zugleich ist unzulässig.
 | `ai.api_key`, `ai.model`, `ai.base_url`, `ai.timeout_secs` | `ZAEHLER_AI__…` | Base-URL `https://openrouter.ai/api/v1`, 60 s |
 | `notify.smtp.*` | `ZAEHLER_NOTIFY__SMTP__…` | Port 587 |
 
-S3-Zugangsdaten werden über die Standardvariablen `AWS_ACCESS_KEY_ID` und
-`AWS_SECRET_ACCESS_KEY` gelesen.
+S3-Zugangsdaten werden aus `storage.access_key_id` und
+`storage.secret_access_key` gelesen, ohne Angabe aus den Standardvariablen
+`AWS_ACCESS_KEY_ID` und `AWS_SECRET_ACCESS_KEY`. Der Bucket muss vorhanden
+sein; adressiert wird im Pfadstil (`endpoint/bucket/schlüssel`), passend für
+MinIO, Garage und Ceph RGW. `storage.allow_http` ist nur für Endpunkte
+im selben Netz gedacht.
+
+Das Housekeeping ({need}`SPEC_OPS_HOUSEKEEPING`) läuft in jeder Instanz beim
+Start und danach im Abstand von `housekeeping.interval_minutes`: offene
+Foto-Entwürfe älter als `housekeeping.draft_ttl_hours` werden verworfen und
+ihre Fotos gelöscht, temporäre Objekte unter `households/*/tmp/` älter als
+24 Stunden und abgelaufene Sitzungen werden entfernt. Parallele Läufe
+mehrerer Replicas sind zulässig.
+
+Ohne Abschnitt `ai` ist die automatische Erkennung abgeschaltet
+({need}`REQ_AI_006`); die Foto-Erfassung speichert dann das Foto und
+verlangt die Eingabe des Stands von Hand. An OpenRouter gehen nur das
+verkleinerte JPEG ohne Metadaten und ein fester Prompt.

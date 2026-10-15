@@ -25,6 +25,10 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 3s --health-retries 20
     env:
+      ZAEHLER_TEST_S3_ENDPOINT: http://127.0.0.1:7070
+      ZAEHLER_TEST_S3_BUCKET: zaehler-test
+      ZAEHLER_TEST_S3_ACCESS_KEY: zaehler
+      ZAEHLER_TEST_S3_SECRET_KEY: zaehler-test
       ZAEHLER_TEST_DATABASE_URL: postgres://postgres:test@postgres:5432/zaehler
     steps:
       - uses: https://code.forgejo.org/actions/checkout@v4
@@ -38,6 +42,21 @@ jobs:
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # S3-kompatibler Server für den Objektspeicher-Test (MinIO wird nicht
+      # mehr verteilt); Backend posix: ein Verzeichnis je Bucket
+      - name: S3-Testserver (Versity Gateway)
+        env:
+          VGW: versitygw_v1.9.0_Linux_x86_64
+          VGW_SHA256: 0c28ccda3452451d7c71a0427f6aa7d0db5cac5e2b98a8e4dd2970967e1aadc1
+        run: |
+          curl -fsSLo /tmp/vgw.tar.gz https://github.com/versity/versitygw/releases/download/v1.9.0/$VGW.tar.gz
+          echo "$VGW_SHA256  /tmp/vgw.tar.gz" | sha256sum -c -
+          tar xzf /tmp/vgw.tar.gz -C /tmp
+          mkdir -p /tmp/s3/$ZAEHLER_TEST_S3_BUCKET
+          ROOT_ACCESS_KEY=$ZAEHLER_TEST_S3_ACCESS_KEY ROOT_SECRET_KEY=$ZAEHLER_TEST_S3_SECRET_KEY \
+            nohup /tmp/$VGW/versitygw --port 127.0.0.1:7070 posix /tmp/s3 > /tmp/versitygw.log 2>&1 &
+          for i in $(seq 1 30); do curl -s -o /dev/null $ZAEHLER_TEST_S3_ENDPOINT && exit 0; sleep 1; done
+          cat /tmp/versitygw.log; exit 1
       - run: cargo test --workspace --locked
 
   docs:

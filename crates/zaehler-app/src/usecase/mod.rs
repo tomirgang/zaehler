@@ -3,10 +3,14 @@
 
 use std::sync::Arc;
 
-use crate::port::{Clock, IdGenerator, UnitOfWorkFactory};
+use crate::port::{
+    BlobStore, Clock, IdGenerator, ImageNormalizer, MeterRecognizer, UnitOfWorkFactory,
+};
 
 pub mod auth;
+pub mod capture;
 pub mod household;
+pub mod housekeeping;
 pub mod meter;
 pub mod reading;
 mod validate;
@@ -20,6 +24,10 @@ pub struct Ports {
     pub uow: Arc<dyn UnitOfWorkFactory>,
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn IdGenerator>,
+    pub blobs: Arc<dyn BlobStore>,
+    pub images: Arc<dyn ImageNormalizer>,
+    /// `None` ohne AI-Konfiguration (REQ_AI_006)
+    pub recognizer: Option<Arc<dyn MeterRecognizer>>,
 }
 
 macro_rules! use_case {
@@ -59,6 +67,12 @@ pub struct UseCases {
     pub check_readings: reading::CheckReadings,
     pub record_readings: reading::RecordReadings,
     pub delete_reading: reading::DeleteReading,
+    pub get_reading_photo: reading::GetReadingPhoto,
+    pub analyse_photo: capture::AnalysePhoto,
+    pub get_draft: capture::GetDraft,
+    pub confirm_draft: capture::ConfirmDraft,
+    pub discard_draft: capture::DiscardDraft,
+    pub get_draft_photo: capture::GetDraftPhoto,
 }
 
 impl UseCases {
@@ -80,6 +94,12 @@ impl UseCases {
             check_readings: reading::CheckReadings::new(p.clone()),
             record_readings: reading::RecordReadings::new(p.clone()),
             delete_reading: reading::DeleteReading::new(p.clone()),
+            get_reading_photo: reading::GetReadingPhoto::new(p.clone()),
+            analyse_photo: capture::AnalysePhoto::new(p.clone()),
+            get_draft: capture::GetDraft::new(p.clone()),
+            confirm_draft: capture::ConfirmDraft::new(p.clone()),
+            discard_draft: capture::DiscardDraft::new(p.clone()),
+            get_draft_photo: capture::GetDraftPhoto::new(p.clone()),
         }
     }
 }

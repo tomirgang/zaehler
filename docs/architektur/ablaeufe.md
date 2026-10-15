@@ -4,7 +4,7 @@
 
 ```{spec} Ablauf Foto → Vorschlag → Bestätigung
 :id: SPEC_AI_FLOW
-:status: draft
+:status: implemented
 :satisfies: REQ_AI_001, REQ_AI_002, REQ_AI_003, REQ_RDG_004
 
 1. Upload per HTMX-Formular (`multipart`, Grenze `upload.max_photo_bytes`, JPEG/PNG/WebP;
@@ -25,14 +25,14 @@ sequenceDiagram
   participant S as zaehler-server
   participant O as Objektspeicher
   participant A as OpenRouter
-  U->>S: POST /readings/photo (Bild)
-  S->>O: Original speichern
+  U->>S: POST /capture (Bild)
+  S->>O: normalisiertes JPEG speichern
   S->>A: chat/completions (Bild, Schema)
   A-->>S: JSON-Vorschlag
   S->>S: Zuordnung + Plausibilität
-  S-->>U: Vorschlag (HTMX-Fragment)
-  U->>S: bestätigen / korrigieren
-  S->>S: Ablesung + ai_extraction speichern
+  S-->>U: 303 zum Bestätigungsformular
+  U->>S: bestätigen oder korrigieren
+  S->>S: Ablesung und Entwurf (ai_drafts) speichern
 ```
 
 ```{spec} Strukturierte Extraktion über OpenRouter

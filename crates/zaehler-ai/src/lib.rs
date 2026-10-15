@@ -4,6 +4,7 @@
 //! Zähler, Plausibilisierung und Bestätigung erfolgen in der Anwendung.
 
 mod openrouter;
+mod recognizer;
 mod schema;
 
 pub use openrouter::{OpenRouter, OpenRouterConfig};

@@ -1,0 +1,82 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("capture-confirm-title") }}</h1>
+<div class="capture">
+  <img class="capture-photo" src="/capture/{{ draft_id }}/photo" alt="{{ ctx.lang.t("capture-photo-alt") }}">
+  <div>
+    {% if let Some(s) = suggestion %}
+    <dl class="facts">
+      <dt>{{ ctx.lang.t("reading-value") }}</dt><dd>{{ s.value }}</dd>
+      <dt>{{ ctx.lang.t("capture-serial") }}</dt><dd>{{ s.serial }}</dd>
+      <dt>{{ ctx.lang.t("reading-register") }}</dt><dd>{{ s.register }}</dd>
+      <dt>{{ ctx.lang.t("capture-unit") }}</dt><dd>{{ s.unit }}</dd>
+      <dt>{{ ctx.lang.t("capture-confidence") }}</dt><dd>{{ s.confidence }} %</dd>
+    </dl>
+    <p class="hint">{{ ctx.lang.t("capture-suggestion-hint") }}</p>
+    {% endif %}
+    {% if failed %}<p class="callout warning">{{ ctx.lang.t("capture-manual") }}</p>{% endif %}
+
+    <form method="get" action="/capture/{{ draft_id }}" class="form">
+      <div class="field">
+        <label for="meter">{{ ctx.lang.t("capture-meter") }}</label>
+        <select id="meter" name="meter">
+          {% if meter.is_none() %}<option value="">{{ ctx.lang.t("capture-meter-choose") }}</option>{% endif %}
+          {% for m in meters %}
+          <option value="{{ m.id }}"{% if m.selected %} selected{% endif %}>{{ m.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="actions">
+        <button type="submit" class="secondary">{{ ctx.lang.t("capture-meter-select") }}</button>
+      </div>
+    </form>
+
+    {% if let Some(m) = meter %}
+    <form method="post" action="/capture/{{ draft_id }}/confirm" class="form" novalidate>
+      <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+      <input type="hidden" name="meter_id" value="{{ m.id }}">
+      <div class="field{% if self.has_errs("register_id") %} has-error{% endif %}">
+        <label for="register_id">{{ ctx.lang.t("reading-register") }}</label>
+        <select id="register_id" name="register_id">
+          {% for r in m.registers %}
+          <option value="{{ r.id }}"{% if r.selected %} selected{% endif %}>{{ r.label }}</option>
+          {% endfor %}
+        </select>
+        {% for e in self.errs("register_id") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field{% if self.has_errs("value") %} has-error{% endif %}">
+        <label for="value">{{ ctx.lang.t("reading-value") }} <span class="muted">({{ m.unit }})</span></label>
+        <input id="value" name="value" value="{{ value }}" inputmode="decimal" autocomplete="off">
+        {% if let Some(h) = hint %}<p class="warning">{{ h }}</p>{% endif %}
+        {% for e in self.errs("value") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field{% if self.has_errs("at") %} has-error{% endif %}">
+        <label for="at">{{ ctx.lang.t("reading-at") }}</label>
+        <input id="at" name="at" type="datetime-local" value="{{ at }}" required>
+        {% for e in self.errs("at") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field{% if self.has_errs("note") %} has-error{% endif %}">
+        <label for="note">{{ ctx.lang.t("reading-note") }}</label>
+        <textarea id="note" name="note" maxlength="500" rows="2">{{ note }}</textarea>
+        {% for e in self.errs("note") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      {% if needs_confirm %}
+      <div class="callout warning">
+        <p>{{ ctx.lang.t("readings-warnings") }}</p>
+        <label><input type="checkbox" name="confirm_warnings" value="true"> {{ ctx.lang.t("readings-confirm") }}</label>
+      </div>
+      {% endif %}
+      <div class="actions">
+        <button type="submit">{{ ctx.lang.t("capture-save") }}</button>
+      </div>
+    </form>
+    {% endif %}
+
+    <form method="post" action="/capture/{{ draft_id }}/discard" class="inline">
+      <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+      <button type="submit" class="link danger">{{ ctx.lang.t("capture-discard") }}</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -15,6 +15,7 @@
     <nav>
       <a href="/">{{ ctx.lang.t("nav-overview") }}</a>
       <a href="/meters">{{ ctx.lang.t("nav-meters") }}</a>
+      {% if ctx.can_write %}<a href="/capture">{{ ctx.lang.t("nav-capture") }}</a>{% endif %}
       <a href="/settings">{{ ctx.lang.t("nav-settings") }}</a>
     </nav>
     <div class="topbar-right">

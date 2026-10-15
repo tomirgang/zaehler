@@ -1,0 +1,25 @@
+[package]
+name = "zaehler-storage"
+description = "Driven-Adapter: Objektspeicher (Dateisystem, S3) über object_store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+zaehler-app.workspace = true
+
+async-trait.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures.workspace = true
+object_store.workspace = true
+
+[dev-dependencies]
+zaehler-app = { workspace = true, features = ["testing"] }
+tokio.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

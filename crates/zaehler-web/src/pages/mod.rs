@@ -3,6 +3,7 @@
 // Handler liefern `Result<Response, Response>`; beide Seiten sind Antworten.
 #![allow(clippy::result_large_err)]
 
+pub mod capture;
 pub mod dashboard;
 pub mod meters;
 pub mod readings;

@@ -50,7 +50,7 @@ pub fn new_token() -> String {
 }
 
 /// Vergleich in konstanter Zeit.
-fn constant_time_eq(a: &str, b: &str) -> bool {
+pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
     a.len() == b.len()
         && a.bytes()
             .zip(b.bytes())
@@ -59,6 +59,9 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 }
 
 const MAX_FORM_BYTES: usize = 1024 * 1024;
+
+/// Routen mit Multipart-Body; ihre Handler prüfen das Feld `_csrf` selbst.
+const MULTIPART_ROUTES: [&str; 1] = ["/capture"];
 
 fn forbidden() -> Response {
     (StatusCode::FORBIDDEN, "CSRF-Prüfung fehlgeschlagen").into_response()
@@ -99,12 +102,21 @@ pub async fn csrf_guard(
             forbidden()
         };
     }
-    let is_form = req
+    let content_type = req
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|ct| ct.starts_with("application/x-www-form-urlencoded"));
-    if !is_form {
+        .unwrap_or_default();
+    // Multipart (Foto-Upload): das Formularfeld `_csrf` prüft der Handler, da
+    // der Body hier nicht gepuffert wird. Nur für ausdrücklich genannte Routen.
+    if content_type.starts_with("multipart/form-data") {
+        return if MULTIPART_ROUTES.contains(&req.uri().path()) {
+            next.run(req).await
+        } else {
+            forbidden()
+        };
+    }
+    if !content_type.starts_with("application/x-www-form-urlencoded") {
         return forbidden();
     }
     let (parts, body) = req.into_parts();

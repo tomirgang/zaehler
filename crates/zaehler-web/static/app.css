@@ -127,5 +127,11 @@ form.inline select { width: auto; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; }
 
+.capture { display: grid; gap: 1rem; }
+.capture-photo { max-width: 100%; max-height: 60vh; border: 1px solid var(--border); border-radius: 6px; }
+@media (min-width: 900px) {
+  .capture { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+}
+
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .footer { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 2rem 1rem; }

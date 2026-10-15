@@ -15,18 +15,21 @@ path = "src/main.rs"
 zaehler-ai.workspace = true
 zaehler-app.workspace = true
 zaehler-db.workspace = true
+zaehler-media.workspace = true
 zaehler-notify.workspace = true
+zaehler-storage.workspace = true
 zaehler-web.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true
+chrono.workspace = true
 clap.workspace = true
 figment.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

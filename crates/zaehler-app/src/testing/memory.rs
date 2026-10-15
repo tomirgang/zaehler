@@ -3,21 +3,30 @@
 //! Eine Unit of Work arbeitet auf einer Kopie des Zustands und übernimmt sie
 //! beim `commit` (SPEC_ARCH_UOW).
 
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 
 use crate::{
     PortError, Role, Tenant,
-    ids::{DeviceId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
+    ids::{
+        BlobKey, BlobKind, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId,
+    },
     model::{
-        Device, DeviceData, Household, HouseholdData, HouseholdSummary, Identity, Meter,
-        MeterAggregate, MeterData, MeterSummary, Reading, Register, RegisterData, User,
+        Device, DeviceData, Draft, DraftOutcome, DraftStatus, Household, HouseholdData,
+        HouseholdSummary, Identity, Meter, MeterAggregate, MeterData, MeterSummary, Reading,
+        Recognition, Register, RegisterData, User,
     },
     port::{
-        HouseholdRepository, MembershipRepository, MeterRepository, PortResult, Readiness,
-        ReadingRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
+        BlobStore, Clock, DraftRepository, HouseholdRepository, ImageNormalizer,
+        MaintenanceRepository, MembershipRepository, MeterRecognizer, MeterRepository,
+        NormalizedJpeg, PortResult, Readiness, ReadingRepository, RecognitionError, UnitOfWork,
+        UnitOfWorkFactory, UserRepository,
     },
 };
 
@@ -37,6 +46,16 @@ struct State {
     devices: Vec<(MeterId, Device)>,
     registers: Vec<(MeterId, Register)>,
     readings: Vec<Reading>,
+    /// Ablaufzeitpunkte von Sitzungen (nur für `MaintenanceRepository`)
+    sessions: Vec<DateTime<Utc>>,
+    drafts: Vec<StoredDraft>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredDraft {
+    household: HouseholdId,
+    draft: Draft,
+    corrected: Option<bool>,
 }
 
 impl State {
@@ -89,6 +108,219 @@ impl Readiness for InMemoryStore {
     }
 }
 
+impl InMemoryStore {
+    /// Legt eine Sitzung mit diesem Ablaufzeitpunkt an.
+    pub fn add_session(&self, expires_at: DateTime<Utc>) {
+        if let Ok(mut s) = self.shared.lock() {
+            s.sessions.push(expires_at);
+        }
+    }
+
+    /// Anzahl der Sitzungen.
+    #[must_use]
+    pub fn session_count(&self) -> usize {
+        self.shared.lock().map_or(0, |s| s.sessions.len())
+    }
+
+    /// Status und Korrekturkennzeichen eines Entwurfs.
+    #[must_use]
+    pub fn draft_state(&self, id: DraftId) -> Option<(DraftStatus, Option<bool>)> {
+        self.shared.lock().ok().and_then(|s| {
+            s.drafts
+                .iter()
+                .find(|d| d.draft.id == id)
+                .map(|d| (d.draft.status, d.corrected))
+        })
+    }
+}
+
+#[async_trait]
+impl MaintenanceRepository for InMemoryStore {
+    async fn expire_drafts(
+        &self,
+        cutoff: DateTime<Utc>,
+        _now: DateTime<Utc>,
+    ) -> PortResult<Vec<BlobKey>> {
+        let mut s = self.shared.lock().map_err(poisoned)?;
+        Ok(s.drafts
+            .iter_mut()
+            .filter(|d| d.draft.status.is_open() && d.draft.created_at < cutoff)
+            .map(|d| {
+                d.draft.status = DraftStatus::Discarded;
+                d.draft.photo_key.clone()
+            })
+            .collect())
+    }
+
+    async fn delete_expired_sessions(&self, now: DateTime<Utc>) -> PortResult<u64> {
+        let mut s = self.shared.lock().map_err(poisoned)?;
+        let before = s.sessions.len();
+        s.sessions.retain(|e| *e >= now);
+        Ok((before - s.sessions.len()) as u64)
+    }
+}
+
+/// Objektspeicher im Speicher; Zeitstempel kommen von der übergebenen Uhr.
+pub struct InMemoryBlobStore {
+    objects: Mutex<BTreeMap<String, (Bytes, DateTime<Utc>)>>,
+    clock: Arc<dyn Clock>,
+}
+
+impl InMemoryBlobStore {
+    #[must_use]
+    pub fn new(clock: Arc<dyn Clock>) -> Self {
+        Self {
+            objects: Mutex::default(),
+            clock,
+        }
+    }
+
+    /// Alle Schlüssel, sortiert.
+    #[must_use]
+    pub fn keys(&self) -> Vec<String> {
+        self.objects
+            .lock()
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+}
+
+#[async_trait]
+impl BlobStore for InMemoryBlobStore {
+    async fn put(&self, key: &BlobKey, bytes: Bytes) -> PortResult<()> {
+        let now = self.clock.now();
+        self.objects
+            .lock()
+            .map_err(poisoned)?
+            .insert(key.to_string(), (bytes, now));
+        Ok(())
+    }
+
+    async fn get(&self, key: &BlobKey) -> PortResult<Bytes> {
+        self.objects
+            .lock()
+            .map_err(poisoned)?
+            .get(key.as_str())
+            .map(|(b, _)| b.clone())
+            .ok_or(PortError::NotFound)
+    }
+
+    async fn copy(&self, from: &BlobKey, to: &BlobKey) -> PortResult<()> {
+        let bytes = self.get(from).await?;
+        self.put(to, bytes).await
+    }
+
+    async fn delete(&self, key: &BlobKey) -> PortResult<()> {
+        self.objects.lock().map_err(poisoned)?.remove(key.as_str());
+        Ok(())
+    }
+
+    async fn delete_household(&self, household: HouseholdId) -> PortResult<()> {
+        let prefix = BlobKey::household_prefix(household);
+        self.objects
+            .lock()
+            .map_err(poisoned)?
+            .retain(|k, _| !k.starts_with(&prefix));
+        Ok(())
+    }
+
+    async fn list_tmp_older_than(&self, cutoff: DateTime<Utc>) -> PortResult<Vec<BlobKey>> {
+        Ok(self
+            .objects
+            .lock()
+            .map_err(poisoned)?
+            .iter()
+            .filter(|(_, (_, at))| *at < cutoff)
+            .filter_map(|(k, _)| BlobKey::parse(k))
+            .filter(|k| k.kind() == BlobKind::Tmp)
+            .collect())
+    }
+}
+
+#[async_trait]
+impl DraftRepository for MemoryUow {
+    async fn create(&mut self, t: &Tenant, draft: &Draft) -> PortResult<()> {
+        if draft.photo_key.household() != t.household_id() {
+            return Err(PortError::NotFound);
+        }
+        self.state.drafts.push(StoredDraft {
+            household: t.household_id(),
+            draft: draft.clone(),
+            corrected: None,
+        });
+        Ok(())
+    }
+
+    async fn get_open(&mut self, t: &Tenant, id: DraftId) -> PortResult<Option<Draft>> {
+        Ok(self
+            .state
+            .drafts
+            .iter()
+            .find(|d| {
+                d.household == t.household_id() && d.draft.id == id && d.draft.status.is_open()
+            })
+            .map(|d| d.draft.clone()))
+    }
+
+    async fn finish(
+        &mut self,
+        t: &Tenant,
+        id: DraftId,
+        outcome: DraftOutcome,
+        _at: DateTime<Utc>,
+    ) -> PortResult<()> {
+        let d = self
+            .state
+            .drafts
+            .iter_mut()
+            .find(|d| {
+                d.household == t.household_id() && d.draft.id == id && d.draft.status.is_open()
+            })
+            .ok_or(PortError::NotFound)?;
+        match outcome {
+            DraftOutcome::Confirmed { corrected, .. } => {
+                d.draft.status = DraftStatus::Confirmed;
+                d.corrected = corrected;
+            }
+            DraftOutcome::Discarded => d.draft.status = DraftStatus::Discarded,
+        }
+        Ok(())
+    }
+}
+
+/// Ersatz für die Erkennung mit festem Ergebnis.
+pub struct StubRecognizer(pub Result<Recognition, RecognitionError>);
+
+#[async_trait]
+impl MeterRecognizer for StubRecognizer {
+    fn model(&self) -> &'static str {
+        "stub"
+    }
+
+    async fn recognize(&self, _: &NormalizedJpeg) -> Result<Recognition, RecognitionError> {
+        self.0.clone()
+    }
+}
+
+/// Ersatz für den Bild-Adapter: akzeptiert Daten mit JPEG-Signatur
+/// unverändert (1 × 1 Pixel), alles andere mit `photo.unsupported`.
+pub struct StubImageNormalizer;
+
+#[async_trait]
+impl ImageNormalizer for StubImageNormalizer {
+    async fn normalize(&self, bytes: Bytes) -> PortResult<NormalizedJpeg> {
+        if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            Ok(NormalizedJpeg {
+                bytes,
+                width: 1,
+                height: 1,
+            })
+        } else {
+            Err(PortError::Invalid("photo.unsupported"))
+        }
+    }
+}
+
 struct MemoryUow {
     shared: Arc<Mutex<State>>,
     state: State,
@@ -109,6 +341,9 @@ impl UnitOfWork for MemoryUow {
         self
     }
     fn readings(&mut self) -> &mut dyn ReadingRepository {
+        self
+    }
+    fn drafts(&mut self) -> &mut dyn DraftRepository {
         self
     }
     async fn commit(self: Box<Self>) -> PortResult<()> {
@@ -211,6 +446,7 @@ impl HouseholdRepository for MemoryUow {
         self.state.registers.retain(|(m, _)| !meters.contains(m));
         self.state.devices.retain(|(m, _)| !meters.contains(m));
         self.state.meters.retain(|(h, _)| *h != hid);
+        self.state.drafts.retain(|d| d.household != hid);
         self.state.memberships.retain(|(h, _, _)| *h != hid);
         self.state.households.retain(|h| h.id != hid);
         Ok(())

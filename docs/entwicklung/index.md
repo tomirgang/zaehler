@@ -33,8 +33,8 @@ crates/                 hexagonale Architektur (ADR-022)
   zaehler-app/          Kern: Anwendungsfälle, Port-Traits, Tenant, In-Memory-Adapter (Feature testing)
   zaehler-web/          Driving-Adapter: HTTP, Templates, Assets, i18n, Sitzung, OIDC
   zaehler-db/           Driven-Adapter: SeaORM, Migrationen, Festkomma
-  zaehler-storage/      Driven-Adapter: Objektspeicher (ab WP_MVP_06)
-  zaehler-media/        Driven-Adapter: Bildverarbeitung (ab WP_MVP_06)
+  zaehler-storage/      Driven-Adapter: Objektspeicher (Dateisystem, S3)
+  zaehler-media/        Driven-Adapter: Bildverarbeitung
   zaehler-ai/           Driven-Adapter: OpenRouter
   zaehler-notify/       Driven-Adapter: E-Mail
   zaehler-server/       Composition Root, Binary `zaehler`

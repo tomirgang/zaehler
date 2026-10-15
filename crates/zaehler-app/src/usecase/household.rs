@@ -86,7 +86,13 @@ impl DeleteHousehold {
                 "household.delete_confirm_mismatch",
             ));
         }
-        // TODO(WP_MVP_06): vorher Objekte unter households/{id}/ über BlobStore löschen.
+        // Objekte zuerst: schlägt das Löschen fehl, bleibt der Haushalt
+        // bestehen und das Löschen kann wiederholt werden.
+        self.p
+            .blobs
+            .delete_household(t.household_id())
+            .await
+            .map_err(AppError::from_storage)?;
         uow.households().delete(t).await?;
         uow.commit().await?;
         tracing::info!(household = %t.household_id(), "household deleted");

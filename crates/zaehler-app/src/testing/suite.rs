@@ -4,6 +4,9 @@
 
 #![allow(clippy::many_single_char_names)]
 
+use std::task::Poll;
+
+use bytes::Bytes;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -14,9 +17,14 @@ use zaehler_domain::{
 
 use crate::{
     PortError, Role, Tenant,
-    ids::{DeviceId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
-    model::{DeviceData, HouseholdData, Identity, MeterData, Reading, RegisterData},
-    port::UnitOfWorkFactory,
+    ids::{
+        BlobKey, BlobKind, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId,
+    },
+    model::{
+        DeviceData, Draft, DraftOutcome, DraftStatus, HouseholdData, Identity, MeterData, Reading,
+        Recognition, RegisterData,
+    },
+    port::{BlobStore, MaintenanceRepository, UnitOfWorkFactory},
 };
 
 fn t0() -> DateTime<Utc> {
@@ -107,6 +115,7 @@ fn reading(t: &Tenant, register: RegisterId, device: DeviceId, days: i64, value:
         source: ReadingSource::Manual,
         note: Some("Notiz".into()),
         photo_key: None,
+        ai_confidence: None,
         created_by: Some(t.user_id()),
     }
 }
@@ -296,7 +305,10 @@ async fn tenant_isolation(f: &dyn UnitOfWorkFactory) {
 async fn readings(f: &dyn UnitOfWorkFactory) {
     let t = tenant(f, "Ablesungen").await;
     let (m, d, r) = meter(f, &t, "Wasser").await;
-    let first = reading(&t, r, d, 10, 1234);
+    let mut first = reading(&t, r, d, 10, 1234);
+    first.photo_key = Some(BlobKey::reading_photo(t.household_id(), first.id));
+    first.source = ReadingSource::Photo;
+    first.ai_confidence = Some(Decimal::new(875, 3));
     let second = reading(&t, r, d, 5, 1000);
     {
         let mut uow = f.begin().await.expect("begin");
@@ -439,4 +451,251 @@ async fn household_delete_cascades(f: &dyn UnitOfWorkFactory) {
             .is_empty()
     );
     assert!(uow.meters().list(&t).await.expect("list").is_empty());
+}
+
+fn draft(t: &Tenant, created_at: DateTime<Utc>, meter: Option<MeterId>) -> Draft {
+    let id = DraftId(id());
+    Draft {
+        id,
+        created_by: t.user_id(),
+        photo_key: BlobKey::draft_photo(t.household_id(), id),
+        model: Some("test/model".into()),
+        duration_ms: Some(1234),
+        suggestion: Some(Recognition {
+            value: Some(Decimal::new(123_456, 3)),
+            serial_number: Some("1EMH-0012".into()),
+            register: Some("1.8.0".into()),
+            unit: Some("kWh".into()),
+            meter_kind: Some(MeterKind::Electricity),
+            confidence: Decimal::new(91, 2),
+        }),
+        matched_meter_id: meter,
+        status: DraftStatus::Pending,
+        created_at,
+    }
+}
+
+/// Entwürfe der Foto-Erfassung und ihr Ablauf; für jede Implementierung von
+/// `UnitOfWorkFactory` mit zugehörigem `MaintenanceRepository`.
+///
+/// # Panics
+/// Bei jeder verletzten Erwartung.
+// @test SPEC_AI_DRAFTS, SPEC_SEC_TENANT_SCOPE, SPEC_OPS_HOUSEKEEPING
+pub async fn drafts(f: &dyn UnitOfWorkFactory, m: &dyn MaintenanceRepository) {
+    let t = tenant(f, "Entwürfe").await;
+    let other = tenant(f, "Fremd").await;
+    let (meter_id, device, register) = meter(f, &t, "Strom").await;
+    let saved = reading(&t, register, device, 1, 1000);
+    let open = draft(&t, t0(), Some(meter_id));
+    let mut failed = draft(&t, t0() + Duration::days(2), None);
+    failed.status = DraftStatus::Failed;
+    failed.suggestion = None;
+    failed.model = None;
+    failed.duration_ms = None;
+    let confirmed = draft(&t, t0(), None);
+    {
+        let mut uow = f.begin().await.expect("begin");
+        for d in [&open, &failed, &confirmed] {
+            uow.drafts().create(&t, d).await.expect("create");
+        }
+        // Foto unter fremdem Haushalt wird abgelehnt
+        let foreign = draft(&other, t0(), None);
+        assert!(uow.drafts().create(&t, &foreign).await.is_err());
+        uow.commit().await.expect("commit");
+    }
+    let mut uow = f.begin().await.expect("begin");
+    assert_eq!(
+        uow.drafts().get_open(&t, open.id).await.expect("get"),
+        Some(open.clone()),
+        "Vorschlag vollständig gespeichert"
+    );
+    assert_eq!(
+        uow.drafts().get_open(&t, failed.id).await.expect("get"),
+        Some(failed.clone())
+    );
+    assert_eq!(
+        uow.drafts().get_open(&other, open.id).await.expect("get"),
+        None,
+        "Entwurf nur im eigenen Haushalt"
+    );
+    assert!(matches!(
+        uow.drafts()
+            .finish(&other, open.id, DraftOutcome::Discarded, t0())
+            .await,
+        Err(PortError::NotFound)
+    ));
+    uow.readings()
+        .insert(&t, std::slice::from_ref(&saved))
+        .await
+        .expect("reading");
+    uow.drafts()
+        .finish(
+            &t,
+            confirmed.id,
+            DraftOutcome::Confirmed {
+                reading: saved.id,
+                corrected: Some(true),
+            },
+            t0(),
+        )
+        .await
+        .expect("finish");
+    assert!(matches!(
+        uow.drafts()
+            .finish(&t, confirmed.id, DraftOutcome::Discarded, t0())
+            .await,
+        Err(PortError::NotFound)
+    ));
+    assert_eq!(
+        uow.drafts().get_open(&t, confirmed.id).await.expect("get"),
+        None
+    );
+    uow.commit().await.expect("commit");
+    drafts_expire(f, m, &t, [&open, &failed, &confirmed]).await;
+}
+
+/// Ablauf offener Entwürfe und Löschen mit dem Haushalt.
+async fn drafts_expire(
+    f: &dyn UnitOfWorkFactory,
+    m: &dyn MaintenanceRepository,
+    t: &Tenant,
+    [open, failed, confirmed]: [&Draft; 3],
+) {
+    // nur offene Entwürfe vor dem Stichtag, idempotent
+    let cutoff = t0() + Duration::days(1);
+    let (a, b) = join(
+        m.expire_drafts(cutoff, t0() + Duration::days(3)),
+        m.expire_drafts(cutoff, t0() + Duration::days(3)),
+    )
+    .await;
+    let mut expired = a.expect("expire");
+    expired.extend(b.expect("expire"));
+    expired.dedup();
+    assert!(expired.contains(&open.photo_key));
+    assert!(!expired.contains(&failed.photo_key));
+    assert!(!expired.contains(&confirmed.photo_key));
+    assert!(
+        !m.expire_drafts(cutoff, t0())
+            .await
+            .expect("expire")
+            .contains(&open.photo_key)
+    );
+    let mut uow = f.begin().await.expect("begin");
+    assert_eq!(uow.drafts().get_open(t, open.id).await.expect("get"), None);
+    assert!(
+        uow.drafts()
+            .get_open(t, failed.id)
+            .await
+            .expect("get")
+            .is_some()
+    );
+
+    // Haushalt löschen entfernt Entwürfe
+    uow.households().delete(t).await.expect("delete");
+    uow.commit().await.expect("commit");
+    let mut uow = f.begin().await.expect("begin");
+    assert_eq!(
+        uow.drafts().get_open(t, failed.id).await.expect("get"),
+        None
+    );
+}
+
+/// Prüfungen für jede Implementierung von `BlobStore` (In-Memory,
+/// Dateisystem, S3). Zeitstempel müssen der Systemzeit folgen.
+///
+/// # Panics
+/// Bei jeder verletzten Erwartung.
+// @test SPEC_STORE_BLOBS, SPEC_OPS_HOUSEKEEPING
+pub async fn blob_store(s: &dyn BlobStore) {
+    let a = HouseholdId(id());
+    let b = HouseholdId(id());
+    let photo = BlobKey::reading_photo(a, ReadingId(id()));
+    let copy = BlobKey::draft_photo(a, DraftId(id()));
+    let tmp_a = BlobKey::tmp(a, id());
+    let tmp_b = BlobKey::tmp(b, id());
+    let other = BlobKey::reading_photo(b, ReadingId(id()));
+
+    assert!(matches!(s.get(&photo).await, Err(PortError::NotFound)));
+    s.put(&photo, Bytes::from_static(b"jpeg-1"))
+        .await
+        .expect("put");
+    s.put(&photo, Bytes::from_static(b"jpeg-2"))
+        .await
+        .expect("overwrite");
+    assert_eq!(s.get(&photo).await.expect("get"), &b"jpeg-2"[..]);
+    s.copy(&photo, &copy).await.expect("copy");
+    assert_eq!(s.get(&copy).await.expect("get copy"), &b"jpeg-2"[..]);
+    assert!(matches!(
+        s.copy(&BlobKey::tmp(a, id()), &copy).await,
+        Err(PortError::NotFound)
+    ));
+
+    // delete ist idempotent, auch bei nebenläufigem Aufruf
+    let (x, y) = join(s.delete(&copy), s.delete(&copy)).await;
+    x.expect("delete");
+    y.expect("delete concurrently");
+    s.delete(&copy).await.expect("delete missing");
+    assert!(matches!(s.get(&copy).await, Err(PortError::NotFound)));
+
+    s.put(&tmp_a, Bytes::from_static(b"a;b"))
+        .await
+        .expect("put tmp");
+    s.put(&tmp_b, Bytes::from_static(b"a;b"))
+        .await
+        .expect("put tmp");
+    s.put(&other, Bytes::from_static(b"jpeg"))
+        .await
+        .expect("put other");
+    let listed = s
+        .list_tmp_older_than(Utc::now() + Duration::minutes(1))
+        .await
+        .expect("list");
+    assert!(listed.contains(&tmp_a) && listed.contains(&tmp_b));
+    assert!(listed.iter().all(|k| k.kind() == BlobKind::Tmp));
+    let listed = s
+        .list_tmp_older_than(Utc::now() - Duration::hours(1))
+        .await
+        .expect("list");
+    assert!(!listed.contains(&tmp_a) && !listed.contains(&tmp_b));
+
+    // Haushalt löschen entfernt nur dessen Objekte, auch nebenläufig
+    let (x, y) = join(s.delete_household(a), s.delete_household(a)).await;
+    x.expect("delete household");
+    y.expect("delete household concurrently");
+    assert!(matches!(s.get(&photo).await, Err(PortError::NotFound)));
+    assert!(matches!(s.get(&tmp_a).await, Err(PortError::NotFound)));
+    assert_eq!(s.get(&other).await.expect("other household"), &b"jpeg"[..]);
+    s.delete_household(a).await.expect("delete empty household");
+    s.delete_household(b).await.expect("cleanup");
+    assert!(matches!(s.get(&tmp_b).await, Err(PortError::NotFound)));
+}
+
+/// Führt zwei Futures nebenläufig aus, ohne Abhängigkeit zu einer Runtime.
+///
+/// # Panics
+/// Nie; beide Ergebnisse liegen beim Abschluss vor.
+pub async fn join<A: Future, B: Future>(a: A, b: B) -> (A::Output, B::Output) {
+    let mut a = std::pin::pin!(a);
+    let mut b = std::pin::pin!(b);
+    let mut ra = None;
+    let mut rb = None;
+    std::future::poll_fn(|cx| {
+        if ra.is_none()
+            && let Poll::Ready(v) = a.as_mut().poll(cx)
+        {
+            ra = Some(v);
+        }
+        if rb.is_none()
+            && let Poll::Ready(v) = b.as_mut().poll(cx)
+        {
+            rb = Some(v);
+        }
+        if ra.is_some() && rb.is_some() {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
+    (ra.expect("a"), rb.expect("b"))
 }

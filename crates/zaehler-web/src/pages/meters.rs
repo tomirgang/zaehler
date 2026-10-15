@@ -123,6 +123,7 @@ pub struct ReadingRow {
     pub value: String,
     pub source: String,
     pub note: String,
+    pub has_photo: bool,
 }
 
 #[derive(Template)]
@@ -484,6 +485,7 @@ pub async fn detail(
             ),
             source: source_label(lang, r),
             note: r.note.clone().unwrap_or_default(),
+            has_photo: r.photo_key.is_some(),
         })
         .collect();
     let page = DetailPage {

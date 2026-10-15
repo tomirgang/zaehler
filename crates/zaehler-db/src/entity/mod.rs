@@ -1,5 +1,6 @@
 //! SeaORM-Entities zum Kernschema (`m20261015_000001_core`).
 
+pub mod ai_draft;
 pub mod household;
 pub mod membership;
 pub mod meter;

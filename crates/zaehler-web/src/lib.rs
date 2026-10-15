@@ -60,6 +60,17 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
         .route("/meters/{id}/readings", post(pages::readings::record))
         .route("/meters/{id}/readings/check", post(pages::readings::check))
         .route("/readings/{id}/delete", post(pages::readings::delete))
+        .route("/readings/{id}/photo", get(pages::readings::photo))
+        .route(
+            "/capture",
+            get(pages::capture::upload_form)
+                .post(pages::capture::analyse)
+                .layer(DefaultBodyLimit::max(state.cfg.max_photo_bytes)),
+        )
+        .route("/capture/{id}", get(pages::capture::show))
+        .route("/capture/{id}/photo", get(pages::capture::photo))
+        .route("/capture/{id}/confirm", post(pages::capture::confirm))
+        .route("/capture/{id}/discard", post(pages::capture::discard))
         .route("/settings", get(pages::settings::show))
         .route(
             "/settings/household",

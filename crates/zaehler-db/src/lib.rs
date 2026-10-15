@@ -125,7 +125,9 @@ mod tests {
         super::migrate(&db).await.unwrap();
         // Idempotent: zweiter Lauf darf nichts tun.
         super::migrate(&db).await.unwrap();
-        zaehler_app::testing::suite::run(&super::SeaOrmStore::new(db)).await;
+        let store = super::SeaOrmStore::new(db);
+        zaehler_app::testing::suite::run(&store).await;
+        zaehler_app::testing::suite::drafts(&store, &store).await;
     }
 
     // @test SPEC_ARCH_UOW, SPEC_SEC_TENANT_SCOPE, SPEC_OPS_DB_BACKENDS, SPEC_DM_CORE
@@ -135,7 +137,9 @@ mod tests {
         let url = format!("sqlite://{}/test.db?mode=rwc", dir.display());
         let db = super::connect(&url, 4).await.unwrap();
         super::migrate(&db).await.unwrap();
-        zaehler_app::testing::suite::run(&super::SeaOrmStore::new(db)).await;
+        let store = super::SeaOrmStore::new(db);
+        zaehler_app::testing::suite::run(&store).await;
+        zaehler_app::testing::suite::drafts(&store, &store).await;
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -173,5 +177,40 @@ mod tests {
         assert_eq!(store.delete_expired(chrono::Utc::now()).await.unwrap(), 1);
         store.delete(&record.id).await.unwrap();
         assert_eq!(store.load(&record.id).await.unwrap(), None);
+    }
+
+    // @test SPEC_OPS_HOUSEKEEPING
+    #[tokio::test]
+    async fn expired_sessions_are_removed_idempotently_in_parallel() {
+        use tower_sessions::{
+            SessionStore,
+            session::{Id, Record},
+        };
+        use zaehler_app::port::MaintenanceRepository;
+        let dir = std::env::temp_dir().join(format!("zaehler-test-{}", uuid::Uuid::now_v7()));
+        let url = format!("sqlite://{}/test.db?mode=rwc", dir.display());
+        let db = super::connect(&url, 4).await.unwrap();
+        super::migrate(&db).await.unwrap();
+        let sessions = super::DbSessionStore::new(db.clone());
+        for hours in [-2, -1, 1] {
+            sessions
+                .save(&Record {
+                    id: Id::default(),
+                    data: std::collections::HashMap::default(),
+                    expiry_date: time::OffsetDateTime::now_utc() + time::Duration::hours(hours),
+                })
+                .await
+                .unwrap();
+        }
+        let a = super::SeaOrmStore::new(db.clone());
+        let b = super::SeaOrmStore::new(db);
+        let now = chrono::Utc::now();
+        let (x, y) = tokio::join!(
+            a.delete_expired_sessions(now),
+            b.delete_expired_sessions(now)
+        );
+        assert_eq!(x.unwrap() + y.unwrap(), 2);
+        assert_eq!(a.delete_expired_sessions(now).await.unwrap(), 0);
+        std::fs::remove_dir_all(dir).ok();
     }
 }
