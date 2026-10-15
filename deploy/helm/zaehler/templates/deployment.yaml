@@ -1,0 +1,181 @@
+{{- include "zaehler.validate" . }}
+{{- $single := or (eq .Values.database.type "sqlite") (eq .Values.storage.kind "fs") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "zaehler.fullname" . }}
+  labels:
+    {{- include "zaehler.labels" . | nindent 4 }}
+spec:
+  replicas: {{ if eq .Values.database.type "sqlite" }}1{{ else }}{{ .Values.replicaCount }}{{ end }}
+  {{- if $single }}
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "zaehler.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+      labels:
+        {{- include "zaehler.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "zaehler.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: zaehler
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          env:
+            - name: ZAEHLER_SERVER__PUBLIC_URL
+              value: {{ .Values.publicUrl | quote }}
+            - name: ZAEHLER_LOG__FORMAT
+              value: {{ .Values.log.format | quote }}
+            - name: ZAEHLER_LOG__FILTER
+              value: {{ .Values.log.filter | quote }}
+            - name: ZAEHLER_DATABASE__AUTO_MIGRATE
+              value: {{ .Values.autoMigrate | quote }}
+            - name: ZAEHLER_DATABASE__MAX_CONNECTIONS
+              value: {{ .Values.database.maxConnections | quote }}
+            {{- if eq .Values.database.type "cnpg" }}
+            - name: ZAEHLER_DATABASE__URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zaehler.cnpgCluster" . }}-app
+                  key: uri
+            {{- else if eq .Values.database.type "existing" }}
+            - name: ZAEHLER_DATABASE__URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existing.secretName }}
+                  key: {{ .Values.database.existing.secretKey }}
+            {{- else }}
+            - name: ZAEHLER_DATABASE__URL
+              value: sqlite:///var/lib/zaehler/data/zaehler.db?mode=rwc
+            {{- end }}
+            - name: ZAEHLER_STORAGE__KIND
+              value: {{ .Values.storage.kind | quote }}
+            {{- if eq .Values.storage.kind "s3" }}
+            - name: ZAEHLER_STORAGE__BUCKET
+              value: {{ .Values.storage.s3.bucket | quote }}
+            {{- with .Values.storage.s3.endpoint }}
+            - name: ZAEHLER_STORAGE__ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.storage.s3.region }}
+            - name: ZAEHLER_STORAGE__REGION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- else }}
+            - name: ZAEHLER_STORAGE__PATH
+              value: /var/lib/zaehler/data/files
+            {{- end }}
+            {{- if .Values.oidc.enabled }}
+            - name: ZAEHLER_OIDC__ISSUER_URL
+              value: {{ .Values.oidc.issuerUrl | quote }}
+            - name: ZAEHLER_OIDC__CLIENT_ID
+              value: {{ .Values.oidc.clientId | quote }}
+            - name: ZAEHLER_OIDC__CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oidc.existingSecret }}
+                  key: client-secret
+            {{- end }}
+            {{- if .Values.ai.enabled }}
+            - name: ZAEHLER_AI__MODEL
+              value: {{ .Values.ai.model | quote }}
+            - name: ZAEHLER_AI__API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ai.existingSecret }}
+                  key: api-key
+            {{- end }}
+            {{- if .Values.notify.smtp.enabled }}
+            - name: ZAEHLER_NOTIFY__SMTP__HOST
+              value: {{ .Values.notify.smtp.host | quote }}
+            - name: ZAEHLER_NOTIFY__SMTP__PORT
+              value: {{ .Values.notify.smtp.port | quote }}
+            - name: ZAEHLER_NOTIFY__SMTP__FROM
+              value: {{ .Values.notify.smtp.from | quote }}
+            - name: ZAEHLER_NOTIFY__SMTP__USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.notify.smtp.existingSecret }}
+                  key: username
+            - name: ZAEHLER_NOTIFY__SMTP__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.notify.smtp.existingSecret }}
+                  key: password
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if and (eq .Values.storage.kind "s3") .Values.storage.s3.credentialsSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.storage.s3.credentialsSecret }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if include "zaehler.needsDataVolume" . }}
+            - name: data
+              mountPath: /var/lib/zaehler/data
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if include "zaehler.needsDataVolume" . }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "zaehler.fullname" . }}-data
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

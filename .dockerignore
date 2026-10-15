@@ -1,0 +1,8 @@
+target
+data
+docs
+deploy
+.git
+.forgejo
+.env
+*.db*

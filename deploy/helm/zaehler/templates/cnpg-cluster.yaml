@@ -1,0 +1,24 @@
+{{- if eq .Values.database.type "cnpg" }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "zaehler.cnpgCluster" . }}
+  labels:
+    {{- include "zaehler.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.database.cnpg.instances }}
+  {{- with .Values.database.cnpg.imageName }}
+  imageName: {{ . }}
+  {{- end }}
+  bootstrap:
+    initdb:
+      database: zaehler
+      owner: zaehler
+  storage:
+    size: {{ .Values.database.cnpg.storage.size }}
+    {{- with .Values.database.cnpg.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  monitoring:
+    enablePodMonitor: {{ .Values.serviceMonitor.enabled }}
+{{- end }}

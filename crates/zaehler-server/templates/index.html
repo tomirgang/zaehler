@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Übersicht</h1>
+<p>Status: Grundgerüst. Datenbank-Backend: <strong>{{ db_backend }}</strong>.</p>
+<ul class="cards">
+  <li>Zähler anlegen <span class="muted">(folgt: REQ_MTR_001)</span></li>
+  <li>Stand erfassen per Formular oder Foto <span class="muted">(folgt: REQ_RDG_001, REQ_AI_001)</span></li>
+  <li>Auswertungen &amp; Prognosen <span class="muted">(folgt: REQ_ANA_001, REQ_FC_001)</span></li>
+</ul>
+{% endblock %}

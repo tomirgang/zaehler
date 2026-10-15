@@ -1,0 +1,29 @@
+# @impl SPEC_OPS_COMPOSE
+# Override: PostgreSQL statt SQLite.
+#   docker compose -f compose.yaml -f compose.postgres.yaml up -d
+
+services:
+  zaehler:
+    environment:
+      ZAEHLER_DATABASE__URL: postgres://zaehler:${POSTGRES_PASSWORD:-zaehler}@postgres:5432/zaehler
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zaehler
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zaehler}
+      POSTGRES_DB: zaehler
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zaehler -d zaehler"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres-data:

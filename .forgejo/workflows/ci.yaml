@@ -1,0 +1,108 @@
+# Forgejo Actions (GitHub-Actions-kompatibel). Runner-Label "docker" ggf. anpassen.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: docker
+    container:
+      image: rust:1.98-trixie
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: zaehler
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      ZAEHLER_TEST_DATABASE_URL: postgres://postgres:test@postgres:5432/zaehler
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+      - uses: https://code.forgejo.org/actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ hashFiles('Cargo.lock') }}
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  docs:
+    runs-on: docker
+    container:
+      image: ghcr.io/astral-sh/uv:python3.13-trixie
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+      - run: apt-get update && apt-get install -y --no-install-recommends graphviz
+      # -W: Warnungen (u.a. tote Trace-Links, Schema-Verletzungen) brechen den Build
+      - run: uv run --project docs sphinx-build -W --keep-going -b html docs docs/_build/html
+      - uses: https://code.forgejo.org/actions/upload-artifact@v4
+        with:
+          name: docs-html
+          path: docs/_build/html
+
+  mermaid:
+    runs-on: docker
+    container:
+      image: ghcr.io/mermaid-js/mermaid-cli/mermaid-cli:11.12.0
+    env:
+      MMDC: /home/mermaidcli/node_modules/.bin/mmdc
+      MMDC_ARGS: -p /puppeteer-config.json
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+      # Mermaid rendert im Browser; Syntaxfehler fallen im Sphinx-Build nicht auf
+      - run: node docs/tools/check-mermaid.mjs docs
+
+  helm:
+    runs-on: docker
+    container:
+      image: alpine/helm:3.19.0
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+      - run: helm lint deploy/helm/zaehler
+      - run: helm lint deploy/helm/zaehler --set database.type=sqlite
+      - run: helm lint deploy/helm/zaehler --set storage.kind=s3,replicaCount=2
+
+  image:
+    needs: [rust, docs, mermaid, helm]
+    if: github.event_name == 'push'
+    runs-on: docker
+    container:
+      image: catthehacker/ubuntu:act-latest
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+      - uses: https://github.com/docker/setup-qemu-action@v3
+      - uses: https://github.com/docker/setup-buildx-action@v3
+      - uses: https://github.com/docker/login-action@v3
+        with:
+          registry: ${{ vars.REGISTRY || github.server_url }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+      - id: meta
+        uses: https://github.com/docker/metadata-action@v5
+        with:
+          images: ${{ vars.IMAGE || format('{0}/{1}', vars.REGISTRY, github.repository) }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha
+      - uses: https://github.com/docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

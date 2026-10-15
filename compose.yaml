@@ -1,0 +1,29 @@
+# @impl SPEC_OPS_COMPOSE
+# Standard-Setup: SQLite + lokale Dateiablage in einem Volume.
+#
+#   docker compose up -d --build
+#   docker compose -f compose.yaml -f compose.postgres.yaml up -d   # PostgreSQL statt SQLite
+#
+# Geheimnisse (OpenRouter-Key, OIDC, SMTP) in .env ablegen, siehe .env.example.
+
+services:
+  zaehler:
+    image: ${ZAEHLER_IMAGE:-zaehler:dev}
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ZAEHLER_LOG__FORMAT: pretty
+      ZAEHLER_SERVER__PUBLIC_URL: ${ZAEHLER_PUBLIC_URL:-http://localhost:8080}
+      ZAEHLER_DATABASE__URL: sqlite:///var/lib/zaehler/data/zaehler.db?mode=rwc
+      ZAEHLER_STORAGE__KIND: fs
+      ZAEHLER_STORAGE__PATH: /var/lib/zaehler/data/files
+    volumes:
+      - zaehler-data:/var/lib/zaehler/data
+
+volumes:
+  zaehler-data:

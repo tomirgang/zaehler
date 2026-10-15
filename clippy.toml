@@ -1,0 +1,10 @@
+# @impl SPEC_SEC_SQL_PARAMS
+# Schutz vor SQL-Injection: APIs, die SQL als Text ohne Bind-Parameter
+# entgegennehmen, sind verboten. Stattdessen Query-Builder (SeaORM/sea-query)
+# oder `Statement::from_sql_and_values` mit Platzhaltern verwenden.
+# Eine Ausnahme braucht `#[allow(clippy::disallowed_methods)]` mit Begründung.
+disallowed-methods = [
+  { path = "sea_orm::ConnectionTrait::execute_unprepared", reason = "Roh-SQL ohne Bind-Parameter (SPEC_SEC_SQL_PARAMS); Statement::from_sql_and_values verwenden" },
+  { path = "sea_orm::Statement::from_string", reason = "Roh-SQL ohne Bind-Parameter (SPEC_SEC_SQL_PARAMS); Statement::from_sql_and_values verwenden" },
+  { path = "sea_orm::sea_query::Expr::cust", reason = "Roh-SQL-Fragment ohne Bind-Parameter (SPEC_SEC_SQL_PARAMS); Expr::cust_with_values verwenden" },
+]

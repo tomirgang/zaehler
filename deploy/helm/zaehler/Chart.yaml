@@ -1,0 +1,8 @@
+# @impl SPEC_OPS_HELM
+apiVersion: v2
+name: zaehler
+description: Zählerstände erfassen, auswerten und prognostizieren (Strom, Gas, Wasser, Fahrzeuge)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [utility-meter, energy, cnpg]

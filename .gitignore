@@ -1,0 +1,12 @@
+/target
+/data
+*.db
+*.db-shm
+*.db-wal
+.env
+
+# Docs
+/docs/_build
+/docs/.venv
+/docs/nachverfolgung/code.md
+__pycache__/

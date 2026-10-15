@@ -1,0 +1,24 @@
+[package]
+name = "zaehler-db"
+description = "Persistenz (SeaORM) für PostgreSQL/CNPG und SQLite inkl. Migrationen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+rust_decimal.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+rust_decimal_macros.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

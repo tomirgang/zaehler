@@ -1,0 +1,11 @@
+Release {{ .Release.Name }}: zaehler {{ .Chart.AppVersion }}
+
+Datenbank: {{ .Values.database.type }}{{ if eq .Values.database.type "cnpg" }} (Cluster {{ include "zaehler.cnpgCluster" . }}, Secret {{ include "zaehler.cnpgCluster" . }}-app){{ end }}
+Ablage:    {{ .Values.storage.kind }}
+
+{{- if .Values.ingress.enabled }}
+URL: {{ .Values.publicUrl }}
+{{- else }}
+Lokal testen:
+  kubectl port-forward svc/{{ include "zaehler.fullname" . }} 8080:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+{{- end }}

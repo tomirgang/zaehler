@@ -1,0 +1,42 @@
+# Beispielkonfiguration. Start: zaehler --config config/zaehler.toml
+# Jeder Wert kann per Umgebungsvariable überschrieben werden,
+# z.B. [database] url  ->  ZAEHLER_DATABASE__URL
+
+[server]
+listen = "0.0.0.0:8080"
+metrics_listen = "0.0.0.0:9090"
+public_url = "http://localhost:8080"
+
+[database]
+# url = "postgres://zaehler:secret@localhost:5432/zaehler"
+url = "sqlite://data/zaehler.db?mode=rwc"
+max_connections = 10
+auto_migrate = true
+
+[log]
+format = "pretty" # json | pretty
+filter = "info,zaehler=debug"
+
+[storage]
+kind = "fs"
+path = "data/files"
+# kind = "s3"
+# bucket = "zaehler"
+# endpoint = "https://s3.example.com"
+# region = "eu-central-1"
+
+# [oidc]
+# issuer_url = "https://auth.example.com/realms/home"
+# client_id = "zaehler"
+# client_secret = "..."   # besser via ZAEHLER_OIDC__CLIENT_SECRET
+
+# [ai]
+# model = "google/gemini-2.5-flash"
+# api_key = "..."          # besser via ZAEHLER_AI__API_KEY
+
+# [notify.smtp]
+# host = "smtp.example.com"
+# port = 587
+# username = "..."
+# password = "..."         # besser via ZAEHLER_NOTIFY__SMTP__PASSWORD
+# from = "zaehler@example.com"

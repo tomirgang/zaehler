@@ -1,0 +1,20 @@
+{{- if include "zaehler.needsDataVolume" . }}
+{{- $p := .Values.storage.fs.persistence }}
+{{- if eq .Values.database.type "sqlite" }}{{- $p = .Values.database.sqlite.persistence }}{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "zaehler.fullname" . }}-data
+  labels:
+    {{- include "zaehler.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with $p.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $p.size }}
+{{- end }}

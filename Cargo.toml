@@ -1,0 +1,55 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://example.invalid/zaehler"
+publish = false
+
+[workspace.dependencies]
+zaehler-domain = { path = "crates/zaehler-domain" }
+zaehler-db = { path = "crates/zaehler-db" }
+zaehler-ai = { path = "crates/zaehler-ai" }
+zaehler-notify = { path = "crates/zaehler-notify" }
+
+anyhow = "1"
+askama = "0.16"
+async-trait = "0.1"
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+clap = { version = "4", features = ["derive", "env"] }
+figment = { version = "0.10", features = ["env", "toml"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rust_decimal = { version = "1", features = ["maths", "serde-with-str"] }
+rust_decimal_macros = "1"
+sea-orm = { version = "2", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-postgres", "sqlx-sqlite", "with-chrono", "with-uuid"] }
+sea-orm-migration = { version = "2", default-features = false, features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-sqlite"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
+tower-http = { version = "0.7", features = ["fs", "trace", "compression-gzip", "request-id", "timeout"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+doc_markdown = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

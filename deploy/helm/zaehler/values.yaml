@@ -1,0 +1,136 @@
+image:
+  repository: git.example.com/owner/zaehler
+  tag: ""            # Default: .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Mehrere Replicas erfordern database.type=cnpg|existing UND storage.kind=s3.
+# Bei database.type=sqlite wird immer 1 Replica mit Recreate verwendet.
+replicaCount: 1
+
+database:
+  # cnpg:     CloudNativePG-Cluster wird vom Chart angelegt (Operator muss installiert sein)
+  # existing: vorhandene Postgres-Verbindung aus Secret (z.B. bestehender CNPG-Cluster: <name>-app / uri)
+  # sqlite:   SQLite auf PersistentVolume (nur Einzelinstanz)
+  type: cnpg
+  cnpg:
+    instances: 2
+    imageName: ""    # Default des Operators
+    storage:
+      size: 5Gi
+      storageClass: ""
+    # Backups (barman-cloud plugin / objectStore) gemäß CNPG-Doku ergänzen
+  existing:
+    secretName: ""
+    secretKey: uri
+  sqlite:
+    persistence:
+      size: 1Gi
+      storageClass: ""
+  maxConnections: 10
+
+# Migrationen laufen beim Start (auto_migrate). Bei Postgres serialisiert ein
+# Advisory-Lock parallele Starts mehrerer Replicas.
+autoMigrate: true
+
+storage:
+  # s3: S3-kompatibler Objektspeicher (empfohlen in k8s)
+  # fs: PersistentVolume (bei sqlite wird dasselbe Volume genutzt)
+  kind: fs
+  s3:
+    bucket: zaehler
+    endpoint: ""
+    region: ""
+    # Secret mit AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+    credentialsSecret: ""
+  fs:
+    persistence:
+      size: 5Gi
+      storageClass: ""
+
+publicUrl: https://zaehler.example.com
+
+oidc:
+  enabled: false
+  issuerUrl: ""
+  clientId: zaehler
+  # Secret mit Key "client-secret"
+  existingSecret: ""
+
+ai:
+  enabled: false
+  model: google/gemini-2.5-flash
+  # Secret mit Key "api-key" (OpenRouter)
+  existingSecret: ""
+
+notify:
+  smtp:
+    enabled: false
+    host: ""
+    port: 587
+    from: ""
+    # Secret mit Keys "username" und "password"
+    existingSecret: ""
+
+log:
+  format: json
+  filter: info
+
+# Zusätzliche Umgebungsvariablen (ZAEHLER_*)
+extraEnv: []
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: zaehler.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
