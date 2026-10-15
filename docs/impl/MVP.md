@@ -57,7 +57,7 @@ PostgreSQL.
 
 ```{wp} Hexagonale Struktur und Web-Grundgerüst
 :id: WP_MVP_01
-:status: open
+:status: done
 :milestone: M1
 :covers: REQ_NFR_003, SPEC_ARCH_LAYERS, SPEC_ERR_HANDLING, SPEC_SEC_HEADERS, SPEC_I18N
 
@@ -77,7 +77,7 @@ vorhandene Tests weiterhin grün.
 
 ```{wp} Ports, Unit of Work, DB-Adapter und Tenant
 :id: WP_MVP_02
-:status: open
+:status: done
 :milestone: M1
 :depends: WP_MVP_01
 :covers: REQ_OPS_002, REQ_OPS_009, REQ_NFR_005, SPEC_SEC_TENANT_SCOPE, SPEC_ARCH_UOW, SPEC_TZ, SPEC_SEC_SQL_PARAMS
@@ -85,7 +85,7 @@ vorhandene Tests weiterhin grün.
 Repository- und Unit-of-Work-Ports in `zaehler-app`, `Tenant` und
 `AuthorizeTenant`; In-Memory-Adapter und gemeinsame Port-Testsuite (Feature
 `testing`); Implementierung in `zaehler-db` inkl. Migration
-`m2026MMDD_000002_mvp` und `SessionStore`; `zaehler_domain::calendar`.
+`m20261015_000002_mvp` und `SessionStore`; `zaehler_domain::calendar`.
 
 **Abnahme:** Port-Testsuite (Tenant-Isolation, Rollback ohne `commit`) grün
 für In-Memory, SQLite und PostgreSQL; Migration idempotent; Tests der
@@ -94,7 +94,7 @@ Zeitumstellung für `Calendar`.
 
 ```{wp} Anmeldung und Haushalte
 :id: WP_MVP_03
-:status: open
+:status: done
 :milestone: M1
 :depends: WP_MVP_01, WP_MVP_02
 :covers: REQ_TEN_001, REQ_TEN_002, REQ_NFR_004, SPEC_TEN_OIDC, SPEC_SEC_SESSION_CSRF, SPEC_TEN_HOUSEHOLDS, SPEC_TEN_DEV_LOGIN, SPEC_PRIV_HOUSEHOLD_DELETE
@@ -110,7 +110,7 @@ und Objekte.
 
 ```{wp} Messstellen verwalten
 :id: WP_MVP_04
-:status: open
+:status: done
 :milestone: M1
 :depends: WP_MVP_03
 :covers: REQ_MTR_001, REQ_MTR_003, REQ_MTR_005, REQ_MTR_006, SPEC_MTR_MANAGE, SPEC_MTR_SWAP_FLOW
@@ -125,7 +125,7 @@ durchführen; Verbrauchsreihe über den Wechsel korrekt (Service-Test).
 
 ```{wp} Erfassung per Formular
 :id: WP_MVP_05
-:status: open
+:status: done
 :milestone: M1
 :depends: WP_MVP_04
 :covers: REQ_RDG_001, REQ_RDG_002, SPEC_RDG_FORM, SPEC_RDG_DELETE

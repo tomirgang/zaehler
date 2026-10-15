@@ -25,8 +25,8 @@ crates/
       recognize.rs     MeterRecognizer
       system.rs        Clock, IdGenerator
     usecase/           Driving Ports (Anwendungsfälle)
-      auth.rs          SignIn, AuthorizeTenant
-      household.rs     CreateHousehold, SwitchHousehold, UpdateHousehold, DeleteHousehold
+      auth.rs          SignIn, ResolveTenant, SetLocale
+      household.rs     CreateHousehold, GetHousehold, UpdateHousehold, DeleteHousehold
       meter.rs         CreateMeter, UpdateMeter, SwapDevice, ListMeters, GetMeter
       reading.rs       CheckReadings, RecordReadings, DeleteReading, GetReadingPhoto
       capture.rs       AnalysePhoto, ConfirmDraft, DiscardDraft, GetDraftPhoto
@@ -35,7 +35,7 @@ crates/
       housekeeping.rs  Housekeeping                                    SPEC_OPS_HOUSEKEEPING
     testing/           In-Memory-Adapter und Port-Testsuite (Feature "testing")
   zaehler-db/src/                           Driven-Adapter
-    entity/, migration/m2026MMDD_000002_mvp.rs, fixed.rs (vorhanden bzw. erweitert)
+    entity/, migration/m20261015_000002_mvp.rs, fixed.rs (vorhanden bzw. erweitert)
     uow.rs             SeaOrmUnitOfWork
     repo/              Implementierungen der Repository-Ports
     session_store.rs   tower_sessions::SessionStore auf Tabelle sessions
@@ -105,7 +105,7 @@ impl RecordReadings {
 }
 ```
 
-## Datenmodell: Migration `m2026MMDD_000002_mvp`
+## Datenmodell: Migration `m20261015_000002_mvp`
 
 | Tabelle | Änderung | Zweck |
 |---|---|---|
@@ -114,7 +114,7 @@ impl RecordReadings {
 | `readings` | Unique-Index `(register_id, device_id, read_at)` | Doppelerfassung und Import-Duplikate verhindern |
 | `users` | + `last_login_at TIMESTAMPTZ NULL` | Betrieb, Diagnose |
 | `sessions` (neu) | `id TEXT PK`, `data BLOB`, `expires_at TIMESTAMPTZ`; Index auf `expires_at` | SessionStore ({need}`SPEC_SEC_SESSION_CSRF`) |
-| `ai_drafts` (neu) | siehe unten | Entwürfe der Foto-Erfassung ({need}`SPEC_AI_DRAFTS`) |
+| `ai_drafts` (neu, eigene Migration mit WP_MVP_07) | siehe unten | Entwürfe der Foto-Erfassung ({need}`SPEC_AI_DRAFTS`) |
 
 `ai_drafts`:
 
@@ -223,8 +223,9 @@ AI-Konfiguration verdrahtet `zaehler-server` keinen Recognizer, und
 | Anwendungsfall | Ablauf (Kurzform) | Spezifikation |
 |---|---|---|
 | `SignIn` | Nutzer per Identität laden oder anlegen; ohne Mitgliedschaft Haushalt „{Anzeigename}“ mit Zeitzone `Europe/Berlin` anlegen; liefert Nutzer und aktiven Haushalt | {need}`SPEC_TEN_HOUSEHOLDS` |
-| `AuthorizeTenant` | Rolle über `MembershipRepository` prüfen, `Tenant` erzeugen | {need}`SPEC_SEC_TENANT_SCOPE` |
-| `CreateHousehold`, `SwitchHousehold`, `UpdateHousehold` | Owner-Prüfung, Daten speichern | {need}`SPEC_TEN_HOUSEHOLDS` |
+| `ResolveTenant` | Nutzer laden, Mitgliedschaften prüfen, aktiven Haushalt wählen (ohne Mitgliedschaft anlegen), `Tenant` erzeugen | {need}`SPEC_SEC_TENANT_SCOPE` |
+| `SetLocale` | Sprache des Nutzers speichern | {need}`SPEC_I18N` |
+| `CreateHousehold`, `GetHousehold`, `UpdateHousehold` | Owner-Prüfung, Daten speichern; der Wechsel des aktiven Haushalts ist ein Sitzungswert im Web-Adapter, geprüft von `ResolveTenant` | {need}`SPEC_TEN_HOUSEHOLDS` |
 | `DeleteHousehold` | Bestätigung = Haushaltsname; `BlobStore::delete_household`, dann DB-Cascade | {need}`SPEC_PRIV_HOUSEHOLD_DELETE` |
 | `CreateMeter`, `UpdateMeter`, `ListMeters`, `GetMeter` | Validierung, Standardeinheit aus Art, Register anlegen | {need}`SPEC_MTR_MANAGE` |
 | `SwapDevice` | Endstände alt und Startstände neu für alle Register zum selben Zeitpunkt in einer Unit of Work | {need}`SPEC_MTR_SWAP_FLOW` |
@@ -245,23 +246,22 @@ AI-Konfiguration verdrahtet `zaehler-server` keinen Recognizer, und
 
 ```{spec} Haushalte anlegen, wechseln, umbenennen
 :id: SPEC_TEN_HOUSEHOLDS
-:status: draft
+:status: implemented
 :satisfies: REQ_TEN_001
 
 Beim ersten Login ohne Mitgliedschaft entsteht ein Haushalt mit dem Namen
 des Nutzers (Anzeigename aus dem ID-Token) und der Rolle `owner`. Weitere
 Haushalte legt ein Nutzer unter „Einstellungen“ an. Der aktive Haushalt steht
-in der Sitzung (`active_household`); bei jedem Request ruft der Extraktor
-`TenantCtx` in `zaehler-web` den Anwendungsfall `AuthorizeTenant` auf. Schlägt
-die Prüfung fehl (z.B. Haushalt gelöscht), wählt der Extraktor den ersten
-verbleibenden Haushalt aus `MembershipRepository::households_of` bzw. ruft
-`SignIn` erneut auf, der einen neuen Haushalt anlegt. Der Haushaltswechsel ist ein `POST`
+in der Sitzung (`hid`); bei jedem Request ruft der Extraktor `Ctx` in
+`zaehler-web` den Anwendungsfall `ResolveTenant` auf. Ist der gewählte
+Haushalt nicht zugänglich (z.B. gelöscht), wählt `ResolveTenant` den ersten
+verbleibenden Haushalt; ohne Mitgliedschaft legt er einen neuen an. Der Haushaltswechsel ist ein `POST`
 mit CSRF-Token.
 ```
 
 ```{spec} Entwicklungs-Login
 :id: SPEC_TEN_DEV_LOGIN
-:status: draft
+:status: implemented
 :satisfies: REQ_TEN_002
 
 Nur mit `auth.dev_login = true`: `GET /auth/dev-login?name=…` meldet einen
@@ -288,7 +288,7 @@ Aufruf ist möglich. Nutzerkonten bleiben bestehen.
 
 ```{spec} Messstellen anlegen und bearbeiten
 :id: SPEC_MTR_MANAGE
-:status: draft
+:status: implemented
 :satisfies: REQ_MTR_001, REQ_MTR_003, REQ_MTR_006
 
 Formularfelder: Name (1-80 Zeichen, je Haushalt eindeutig), Art, Einheit
@@ -305,7 +305,7 @@ nach der ersten Ablesung nicht mehr änderbar.
 
 ```{spec} Ablauf Zählerwechsel
 :id: SPEC_MTR_SWAP_FLOW
-:status: draft
+:status: implemented
 :satisfies: REQ_MTR_005
 
 Eingaben: Zeitpunkt, Endstand je Register (altes Gerät), neue Zählernummer,
@@ -321,7 +321,7 @@ Ein Zeitpunkt vor der letzten Ablesung ist unzulässig.
 
 ```{spec} Erfassungsformular
 :id: SPEC_RDG_FORM
-:status: draft
+:status: implemented
 :satisfies: REQ_RDG_001, REQ_RDG_002
 
 `GET /meters/{id}/readings/new` zeigt je Register den letzten Stand mit Datum,

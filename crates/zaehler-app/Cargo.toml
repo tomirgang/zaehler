@@ -1,0 +1,32 @@
+[package]
+name = "zaehler-app"
+description = "Kern: Anwendungsfälle und Port-Traits (hexagonale Architektur, ADR_022)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# In-Memory-Adapter und gemeinsame Port-Testsuite für Adapter-Tests
+testing = []
+
+[dependencies]
+zaehler-domain.workspace = true
+
+async-trait.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+metrics.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+rust_decimal_macros.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

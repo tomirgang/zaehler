@@ -1,0 +1,85 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ name }}</h1>
+  <div class="actions">
+    {% if ctx.can_write %}<a class="button" href="/meters/{{ id }}/readings/new">{{ ctx.lang.t("dashboard-record") }}</a>{% endif %}
+    {% if ctx.is_owner %}
+    <a class="button secondary" href="/meters/{{ id }}/edit">{{ ctx.lang.t("action-edit") }}</a>
+    <a class="button secondary" href="/meters/{{ id }}/swap">{{ ctx.lang.t("meter-swap") }}</a>
+    {% endif %}
+  </div>
+</div>
+
+<dl class="facts">
+  <dt>{{ ctx.lang.t("meter-kind") }}</dt><dd>{{ kind }}</dd>
+  <dt>{{ ctx.lang.t("meter-unit") }}</dt><dd>{{ unit }}</dd>
+  {% if let Some(i) = interval %}<dt>{{ ctx.lang.t("meter-interval") }}</dt><dd>{{ i }}</dd>{% endif %}
+  {% if let Some(r) = max_rate %}<dt>{{ ctx.lang.t("meter-max-rate") }}</dt><dd>{{ r }}</dd>{% endif %}
+  {% if let Some(b) = billing_start %}<dt>{{ ctx.lang.t("meter-billing-start") }}</dt><dd>{{ b }}</dd>{% endif %}
+  <dt>{{ ctx.lang.t("meter-registers") }}</dt>
+  <dd>{% for (code, direction) in registers %}<span class="tag">{{ code }} ({{ direction }})</span> {% endfor %}</dd>
+</dl>
+
+<h2>{{ ctx.lang.t("meter-readings") }}</h2>
+{% if readings.is_empty() %}
+<p>{{ ctx.lang.t("readings-empty") }}</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>{{ ctx.lang.t("reading-at") }}</th>
+      <th>{{ ctx.lang.t("reading-register") }}</th>
+      <th class="num">{{ ctx.lang.t("reading-value") }}</th>
+      <th>{{ ctx.lang.t("reading-source") }}</th>
+      <th>{{ ctx.lang.t("reading-note") }}</th>
+      {% if ctx.can_write %}<th><span class="visually-hidden">{{ ctx.lang.t("action-delete") }}</span></th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in readings %}
+    <tr>
+      <td>{{ r.at }}</td>
+      <td>{{ r.register }}</td>
+      <td class="num">{{ r.value }}</td>
+      <td>{{ r.source }}</td>
+      <td>{{ r.note }}</td>
+      {% if ctx.can_write %}
+      <td>
+        <form method="post" action="/readings/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("reading-delete-confirm") }}">
+          <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+          <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h2>{{ ctx.lang.t("meter-devices") }}</h2>
+<table class="table">
+  <thead>
+    <tr>
+      <th>{{ ctx.lang.t("meter-serial") }}</th>
+      <th>{{ ctx.lang.t("device-installed") }}</th>
+      <th>{{ ctx.lang.t("device-removed") }}</th>
+      <th>{{ ctx.lang.t("meter-digits") }}</th>
+      <th>{{ ctx.lang.t("meter-decimals") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for d in devices %}
+    <tr>
+      <td>{{ d.serial }}</td>
+      <td>{{ d.installed }}</td>
+      <td>{% if let Some(r) = d.removed %}{{ r }}{% else %}<span class="tag">{{ ctx.lang.t("device-active") }}</span>{% endif %}</td>
+      <td>{{ d.digits }}</td>
+      <td>{{ d.decimals }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -9,6 +9,10 @@ Quellen in aufsteigender Priorität ({need}`SPEC_OPS_CONFIG`):
 
 `zaehler config` gibt die wirksame Konfiguration ohne Geheimnisse aus.
 
+Der Server startet nur mit Anmeldekonfiguration: entweder `oidc` oder
+`auth.dev_login = true` (nur mit `server.public_url` auf `localhost`); beides
+zugleich ist unzulässig.
+
 | Schlüssel | Umgebungsvariable | Default |
 |---|---|---|
 | `server.listen` | `ZAEHLER_SERVER__LISTEN` | `0.0.0.0:8080` |
@@ -23,6 +27,9 @@ Quellen in aufsteigender Priorität ({need}`SPEC_OPS_CONFIG`):
 | `storage.path` | `ZAEHLER_STORAGE__PATH` | `data/files` |
 | `storage.bucket`, `endpoint`, `region` | `ZAEHLER_STORAGE__…` | kein Default |
 | `oidc.issuer_url`, `client_id`, `client_secret` | `ZAEHLER_OIDC__…` | kein Default |
+| `auth.dev_login` | `ZAEHLER_AUTH__DEV_LOGIN` | `false`; nur mit `public_url` auf localhost zulässig |
+| `session.ttl_hours` | `ZAEHLER_SESSION__TTL_HOURS` | `720` (gleitend) |
+| `session.cookie_secure` | `ZAEHLER_SESSION__COOKIE_SECURE` | aus dem Schema von `public_url` |
 | `ai.api_key`, `ai.model`, `ai.base_url`, `ai.timeout_secs` | `ZAEHLER_AI__…` | Base-URL `https://openrouter.ai/api/v1`, 60 s |
 | `notify.smtp.*` | `ZAEHLER_NOTIFY__SMTP__…` | Port 587 |
 

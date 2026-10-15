@@ -53,6 +53,8 @@ storage:
 
 publicUrl: https://zaehler.example.com
 
+# Anmeldung über OIDC ist im Cluster Pflicht (der Entwicklungs-Login ist nur
+# mit public_url auf localhost zulässig).
 oidc:
   enabled: false
   issuerUrl: ""
@@ -74,6 +76,9 @@ notify:
     from: ""
     # Secret mit Keys "username" und "password"
     existingSecret: ""
+
+session:
+  ttlHours: 720
 
 log:
   format: json

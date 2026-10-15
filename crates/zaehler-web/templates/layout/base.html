@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="{{ ctx.lang.code() }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"responseHandling":[{"code":"204","swap":false},{"code":"...","swap":true}]}'>
+  <title>{% block title %}{{ ctx.lang.t("app-name") }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ ctx.static_prefix }}/app.css">
+  <script src="{{ ctx.static_prefix }}/htmx.min.js" defer></script>
+  <script src="{{ ctx.static_prefix }}/app.js" defer></script>
+</head>
+<body hx-boost="true" hx-headers='{"X-CSRF-Token": "{{ ctx.csrf }}"}'>
+  <header class="topbar">
+    <a class="brand" href="/">{{ ctx.lang.t("app-name") }}</a>
+    <nav>
+      <a href="/">{{ ctx.lang.t("nav-overview") }}</a>
+      <a href="/meters">{{ ctx.lang.t("nav-meters") }}</a>
+      <a href="/settings">{{ ctx.lang.t("nav-settings") }}</a>
+    </nav>
+    <div class="topbar-right">
+      {% if ctx.households.len() > 1 %}
+      <form method="post" action="/households/switch" class="inline">
+        <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+        <label class="visually-hidden" for="household-switch">{{ ctx.lang.t("household-switch") }}</label>
+        <select id="household-switch" name="household">
+          {% for h in ctx.households %}
+          <option value="{{ h.id }}"{% if h.id == ctx.active %} selected{% endif %}>{{ h.name }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="secondary">{{ ctx.lang.t("household-switch") }}</button>
+      </form>
+      {% else %}
+      {% for h in ctx.households %}<span class="muted">{{ h.name }}</span>{% endfor %}
+      {% endif %}
+      <span class="muted">{{ ctx.user_name }}</span>
+      <form method="post" action="/auth/logout" class="inline">
+        <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+        <button type="submit" class="link">{{ ctx.lang.t("nav-logout") }}</button>
+      </form>
+    </div>
+  </header>
+  <main class="container">
+    {% if let Some(f) = ctx.flash %}<p class="flash" role="status">{{ ctx.lang.t(f) }}</p>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="footer">zaehler {{ ctx.version }}</footer>
+</body>
+</html>

@@ -48,6 +48,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if not (has .Values.database.type (list "cnpg" "existing" "sqlite")) }}
 {{- fail "database.type muss cnpg, existing oder sqlite sein" }}
 {{- end }}
+{{- if not .Values.oidc.enabled }}
+{{- fail "oidc.enabled=true mit oidc.issuerUrl und oidc.existingSecret erforderlich" }}
+{{- end }}
+{{- if and .Values.oidc.enabled (or (not .Values.oidc.issuerUrl) (not .Values.oidc.existingSecret)) }}
+{{- fail "oidc.issuerUrl und oidc.existingSecret sind erforderlich" }}
+{{- end }}
 {{- if and (eq .Values.database.type "existing") (not .Values.database.existing.secretName) }}
 {{- fail "database.existing.secretName ist erforderlich" }}
 {{- end }}

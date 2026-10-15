@@ -14,14 +14,18 @@ publish = false
 zaehler-domain = { path = "crates/zaehler-domain" }
 zaehler-db = { path = "crates/zaehler-db" }
 zaehler-ai = { path = "crates/zaehler-ai" }
+zaehler-app = { path = "crates/zaehler-app" }
 zaehler-notify = { path = "crates/zaehler-notify" }
+zaehler-web = { path = "crates/zaehler-web" }
 
 anyhow = "1"
 askama = "0.16"
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
+bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 figment = { version = "0.10", features = ["env", "toml"] }
 metrics = "0.24"
@@ -35,10 +39,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
+time = "0.3"
+tower-sessions = { version = "0.15", default-features = false }
 tower-http = { version = "0.7", features = ["fs", "trace", "compression-gzip", "request-id", "timeout"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-uuid = { version = "1", features = ["v7", "serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

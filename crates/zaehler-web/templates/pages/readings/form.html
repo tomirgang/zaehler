@@ -1,0 +1,42 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("readings-new") }}: {{ meter_name }}</h1>
+<form method="post" action="/meters/{{ meter_id }}/readings" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <div hx-post="/meters/{{ meter_id }}/readings/check" hx-trigger="change delay:300ms from:closest form"
+       hx-include="closest form" hx-target="#plausibility" hx-swap="innerHTML">
+    {% for e in self.errs("values") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    {% for r in rows %}
+    <div class="field{% if !self.value_errs(r.register_id).is_empty() %} has-error{% endif %}">
+      <label for="value_{{ r.register_id }}">{{ r.code }} <span class="muted">({{ r.direction }}, {{ unit }})</span></label>
+      <input id="value_{{ r.register_id }}" name="value_{{ r.register_id }}" value="{{ r.value }}" inputmode="decimal" autocomplete="off">
+      <p class="hint">{{ r.last }}</p>
+      {% if let Some(h) = r.hint %}<p class="warning">{{ h }}</p>{% endif %}
+      {% for e in self.value_errs(r.register_id) %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    {% endfor %}
+    <div class="field{% if self.has_errs("at") %} has-error{% endif %}">
+      <label for="at">{{ ctx.lang.t("reading-at") }}</label>
+      <input id="at" name="at" type="datetime-local" value="{{ at }}" required>
+      {% for e in self.errs("at") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+  <div id="plausibility" aria-live="polite"></div>
+  <div class="field{% if self.has_errs("note") %} has-error{% endif %}">
+    <label for="note">{{ ctx.lang.t("reading-note") }}</label>
+    <textarea id="note" name="note" maxlength="500" rows="2">{{ note }}</textarea>
+    {% for e in self.errs("note") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+  {% if needs_confirm %}
+  <div class="callout warning">
+    <p>{{ ctx.lang.t("readings-warnings") }}</p>
+    <label><input type="checkbox" name="confirm_warnings" value="true"> {{ ctx.lang.t("readings-confirm") }}</label>
+  </div>
+  {% endif %}
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("action-save") }}</button>
+    <a href="/meters/{{ meter_id }}">{{ ctx.lang.t("action-cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

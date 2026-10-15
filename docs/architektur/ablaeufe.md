@@ -51,7 +51,7 @@ Heuristik). Modell, Base-URL und Timeout sind konfigurierbar.
 
 ```{spec} OIDC-Login und Sitzung
 :id: SPEC_TEN_OIDC
-:status: draft
+:status: implemented
 :satisfies: REQ_TEN_002, REQ_TEN_001
 
 Discovery über `{issuer}/.well-known/openid-configuration`; Code Flow + PKCE

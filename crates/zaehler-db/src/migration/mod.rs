@@ -4,12 +4,16 @@
 use sea_orm_migration::prelude::*;
 
 mod m20261015_000001_core;
+mod m20261015_000002_mvp;
 
 pub struct Migrator;
 
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m20261015_000001_core::Migration)]
+        vec![
+            Box::new(m20261015_000001_core::Migration),
+            Box::new(m20261015_000002_mvp::Migration),
+        ]
     }
 }

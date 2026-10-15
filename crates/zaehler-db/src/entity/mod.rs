@@ -6,4 +6,5 @@ pub mod meter;
 pub mod meter_device;
 pub mod reading;
 pub mod register;
+pub mod session;
 pub mod user;

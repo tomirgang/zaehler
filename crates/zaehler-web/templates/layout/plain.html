@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="{{ lang.code() }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ lang.t("app-name") }}</title>
+  <link rel="stylesheet" href="{{ static_prefix }}/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">{{ lang.t("app-name") }}</span>
+  </header>
+  <main class="container narrow">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 ```{adr} Sitzungen in der Datenbank und CSRF-Token je Sitzung
 :id: ADR_016
-:status: proposed
+:status: accepted
 :decides: REQ_TEN_002, REQ_NFR_003, SPEC_SEC_SESSION_CSRF
 
 **Datum:** 2026-10-15

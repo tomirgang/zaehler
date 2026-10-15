@@ -1,0 +1,73 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("settings-title") }}</h1>
+
+<section class="card">
+  <h2>{{ ctx.lang.t("settings-household") }}</h2>
+  <form method="post" action="/settings/household" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="field{% if self.has_errs("name") %} has-error{% endif %}">
+      <label for="hh-name">{{ ctx.lang.t("household-name") }}</label>
+      <input id="hh-name" name="name" value="{{ name }}" maxlength="80"{% if !ctx.is_owner %} readonly{% endif %}>
+      {% for e in self.errs("name") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("timezone") %} has-error{% endif %}">
+      <label for="hh-tz">{{ ctx.lang.t("household-timezone") }}</label>
+      <input id="hh-tz" name="timezone" value="{{ timezone }}"{% if !ctx.is_owner %} readonly{% endif %}>
+      <p class="hint">{{ ctx.lang.t("household-timezone-hint") }}</p>
+      {% for e in self.errs("timezone") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    {% if ctx.is_owner %}<button type="submit">{{ ctx.lang.t("action-save") }}</button>{% endif %}
+  </form>
+</section>
+
+<section class="card">
+  <h2>{{ ctx.lang.t("settings-language") }}</h2>
+  <form method="post" action="/settings/locale" class="form">
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="field">
+      <label for="locale">{{ ctx.lang.t("settings-language") }}</label>
+      <select id="locale" name="locale">
+        <option value="de"{% if ctx.lang.code() == "de" %} selected{% endif %}>Deutsch</option>
+        <option value="en"{% if ctx.lang.code() == "en" %} selected{% endif %}>English</option>
+      </select>
+    </div>
+    <button type="submit">{{ ctx.lang.t("action-save") }}</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>{{ ctx.lang.t("settings-new-household") }}</h2>
+  <form method="post" action="/households" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="field{% if self.has_errs("new_name") %} has-error{% endif %}">
+      <label for="new-name">{{ ctx.lang.t("household-name") }}</label>
+      <input id="new-name" name="new_name" value="{{ new_name }}" maxlength="80">
+      {% for e in self.errs("new_name") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("new_timezone") %} has-error{% endif %}">
+      <label for="new-tz">{{ ctx.lang.t("household-timezone") }}</label>
+      <input id="new-tz" name="new_timezone" value="{{ new_timezone }}">
+      {% for e in self.errs("new_timezone") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <button type="submit">{{ ctx.lang.t("action-create") }}</button>
+  </form>
+</section>
+
+{% if ctx.is_owner %}
+<section class="card danger-zone">
+  <h2>{{ ctx.lang.t("settings-delete-household") }}</h2>
+  <p>{{ ctx.lang.t("settings-delete-hint") }}</p>
+  <form method="post" action="/households/delete" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="field{% if self.has_errs("confirm") %} has-error{% endif %}">
+      <label for="confirm">{{ ctx.lang.t("settings-delete-confirm-label") }}</label>
+      <input id="confirm" name="confirm" autocomplete="off">
+      {% for e in self.errs("confirm") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <button type="submit" class="danger">{{ ctx.lang.t("settings-delete-household") }}</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

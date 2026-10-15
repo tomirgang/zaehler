@@ -1,0 +1,20 @@
+{% extends "layout/plain.html" %}
+
+{% block content %}
+<h1>{{ lang.t("login-title") }}</h1>
+{% if let Some(m) = message %}<p class="flash" role="status">{{ m }}</p>{% endif %}
+{% if oidc %}
+<p><a class="button" href="/auth/oidc">{{ lang.t("login-oidc") }}</a></p>
+{% endif %}
+{% if dev_login %}
+<form method="get" action="/auth/dev-login" class="form card">
+  <h2>{{ lang.t("login-dev") }}</h2>
+  <p class="muted">{{ lang.t("login-dev-hint") }}</p>
+  <div class="field">
+    <label for="name">{{ lang.t("login-dev-name") }}</label>
+    <input id="name" name="name" required maxlength="80" autocomplete="username">
+  </div>
+  <button type="submit">{{ lang.t("login-submit") }}</button>
+</form>
+{% endif %}
+{% endblock %}

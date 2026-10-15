@@ -1,0 +1,2 @@
+{% for e in errors %}<p class="field-error">{{ e }}</p>{% endfor %}
+{% for (code, hint) in hints %}<p class="warning"><strong>{{ code }}:</strong> {{ hint }}</p>{% endfor %}

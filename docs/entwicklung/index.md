@@ -9,8 +9,8 @@
 ## Häufige Befehle
 
 ```bash
-cargo run -p zaehler-server -- serve          # Server mit SQLite unter ./data
-ZAEHLER_LOG__FORMAT=pretty cargo run -p zaehler-server
+ZAEHLER_AUTH__DEV_LOGIN=true ZAEHLER_LOG__FORMAT=pretty cargo run -p zaehler-server
+                                              # Server mit SQLite unter ./data, Login unter /auth/login
 cargo test --workspace                        # Tests (SQLite)
 ZAEHLER_TEST_DATABASE_URL=postgres://… cargo test -p zaehler-db   # zusätzlich Postgres
 cargo clippy --workspace --all-targets -- -D warnings
@@ -30,8 +30,8 @@ docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/repo:ro -w /repo \
 ```text
 crates/                 hexagonale Architektur (ADR-022)
   zaehler-domain/       Kern: Fachlogik (IO-frei)
-  zaehler-app/          Kern: Anwendungsfälle, Port-Traits, Tenant (ab WP_MVP_01)
-  zaehler-web/          Driving-Adapter: HTTP, Templates, Assets (ab WP_MVP_01)
+  zaehler-app/          Kern: Anwendungsfälle, Port-Traits, Tenant, In-Memory-Adapter (Feature testing)
+  zaehler-web/          Driving-Adapter: HTTP, Templates, Assets, i18n, Sitzung, OIDC
   zaehler-db/           Driven-Adapter: SeaORM, Migrationen, Festkomma
   zaehler-storage/      Driven-Adapter: Objektspeicher (ab WP_MVP_06)
   zaehler-media/        Driven-Adapter: Bildverarbeitung (ab WP_MVP_06)

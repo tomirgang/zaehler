@@ -11,6 +11,7 @@ pub struct Model {
     pub display_name: String,
     pub locale: String,
     pub created_at: DateTimeUtc,
+    pub last_login_at: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

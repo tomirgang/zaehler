@@ -10,6 +10,7 @@ pub struct Model {
     pub installed_at: DateTimeUtc,
     pub removed_at: Option<DateTimeUtc>,
     pub rollover_digits: Option<i16>,
+    pub decimal_places: i16,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

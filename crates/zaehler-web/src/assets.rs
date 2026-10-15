@@ -1,4 +1,4 @@
-//! Eingebettete statische Dateien, damit das Binary kein externes Asset-Verzeichnis benötigt.
+//! Eingebettete statische Dateien unter `/static/{version}/{name}`.
 
 use axum::{
     extract::Path,
@@ -13,18 +13,30 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
         include_bytes!("../static/app.css"),
     ),
     (
+        "app.js",
+        "text/javascript; charset=utf-8",
+        include_bytes!("../static/app.js"),
+    ),
+    (
         "htmx.min.js",
         "text/javascript; charset=utf-8",
         include_bytes!("../static/htmx.min.js"),
     ),
 ];
 
-pub async fn serve(Path(name): Path<String>) -> Response {
+/// Die Version im Pfad macht Dateien unveränderlich cachebar; in
+/// Debug-Builds wird nicht gecacht.
+pub async fn serve(Path((_version, name)): Path<(String, String)>) -> Response {
+    let cache = if cfg!(debug_assertions) {
+        "no-cache"
+    } else {
+        "public, max-age=31536000, immutable"
+    };
     match ASSETS.iter().find(|(n, ..)| *n == name) {
         Some((_, mime, body)) => (
             [
                 (header::CONTENT_TYPE, *mime),
-                (header::CACHE_CONTROL, "public, max-age=86400"),
+                (header::CACHE_CONTROL, cache),
             ],
             *body,
         )

@@ -55,9 +55,12 @@ Intervalls folgt mit {need}`SPEC_FC_SEASON_PROFILE` (v1).
 :satisfies: REQ_RDG_002, REQ_AI_003
 
 Prüfung gegen den letzten Stand desselben Geräts in dieser Reihenfolge:
-`OutOfOrder` (Zeitpunkt früher), `Decreasing` (Wert kleiner, kein Überlauf
-möglich), `RateTooHigh` (Tagesrate > `max_daily_rate`), sonst `Ok`. Das
-Ergebnis ist ein Hinweis; Speichern nach Bestätigung bleibt möglich.
+`OutOfOrder` (Zeitpunkt früher oder vor dem Einbau des Geräts),
+`Decreasing` (Wert kleiner und kein Überlauf möglich; mit Vorkommastellen *n*
+gilt ein Überlauf nur als plausibel, wenn er weniger als 10ⁿ/2 Einheiten
+ergibt), `RateTooHigh` (Tagesrate des Verbrauchs, bei Überlauf inklusive
+Überlauf, größer als `max_daily_rate`), sonst `Ok`. Das Ergebnis ist ein
+Hinweis; Speichern nach Bestätigung bleibt möglich.
 ```
 
 ## Vergleiche und Erwartung

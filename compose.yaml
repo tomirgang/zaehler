@@ -5,6 +5,9 @@
 #   docker compose -f compose.yaml -f compose.postgres.yaml up -d   # PostgreSQL statt SQLite
 #
 # Geheimnisse (OpenRouter-Key, OIDC, SMTP) in .env ablegen, siehe .env.example.
+# Ohne OIDC-Konfiguration ist der Entwicklungs-Login aktiv; er ist nur mit
+# einer public_url auf localhost zulässig. Für andere Adressen OIDC in .env
+# konfigurieren und ZAEHLER_AUTH__DEV_LOGIN=false setzen.
 
 services:
   zaehler:
@@ -19,6 +22,7 @@ services:
     environment:
       ZAEHLER_LOG__FORMAT: pretty
       ZAEHLER_SERVER__PUBLIC_URL: ${ZAEHLER_PUBLIC_URL:-http://localhost:8080}
+      ZAEHLER_AUTH__DEV_LOGIN: ${ZAEHLER_DEV_LOGIN:-true}
       ZAEHLER_DATABASE__URL: sqlite:///var/lib/zaehler/data/zaehler.db?mode=rwc
       ZAEHLER_STORAGE__KIND: fs
       ZAEHLER_STORAGE__PATH: /var/lib/zaehler/data/files

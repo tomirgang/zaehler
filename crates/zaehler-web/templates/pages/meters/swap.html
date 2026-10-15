@@ -1,0 +1,67 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("swap-title") }}: {{ name }}</h1>
+<form method="post" action="/meters/{{ id }}/swap" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <div class="field{% if self.has_errs("at") %} has-error{% endif %}">
+    <label for="at">{{ ctx.lang.t("swap-at") }}</label>
+    <input id="at" name="at" type="datetime-local" value="{{ at }}" required>
+    {% for e in self.errs("at") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+
+  <fieldset>
+    <legend>{{ ctx.lang.t("swap-values") }}</legend>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{ ctx.lang.t("reading-register") }}</th>
+          <th>{{ ctx.lang.t("swap-end") }}</th>
+          <th>{{ ctx.lang.t("swap-start") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.code }}<br><span class="hint">{{ r.last }}</span></td>
+          <td>
+            <input name="end_{{ r.register_id }}" value="{{ r.end }}" inputmode="decimal" aria-label="{{ ctx.lang.t("swap-end") }} {{ r.code }}">
+            {% for e in self.row_errs("end", r.register_id) %}<p class="field-error">{{ e }}</p>{% endfor %}
+          </td>
+          <td>
+            <input name="start_{{ r.register_id }}" value="{{ r.start }}" inputmode="decimal" aria-label="{{ ctx.lang.t("swap-start") }} {{ r.code }}">
+            {% for e in self.row_errs("start", r.register_id) %}<p class="field-error">{{ e }}</p>{% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </fieldset>
+
+  <fieldset>
+    <legend>{{ ctx.lang.t("swap-new") }}</legend>
+    <div class="grid">
+      <div class="field{% if self.has_errs("serial_number") %} has-error{% endif %}">
+        <label for="serial_number">{{ ctx.lang.t("meter-serial") }}</label>
+        <input id="serial_number" name="serial_number" value="{{ serial }}" maxlength="40">
+        {% for e in self.errs("serial_number") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field{% if self.has_errs("rollover_digits") %} has-error{% endif %}">
+        <label for="rollover_digits">{{ ctx.lang.t("meter-digits") }}</label>
+        <input id="rollover_digits" name="rollover_digits" value="{{ digits }}" inputmode="numeric">
+        {% for e in self.errs("rollover_digits") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field{% if self.has_errs("decimal_places") %} has-error{% endif %}">
+        <label for="decimal_places">{{ ctx.lang.t("meter-decimals") }}</label>
+        <input id="decimal_places" name="decimal_places" value="{{ decimals }}" inputmode="numeric">
+        {% for e in self.errs("decimal_places") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+  </fieldset>
+
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("action-save") }}</button>
+    <a href="/meters/{{ id }}">{{ ctx.lang.t("action-cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

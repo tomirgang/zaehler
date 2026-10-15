@@ -30,7 +30,7 @@ die Abhängigkeit `chrono-tz`.
 
 ```{spec} Hexagonale Abhängigkeitsregeln
 :id: SPEC_ARCH_LAYERS
-:status: draft
+:status: implemented
 :links: ADR_022
 
 - `zaehler-domain` hängt von keinem Crate des Workspace ab.
@@ -57,12 +57,13 @@ Driving Ports sind die öffentlichen Anwendungsfälle von `zaehler-app`
 |---|---|---|---|
 | `UnitOfWorkFactory`, `UnitOfWork` | Transaktion, Zugriff auf Repositories | `zaehler-db` | In-Memory |
 | `MembershipRepository`, `HouseholdRepository`, `UserRepository` | Haushalte, Nutzer, Mitgliedschaften | `zaehler-db` | In-Memory |
-| `MeterRepository`, `ReadingRepository`, `DraftRepository` | Messstellen, Ablesungen, AI-Entwürfe | `zaehler-db` | In-Memory |
-| `MaintenanceRepository` | Abfragen ohne Haushaltsbezug für Housekeeping | `zaehler-db` | In-Memory |
+| `MeterRepository`, `ReadingRepository`, `DraftRepository` | Messstellen, Ablesungen, AI-Entwürfe (`DraftRepository` ab WP_MVP_07) | `zaehler-db` | In-Memory |
+| `MaintenanceRepository` | Abfragen ohne Haushaltsbezug für Housekeeping (ab WP_MVP_06) | `zaehler-db` | In-Memory |
 | `BlobStore` | Fotos, temporäre Dateien | `zaehler-storage` (Dateisystem, S3) | In-Memory |
 | `ImageNormalizer` | Foto prüfen, ausrichten, verkleinern, als JPEG ohne Metadaten kodieren | `zaehler-media` | Stub |
 | `MeterRecognizer` | Zählerstand aus Foto erkennen | `zaehler-ai` | Stub |
-| `Clock`, `IdGenerator` | aktuelle Zeit, UUIDv7 | `zaehler-server` (System) | fest vorgegeben |
+| `Clock`, `IdGenerator` | aktuelle Zeit, UUIDv7 | `SystemClock`, `UuidV7` in `zaehler-app` | `FixedClock`, `RandomIds` |
+| `Readiness` | Bereitschaft für `/readyz` | `zaehler-db` | In-Memory |
 
 Nicht über Ports, weil Teil des Web-Adapters: Sitzungen, CSRF, OIDC-Ablauf,
 i18n und Templates. Der Sitzungsspeicher (`tower_sessions::SessionStore`) ist
@@ -74,7 +75,7 @@ in `zaehler-db` implementiert und wird in der Composition Root an
 | Modul | Verantwortung |
 |---|---|
 | `router` | Routen, Middleware-Reihenfolge |
-| `extract` | `CurrentUser`, `TenantCtx` (ruft `AuthorizeTenant`), `Lang`, `CsrfToken`, `HxRequest` |
+| `extract` | `Ctx` (Nutzer, Tenant über `ResolveTenant`, Seitenkontext, CSRF-Token, HTMX-Erkennung), `AnonLang` |
 | `pages/*` | Handler je Seite: Eingabe parsen, Anwendungsfall aufrufen, View-Modell rendern |
 | `views/*` | View-Modelle, Formatierung |
 | `auth` | OIDC-Client, Dev-Login, CSRF-Prüfung |
@@ -179,7 +180,7 @@ Unverändert gegenüber {doc}`../architektur/kontext`, ergänzt um:
 
 ```{spec} Unit of Work
 :id: SPEC_ARCH_UOW
-:status: draft
+:status: implemented
 :satisfies: REQ_NFR_005, REQ_OPS_002
 :links: ADR_022
 
@@ -197,13 +198,14 @@ SeaORM; der In-Memory-Adapter über eine Kopie des Zustands, die beim `commit`
 
 ```{spec} Mandantentrennung über den Typ Tenant
 :id: SPEC_SEC_TENANT_SCOPE
-:status: draft
+:status: implemented
 :satisfies: REQ_TEN_001, REQ_NFR_003
 :links: ADR_022
 
 `zaehler_app::Tenant { user_id, household_id, role }` hat private Felder und
-entsteht ausschließlich im Anwendungsfall `AuthorizeTenant` nach Prüfung der
-Mitgliedschaft über `MembershipRepository`. Alle fachlichen Anwendungsfälle
+entsteht ausschließlich im Anwendungsfall `ResolveTenant` nach Prüfung der
+Mitgliedschaft über `MembershipRepository` (gewählter Haushalt, sonst erster
+Haushalt des Nutzers; ohne Mitgliedschaft wird ein Haushalt angelegt). Alle fachlichen Anwendungsfälle
 und Repository-Ports nehmen `&Tenant`. Adapter filtern jede Abfrage über
 `household_id`; Kind-Tabellen (`registers`, `readings`) über einen Join auf
 `meters.household_id`. IDs aus der URL werden nur zusammen mit dem Tenant
@@ -214,14 +216,17 @@ SQLite, PostgreSQL).
 
 ```{spec} Sitzungen und CSRF-Schutz
 :id: SPEC_SEC_SESSION_CSRF
-:status: draft
+:status: implemented
 :satisfies: REQ_TEN_002, REQ_NFR_003
 :links: ADR_016
 
 Sitzungen über `tower-sessions` in `zaehler-web`; der `SessionStore` auf der
 Tabelle `sessions` liegt in `zaehler-db` (beide Backends). Cookie
-`zaehler_session`: `HttpOnly`, `SameSite=Lax`, `Secure` (abschaltbar nur für
-`http://localhost`), Laufzeit konfigurierbar (Standard 30 Tage, gleitend).
+`zaehler_session`: `HttpOnly`, `SameSite=Lax`, `Secure` (Standard aus dem
+Schema von `server.public_url`: `https://` ergibt `Secure`; explizit über
+`session.cookie_secure`; ohne `Secure` bei nicht lokaler URL protokolliert der
+Server beim Start eine Warnung), Laufzeit konfigurierbar (Standard 30 Tage,
+gleitend).
 Nach Login wird die Sitzungs-ID erneuert. Je Sitzung ein zufälliges
 CSRF-Token (32 Byte, Base64URL). Alle Requests außer `GET`, `HEAD`, `OPTIONS`
 müssen das Token im Header `X-CSRF-Token` (HTMX, gesetzt über `hx-headers` am
@@ -232,7 +237,7 @@ Zusätzlich wird der `Origin`-Header, falls vorhanden, gegen
 
 ```{spec} Sicherheitsheader
 :id: SPEC_SEC_HEADERS
-:status: draft
+:status: implemented
 :satisfies: REQ_NFR_003
 
 Für alle HTML-Antworten von `zaehler-web`: `Content-Security-Policy:
@@ -279,7 +284,7 @@ für Tests.
 
 ```{spec} Zeitzone des Haushalts
 :id: SPEC_TZ
-:status: draft
+:status: implemented
 :satisfies: REQ_ANA_001, REQ_RDG_001
 :links: ADR_019
 
@@ -293,7 +298,7 @@ im Formular sind lokale Zeitpunkte des Haushalts.
 
 ```{spec} Internationalisierung
 :id: SPEC_I18N
-:status: draft
+:status: implemented
 :satisfies: REQ_NFR_002
 :links: ADR_015
 
@@ -311,7 +316,7 @@ enthalten.
 
 ```{spec} Fehlerbehandlung
 :id: SPEC_ERR_HANDLING
-:status: draft
+:status: implemented
 :satisfies: REQ_NFR_003, REQ_TEN_001
 
 `zaehler_app::AppError` mit den Varianten `NotFound`, `Forbidden`,

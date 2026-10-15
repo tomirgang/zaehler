@@ -1,0 +1,39 @@
+[package]
+name = "zaehler-web"
+description = "Driving-Adapter: HTTP, Web-UI (Axum, Askama, HTMX), Sitzung, OIDC"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+zaehler-app.workspace = true
+zaehler-domain.workspace = true
+
+askama.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+fluent-templates = "0.15"
+metrics.workspace = true
+openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded = "0.7"
+time.workspace = true
+tower-http.workspace = true
+tower-sessions = { workspace = true, features = ["axum-core"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+zaehler-app = { workspace = true, features = ["testing"] }
+tokio.workspace = true
+tower = { version = "0.5", features = ["util"] }
+tower-sessions = { workspace = true, features = ["axum-core", "memory-store"] }
+
+[lints]
+workspace = true

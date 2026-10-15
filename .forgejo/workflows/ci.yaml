@@ -70,11 +70,15 @@ jobs:
     runs-on: docker
     container:
       image: alpine/helm:3.19.0
+    env:
+      OIDC: oidc.enabled=true,oidc.issuerUrl=https://idp.example.com/realms/home,oidc.existingSecret=zaehler-oidc
     steps:
       - uses: https://code.forgejo.org/actions/checkout@v4
-      - run: helm lint deploy/helm/zaehler
-      - run: helm lint deploy/helm/zaehler --set database.type=sqlite
-      - run: helm lint deploy/helm/zaehler --set storage.kind=s3,replicaCount=2
+      - run: helm lint deploy/helm/zaehler --set "$OIDC"
+      - run: helm lint deploy/helm/zaehler --set "$OIDC" --set database.type=sqlite
+      - run: helm lint deploy/helm/zaehler --set "$OIDC" --set storage.kind=s3,replicaCount=2
+      # ohne OIDC muss das Chart die Installation verweigern
+      - run: "! helm template t deploy/helm/zaehler"
 
   image:
     needs: [rust, docs, mermaid, helm]

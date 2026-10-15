@@ -2,7 +2,7 @@
 
 ```{adr} UTC-Speicherung, Kalenderzeiträume in der Zeitzone des Haushalts
 :id: ADR_019
-:status: proposed
+:status: accepted
 :decides: REQ_ANA_001, REQ_RDG_001, SPEC_TZ
 
 **Datum:** 2026-10-15

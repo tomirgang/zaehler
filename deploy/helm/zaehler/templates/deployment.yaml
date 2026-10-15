@@ -51,6 +51,8 @@ spec:
               value: {{ .Values.log.format | quote }}
             - name: ZAEHLER_LOG__FILTER
               value: {{ .Values.log.filter | quote }}
+            - name: ZAEHLER_SESSION__TTL_HOURS
+              value: {{ .Values.session.ttlHours | quote }}
             - name: ZAEHLER_DATABASE__AUTO_MIGRATE
               value: {{ .Values.autoMigrate | quote }}
             - name: ZAEHLER_DATABASE__MAX_CONNECTIONS

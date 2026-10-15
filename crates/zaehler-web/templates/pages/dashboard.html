@@ -1,0 +1,22 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("dashboard-title") }}</h1>
+{% if cards.is_empty() %}
+<p>{{ ctx.lang.t("dashboard-empty") }}</p>
+{% if ctx.is_owner %}<p><a class="button" href="/meters/new">{{ ctx.lang.t("dashboard-create-meter") }}</a></p>{% endif %}
+{% else %}
+<ul class="cards">
+  {% for c in cards %}
+  <li class="card{% if c.overdue %} overdue{% endif %}">
+    <h2><a href="/meters/{{ c.id }}">{{ c.name }}</a></h2>
+    <p class="muted">{{ c.kind }}</p>
+    <p>{{ ctx.lang.t("dashboard-last-reading") }}:
+      {% if let Some(l) = c.last %}{{ l }}{% else %}{{ ctx.lang.t("dashboard-no-reading") }}{% endif %}</p>
+    {% if let Some(d) = c.due %}<p class="{% if c.overdue %}warning{% else %}muted{% endif %}">{{ d }}</p>{% endif %}
+    {% if ctx.can_write %}<p><a class="button" href="/meters/{{ c.id }}/readings/new">{{ ctx.lang.t("dashboard-record") }}</a></p>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

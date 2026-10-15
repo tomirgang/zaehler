@@ -15,6 +15,29 @@ pub enum ReadingSource {
     Invoice,
 }
 
+impl ReadingSource {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Photo => "photo",
+            Self::CsvImport => "csv_import",
+            Self::Invoice => "invoice",
+        }
+    }
+}
+
+impl std::str::FromStr for ReadingSource {
+    type Err = crate::meter::UnknownVariant;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        [Self::Manual, Self::Photo, Self::CsvImport, Self::Invoice]
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .ok_or_else(|| crate::meter::UnknownVariant(s.to_owned()))
+    }
+}
+
 /// Ein Zählerstand eines Registers auf einem bestimmten Gerät.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reading {
@@ -55,14 +78,28 @@ pub fn check_plausibility(
     if candidate.at < prev.at {
         return Plausibility::OutOfOrder;
     }
-    if candidate.value < prev.value && candidate.rollover_digits.is_none() {
-        return Plausibility::Decreasing;
-    }
+    let delta = if candidate.value >= prev.value {
+        candidate.value - prev.value
+    } else {
+        match candidate.rollover_digits {
+            // Ein Überlauf ist nur plausibel, wenn er weniger als die Hälfte des
+            // Zählbereichs ergibt; sonst ist ein Tippfehler wahrscheinlicher.
+            Some(digits) => {
+                let range = Decimal::from(10_u64.pow(u32::from(digits)));
+                let wrapped = candidate.value + range - prev.value;
+                if wrapped > range / Decimal::TWO {
+                    return Plausibility::Decreasing;
+                }
+                wrapped
+            }
+            None => return Plausibility::Decreasing,
+        }
+    };
     if let Some(max) = max_daily_rate {
         let seconds = (candidate.at - prev.at).num_seconds();
-        if seconds > 0 && candidate.value >= prev.value {
+        if seconds > 0 {
             let days = Decimal::from(seconds) / Decimal::from(86_400);
-            if (candidate.value - prev.value) / days > max {
+            if delta / days > max {
                 return Plausibility::RateTooHigh;
             }
         }
@@ -104,6 +141,31 @@ mod tests {
         assert_eq!(
             check_plausibility(None, &r(3, dec!(1)), None),
             Plausibility::Ok
+        );
+    }
+
+    // @test SPEC_RDG_PLAUSIBILITY
+    #[test]
+    fn rollover_is_plausible_only_near_the_top() {
+        let with_digits = |day, value| Reading {
+            rollover_digits: Some(5),
+            ..r(day, value)
+        };
+        let prev = with_digits(1, dec!(99_990));
+        // Überlauf um 20 Einheiten: plausibel, Rate wird mit dem Überlauf geprüft
+        assert_eq!(
+            check_plausibility(Some(&prev), &with_digits(2, dec!(10)), Some(dec!(50))),
+            Plausibility::Ok
+        );
+        assert_eq!(
+            check_plausibility(Some(&prev), &with_digits(2, dec!(100)), Some(dec!(50))),
+            Plausibility::RateTooHigh
+        );
+        // Rückgang von 1100 auf 1050 wäre ein Überlauf um 99 950: Tippfehler
+        let low = with_digits(1, dec!(1100));
+        assert_eq!(
+            check_plausibility(Some(&low), &with_digits(2, dec!(1050)), None),
+            Plausibility::Decreasing
         );
     }
 }

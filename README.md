@@ -11,15 +11,16 @@ Zählerständen: Strom, Gas, Wasser, Wärme, Fahrzeug-Kilometer und weitere Verb
 - Erinnerungen und Alarme per E-Mail
 - PostgreSQL (CloudNativePG) oder SQLite, Helm-Chart und docker compose
 
-> Status: Grundgerüst. Fachlogik-Kern, Datenbankschema, Server mit Health/Metrics,
-> Deployment und Dokumentation stehen; Features folgen gemäß
-> [Anforderungen](docs/anforderungen/index.md).
+> Status: MVP-Meilenstein M1 umgesetzt: Anmeldung (OIDC, Entwicklungs-Login),
+> Haushalte, Messstellen mit Registern und Zählerwechsel, Erfassung per
+> Formular mit Plausibilitätsprüfung, Deutsch und Englisch. Weitere Funktionen
+> gemäß [Umsetzungsplan](docs/impl/MVP.md).
 
 ## Schnellstart
 
 ```bash
-# lokal (SQLite unter ./data)
-ZAEHLER_LOG__FORMAT=pretty cargo run -p zaehler-server
+# lokal (SQLite unter ./data, Entwicklungs-Login unter /auth/login)
+ZAEHLER_AUTH__DEV_LOGIN=true ZAEHLER_LOG__FORMAT=pretty cargo run -p zaehler-server
 # → http://localhost:8080, Metriken unter http://localhost:9090/metrics
 
 # docker compose

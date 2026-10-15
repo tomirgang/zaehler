@@ -25,6 +25,14 @@ path = "data/files"
 # endpoint = "https://s3.example.com"
 # region = "eu-central-1"
 
+[auth]
+# Entwicklungs-Login ohne Identity Provider; nur mit public_url auf localhost
+dev_login = false
+
+[session]
+ttl_hours = 720
+# cookie_secure = true   # Standard: true bei https://, false bei http://
+
 # [oidc]
 # issuer_url = "https://auth.example.com/realms/home"
 # client_id = "zaehler"

@@ -19,7 +19,12 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oidc: Option<OidcConfig>,
+    #[serde(default)]
+    pub auth: AuthConfig,
+    #[serde(default)]
+    pub session: SessionConfig,
     #[serde(skip_serializing)]
+    #[allow(dead_code)] // genutzt ab WP_MVP_07 (Foto-Erfassung)
     pub ai: Option<zaehler_ai::OpenRouterConfig>,
     #[serde(default)]
     pub notify: NotifyConfig,
@@ -69,12 +74,40 @@ pub enum StorageConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)] // genutzt ab REQ_TEN_002 (OIDC-Login)
 pub struct OidcConfig {
     pub issuer_url: String,
     pub client_id: String,
     #[serde(skip_serializing)]
     pub client_secret: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuthConfig {
+    /// Entwicklungs-Login ohne Identity Provider (SPEC_TEN_DEV_LOGIN).
+    #[serde(default)]
+    pub dev_login: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionConfig {
+    #[serde(default = "default_session_ttl")]
+    pub ttl_hours: i64,
+    /// `None`: abgeleitet aus dem Schema von `server.public_url`.
+    #[serde(default)]
+    pub cookie_secure: Option<bool>,
+}
+
+const fn default_session_ttl() -> i64 {
+    720
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            ttl_hours: default_session_ttl(),
+            cookie_secure: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -105,6 +138,8 @@ impl Default for Config {
                 path: "data/files".into(),
             },
             oidc: None,
+            auth: AuthConfig::default(),
+            session: SessionConfig::default(),
             ai: None,
             notify: NotifyConfig::default(),
         }
@@ -131,12 +166,48 @@ impl Config {
         serde_json::to_string_pretty(&c).unwrap_or_default()
     }
 
-    pub fn db_backend(&self) -> &'static str {
-        if self.database.url.starts_with("sqlite:") {
-            "sqlite"
-        } else {
-            "postgres"
+    /// Host von `server.public_url` ist `localhost` oder eine Loopback-Adresse.
+    #[must_use]
+    pub fn public_url_is_local(&self) -> bool {
+        let rest = self
+            .server
+            .public_url
+            .split_once("://")
+            .map_or(self.server.public_url.as_str(), |(_, r)| r);
+        let host = rest.split(['/', ':']).next().unwrap_or_default();
+        matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+    }
+
+    /// `Secure`-Flag des Sitzungscookies: explizit oder aus dem Schema der
+    /// öffentlichen URL (SPEC_SEC_SESSION_CSRF).
+    #[must_use]
+    pub fn cookie_secure(&self) -> bool {
+        self.session
+            .cookie_secure
+            .unwrap_or_else(|| self.server.public_url.starts_with("https://"))
+    }
+
+    /// Prüft sicherheitsrelevante Kombinationen vor dem Start.
+    // @impl SPEC_TEN_DEV_LOGIN, SPEC_SEC_SESSION_CSRF
+    pub fn validate(&self) -> Result<(), String> {
+        if self.auth.dev_login && self.oidc.is_some() {
+            return Err("auth.dev_login und oidc schließen sich aus".into());
         }
+        if self.auth.dev_login && !self.public_url_is_local() {
+            return Err(
+                "auth.dev_login ist nur mit server.public_url auf localhost zulässig".into(),
+            );
+        }
+        if !self.auth.dev_login && self.oidc.is_none() {
+            return Err("keine Anmeldung konfiguriert: oidc einrichten oder auth.dev_login für lokale Entwicklung".into());
+        }
+        if !self.cookie_secure() && !self.public_url_is_local() {
+            tracing::warn!("Sitzungscookie ohne Secure-Flag bei nicht lokaler public_url");
+        }
+        if self.session.ttl_hours <= 0 {
+            return Err("session.ttl_hours muss größer 0 sein".into());
+        }
+        Ok(())
     }
 }
 
@@ -161,10 +232,35 @@ mod tests {
             jail.set_env("ZAEHLER_DATABASE__URL", "postgres://u:p@db/zaehler");
             jail.set_env("ZAEHLER_SERVER__LISTEN", "127.0.0.1:3000");
             let c = Config::load(None).map_err(|e| e.to_string())?;
-            assert_eq!(c.db_backend(), "postgres");
+            assert!(c.database.url.starts_with("postgres://"));
             assert_eq!(c.server.listen.port(), 3000);
             assert!(!c.redacted().contains("u:p"));
             Ok(())
         });
+    }
+
+    // @test SPEC_TEN_DEV_LOGIN, SPEC_SEC_SESSION_CSRF
+    #[test]
+    fn auth_combinations_are_validated() {
+        let mut c = Config::default();
+        assert!(c.validate().is_err(), "ohne Anmeldung kein Start");
+        c.auth.dev_login = true;
+        assert!(c.validate().is_ok());
+        assert!(!c.cookie_secure(), "http://localhost");
+        c.server.public_url = "https://zaehler.example.com".into();
+        assert!(c.validate().is_err(), "Dev-Login nur lokal");
+        c.auth.dev_login = false;
+        c.oidc = Some(OidcConfig {
+            issuer_url: "https://idp".into(),
+            client_id: "z".into(),
+            client_secret: "s".into(),
+        });
+        assert!(c.validate().is_ok());
+        assert!(c.cookie_secure());
+        c.auth.dev_login = true;
+        assert!(
+            c.validate().is_err(),
+            "Dev-Login und OIDC schließen sich aus"
+        );
     }
 }

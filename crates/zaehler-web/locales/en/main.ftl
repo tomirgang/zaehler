@@ -1,0 +1,173 @@
+# General
+app-name = Zähler
+nav-overview = Overview
+nav-meters = Meters
+nav-settings = Settings
+nav-logout = Sign out
+household-switch = Switch
+action-save = Save
+action-cancel = Cancel
+action-edit = Edit
+action-delete = Delete
+action-create = Create
+
+# Overview
+dashboard-title = Overview
+dashboard-empty = No meters yet.
+dashboard-create-meter = Create meter
+dashboard-last-reading = Last reading
+dashboard-no-reading = none yet
+dashboard-due = Reading due on { $date }
+dashboard-overdue = Reading overdue since { $date }
+dashboard-record = Record reading
+
+# Meters
+meters-title = Meters
+meters-new = New meter
+meters-edit = Edit meter
+meters-empty = No meters.
+meter-name = Name
+meter-kind = Type
+meter-unit = Unit
+meter-unit-hint = Leave empty for the default unit of the type.
+meter-serial = Meter number
+meter-digits = Integer digits
+meter-digits-hint = Enables detection of a counter rollover.
+meter-decimals = Decimal places
+meter-interval = Reading interval (days)
+meter-interval-hint = Used to compute when the next reading is due.
+meter-max-rate = Maximum daily consumption
+meter-max-rate-hint = Higher daily values trigger a notice when recording.
+meter-billing-start = Start of billing year (month, day)
+meter-billing-month = Month
+meter-billing-day = Day
+meter-start-at = Installation and start values on
+meter-registers = Registers
+meter-readings = Readings
+meter-devices = Devices
+meter-swap = Meter replacement
+register-code = Code
+register-direction = Direction
+register-start = Start value
+register-add = Add register
+direction-import = Import
+direction-export = Export
+kind-electricity = Electricity
+kind-gas = Gas
+kind-water = Water
+kind-heat = Heat
+kind-vehicle = Vehicle
+kind-custom = Other
+device-installed = Installed
+device-removed = Removed
+device-active = installed
+
+# Readings
+readings-empty = No readings yet.
+reading-at = Time
+reading-value = Value
+reading-register = Register
+reading-source = Source
+reading-note = Note
+reading-delete-confirm = Delete this reading?
+source-manual = Form
+source-photo = Photo
+source-csv_import = CSV import
+source-invoice = Invoice
+readings-new = Record reading
+readings-last = Last reading { $value } on { $date }
+readings-none = No reading recorded yet
+readings-confirm = Save anyway
+readings-warnings = The check reports anomalies. Confirm to save.
+plaus-decreasing = Value is lower than the previous one.
+plaus-rate_too_high = Daily consumption exceeds the maximum of the meter.
+plaus-out_of_order = Time is before the last reading or before installation.
+
+# Meter replacement
+swap-title = Meter replacement
+swap-at = Time of replacement
+swap-values = Final values of the old and start values of the new device
+swap-new = New device
+swap-end = Final value
+swap-start = Start value
+
+# Settings
+settings-title = Settings
+settings-household = Household
+household-name = Name
+household-timezone = Time zone
+household-timezone-hint = IANA name, e.g. Europe/Berlin.
+settings-language = Language
+settings-new-household = Create another household
+settings-delete-household = Delete household
+settings-delete-hint = Deletes all meters and readings of this household. Enter the household name to confirm.
+settings-delete-confirm-label = Household name
+
+# Sign in
+login-title = Sign in
+login-oidc = Sign in
+login-dev = Development login
+login-dev-hint = For local development only (auth.dev_login).
+login-dev-name = Name
+login-submit = Sign in
+login-none = No sign-in configured: set up OIDC or auth.dev_login.
+login-logged-out = Signed out.
+login-failed = Sign-in failed.
+login-dev-name-required = Name required.
+
+# Messages
+flash-meter-created = Meter created.
+flash-meter-updated = Meter saved.
+flash-swap-done = Meter replacement saved.
+flash-readings-saved = Reading saved.
+flash-reading-deleted = Reading deleted.
+flash-household-created = Household created.
+flash-household-updated = Household saved.
+flash-household-deleted = Household deleted.
+flash-locale-updated = Language saved.
+
+# Errors
+error-title = Error
+error-not-found = Page or entry not found.
+error-forbidden = Not permitted.
+error-internal = Internal error. Reference: { $ref }
+err-conflict = The action conflicts with existing data.
+err-meter-name_invalid = Name with 1 to { $max } characters required.
+err-meter-unit_required = Unit required.
+err-meter-unit_invalid = At most { $max } characters.
+err-meter-interval_invalid = 1 to 3650 days.
+err-meter-max_rate_invalid = Value greater than 0 required.
+err-meter-billing_start_invalid = Invalid day of year.
+err-meter-digits_invalid = 1 to 9 digits.
+err-meter-decimals_invalid = 0 to 3 digits.
+err-meter-serial_invalid = At most { $max } characters.
+err-meter-registers_required = At least one register required.
+err-meter-register_code_invalid = Code with 1 to { $max } characters required.
+err-meter-register_code_duplicate = Code already in use.
+err-meter-name_taken = Name already in use.
+err-meter-serial_taken = Meter number already assigned to another meter.
+err-meter-kind_locked = Type cannot be changed after the first reading.
+err-meter-unit_locked = Unit cannot be changed after the first reading.
+err-meter-register_locked = Registers cannot be removed.
+err-meter-direction_locked = Direction cannot be changed after the first reading.
+err-meter-no_active_device = No installed device.
+err-reading-negative = Value must not be negative.
+err-reading-too_many_decimals = At most { $places } decimal places.
+err-reading-exceeds_digits = More than { $digits } integer digits.
+err-reading-values_required = Enter at least one value.
+err-reading-in_future = Time is in the future.
+err-reading-note_too_long = At most { $max } characters.
+err-reading-decreasing = Final value is lower than the last reading.
+err-reading-duplicate = A reading already exists for this time.
+err-reading-part_of_swap = Readings of a meter replacement cannot be deleted.
+err-swap-before_last_reading = Time must be after the last reading.
+err-swap-end_required = Final value required.
+err-swap-start_required = Start value required.
+err-household-name_invalid = Name with 1 to { $max } characters required.
+err-household-delete_confirm_mismatch = Name does not match.
+err-settings-locale_invalid = Language not supported.
+err-form-number_invalid = Not a valid number.
+err-form-integer_invalid = Not a valid integer.
+err-form-datetime_invalid = Not a valid time.
+err-form-timezone_invalid = Unknown time zone.
+err-form-kind_invalid = Invalid selection.

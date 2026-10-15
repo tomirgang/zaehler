@@ -1,0 +1,133 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{% if form.is_new %}{{ ctx.lang.t("meters-new") }}{% else %}{{ ctx.lang.t("meters-edit") }}{% endif %}</h1>
+<form method="post" action="{{ form.action }}" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <input type="hidden" name="register_count" value="{{ form.registers.len() }}">
+  <input type="hidden" name="locked" value="{{ form.locked }}">
+
+  <div class="field{% if self.has_errs("name") %} has-error{% endif %}">
+    <label for="name">{{ ctx.lang.t("meter-name") }}</label>
+    <input id="name" name="name" value="{{ form.name }}" maxlength="80" required>
+    {% for e in self.errs("name") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+
+  <div class="grid">
+    <div class="field{% if self.has_errs("kind") %} has-error{% endif %}">
+      <label for="kind">{{ ctx.lang.t("meter-kind") }}</label>
+      {% if form.locked %}
+      <input type="hidden" name="kind" value="{{ form.kind }}">
+      <input id="kind" value="{{ self.kind_label() }}" disabled>
+      {% else %}
+      <select id="kind" name="kind">
+        {% for (value, label) in kinds %}
+        <option value="{{ value }}"{% if self.kind_selected(value) %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+      {% for e in self.errs("kind") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("unit") %} has-error{% endif %}">
+      <label for="unit">{{ ctx.lang.t("meter-unit") }}</label>
+      <input id="unit" name="unit" value="{{ form.unit }}" maxlength="16"{% if form.locked %} readonly{% endif %}>
+      <p class="hint">{{ ctx.lang.t("meter-unit-hint") }}</p>
+      {% for e in self.errs("unit") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="field{% if self.has_errs("serial_number") %} has-error{% endif %}">
+      <label for="serial_number">{{ ctx.lang.t("meter-serial") }}</label>
+      <input id="serial_number" name="serial_number" value="{{ form.serial }}" maxlength="40">
+      {% for e in self.errs("serial_number") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("rollover_digits") %} has-error{% endif %}">
+      <label for="rollover_digits">{{ ctx.lang.t("meter-digits") }}</label>
+      <input id="rollover_digits" name="rollover_digits" value="{{ form.digits }}" inputmode="numeric">
+      <p class="hint">{{ ctx.lang.t("meter-digits-hint") }}</p>
+      {% for e in self.errs("rollover_digits") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("decimal_places") %} has-error{% endif %}">
+      <label for="decimal_places">{{ ctx.lang.t("meter-decimals") }}</label>
+      <input id="decimal_places" name="decimal_places" value="{{ form.decimals }}" inputmode="numeric">
+      {% for e in self.errs("decimal_places") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="field{% if self.has_errs("reading_interval_days") %} has-error{% endif %}">
+      <label for="reading_interval_days">{{ ctx.lang.t("meter-interval") }}</label>
+      <input id="reading_interval_days" name="reading_interval_days" value="{{ form.interval }}" inputmode="numeric">
+      <p class="hint">{{ ctx.lang.t("meter-interval-hint") }}</p>
+      {% for e in self.errs("reading_interval_days") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("max_daily_rate") %} has-error{% endif %}">
+      <label for="max_daily_rate">{{ ctx.lang.t("meter-max-rate") }}</label>
+      <input id="max_daily_rate" name="max_daily_rate" value="{{ form.max_rate }}" inputmode="decimal">
+      <p class="hint">{{ ctx.lang.t("meter-max-rate-hint") }}</p>
+      {% for e in self.errs("max_daily_rate") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("billing_start") %} has-error{% endif %}">
+      <label for="billing_month">{{ ctx.lang.t("meter-billing-start") }}</label>
+      <div class="pair">
+        <input id="billing_month" name="billing_month" value="{{ form.billing_month }}" inputmode="numeric" placeholder="MM" aria-label="{{ ctx.lang.t("meter-billing-month") }}">
+        <input name="billing_day" value="{{ form.billing_day }}" inputmode="numeric" placeholder="TT" aria-label="{{ ctx.lang.t("meter-billing-day") }}">
+      </div>
+      {% for e in self.errs("billing_start") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+
+  {% if form.is_new %}
+  <div class="field{% if self.has_errs("start_at") %} has-error{% endif %}">
+    <label for="start_at">{{ ctx.lang.t("meter-start-at") }}</label>
+    <input id="start_at" name="start_at" type="datetime-local" value="{{ form.start_at }}">
+    {% for e in self.errs("start_at") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+  {% endif %}
+
+  <fieldset>
+    <legend>{{ ctx.lang.t("meter-registers") }}</legend>
+    {% for e in self.errs("registers") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{ ctx.lang.t("register-code") }}</th>
+          <th>{{ ctx.lang.t("register-direction") }}</th>
+          {% if form.is_new %}<th>{{ ctx.lang.t("register-start") }}</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in form.registers %}
+        <tr>
+          <td class="{% if self.has_reg_errs(r.idx, "code") %}has-error{% endif %}">
+            <input type="hidden" name="register_{{ r.idx }}_id" value="{{ r.id }}">
+            <input name="register_{{ r.idx }}_code" value="{{ r.code }}" maxlength="16" aria-label="{{ ctx.lang.t("register-code") }}">
+            {% for e in self.reg_errs(r.idx, "code") %}<p class="field-error">{{ e }}</p>{% endfor %}
+          </td>
+          <td class="{% if self.has_reg_errs(r.idx, "direction") %}has-error{% endif %}">
+            <select name="register_{{ r.idx }}_direction" aria-label="{{ ctx.lang.t("register-direction") }}">
+              <option value="import"{% if r.direction != "export" %} selected{% endif %}>{{ ctx.lang.t("direction-import") }}</option>
+              <option value="export"{% if r.direction == "export" %} selected{% endif %}>{{ ctx.lang.t("direction-export") }}</option>
+            </select>
+            {% for e in self.reg_errs(r.idx, "direction") %}<p class="field-error">{{ e }}</p>{% endfor %}
+          </td>
+          {% if form.is_new %}
+          <td class="{% if self.has_reg_errs(r.idx, "start") %}has-error{% endif %}">
+            <input name="register_{{ r.idx }}_start" value="{{ r.start }}" inputmode="decimal" aria-label="{{ ctx.lang.t("register-start") }}">
+            {% for e in self.reg_errs(r.idx, "start") %}<p class="field-error">{{ e }}</p>{% endfor %}
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <button type="submit" name="add_register" value="1" class="secondary">{{ ctx.lang.t("register-add") }}</button>
+  </fieldset>
+
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("action-save") }}</button>
+    <a href="/meters">{{ ctx.lang.t("action-cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

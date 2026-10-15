@@ -13,6 +13,8 @@ pub struct Model {
     pub reading_interval_days: Option<i32>,
     /// Festkomma, Skala 10⁻³ (siehe [`crate::fixed`]).
     pub max_daily_rate_milli: Option<i64>,
+    pub billing_start_month: Option<i16>,
+    pub billing_start_day: Option<i16>,
     pub archived: bool,
     pub created_at: DateTimeUtc,
 }

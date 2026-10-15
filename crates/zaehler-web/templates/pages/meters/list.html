@@ -1,0 +1,32 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("meters-title") }}</h1>
+  {% if ctx.is_owner %}<a class="button" href="/meters/new">{{ ctx.lang.t("meters-new") }}</a>{% endif %}
+</div>
+{% if meters.is_empty() %}
+<p>{{ ctx.lang.t("meters-empty") }}</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>{{ ctx.lang.t("meter-name") }}</th>
+      <th>{{ ctx.lang.t("meter-kind") }}</th>
+      <th>{{ ctx.lang.t("meter-unit") }}</th>
+      <th>{{ ctx.lang.t("dashboard-last-reading") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in meters %}
+    <tr>
+      <td><a href="/meters/{{ m.id }}">{{ m.name }}</a></td>
+      <td>{{ m.kind }}</td>
+      <td>{{ m.unit }}</td>
+      <td>{% if let Some(l) = m.last %}{{ l }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

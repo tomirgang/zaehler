@@ -1,18 +1,15 @@
 //! `zaehler`: Binary für Webserver und Verwaltungsbefehle.
 
-mod assets;
 mod config;
-mod routes;
-mod state;
 mod telemetry;
-
-use std::sync::Arc;
+mod wiring;
 
 use anyhow::Context;
+use axum::{Router, routing::get};
 use clap::{Parser, Subcommand};
 use tokio::net::TcpListener;
 
-use crate::{config::Config, state::AppState};
+use crate::config::Config;
 
 #[derive(Parser)]
 #[command(
@@ -59,30 +56,12 @@ async fn main() -> anyhow::Result<()> {
 
 async fn serve(config: Config) -> anyhow::Result<()> {
     let metrics = telemetry::init_metrics()?;
-    let db = zaehler_db::connect(&config.database.url, config.database.max_connections)
-        .await
-        .context("Datenbankverbindung fehlgeschlagen")?;
-    if config.database.auto_migrate {
-        zaehler_db::migrate(&db).await?;
-    }
-
-    let ai = config
-        .ai
-        .clone()
-        .map(zaehler_ai::OpenRouter::new)
-        .transpose()?;
-    if ai.is_none() {
-        tracing::warn!("keine AI-Konfiguration, Foto-Erkennung deaktiviert");
-    }
-
-    let state = AppState {
-        db,
-        config: Arc::new(config.clone()),
-        ai,
-    };
-
-    let app = routes::router(state);
-    let metrics_app = routes::metrics_router(metrics);
+    let app = wiring::build(&config).await?;
+    // Separater Listener, damit /metrics nicht über den Ingress erreichbar ist.
+    let metrics_app = Router::new().route(
+        "/metrics",
+        get(move || std::future::ready(metrics.render())),
+    );
 
     let listener = TcpListener::bind(config.server.listen).await?;
     let metrics_listener = TcpListener::bind(config.server.metrics_listen).await?;

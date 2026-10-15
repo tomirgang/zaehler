@@ -5,6 +5,11 @@
 pub mod entity;
 pub mod fixed;
 pub mod migration;
+mod session_store;
+mod uow;
+
+pub use session_store::DbSessionStore;
+pub use uow::SeaOrmStore;
 
 use sea_orm::{
     ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbBackend, DbErr, Statement,
@@ -120,5 +125,53 @@ mod tests {
         super::migrate(&db).await.unwrap();
         // Idempotent: zweiter Lauf darf nichts tun.
         super::migrate(&db).await.unwrap();
+        zaehler_app::testing::suite::run(&super::SeaOrmStore::new(db)).await;
+    }
+
+    // @test SPEC_ARCH_UOW, SPEC_SEC_TENANT_SCOPE, SPEC_OPS_DB_BACKENDS, SPEC_DM_CORE
+    #[tokio::test]
+    async fn sqlite_adapter_passes_port_suite() {
+        let dir = std::env::temp_dir().join(format!("zaehler-test-{}", uuid::Uuid::now_v7()));
+        let url = format!("sqlite://{}/test.db?mode=rwc", dir.display());
+        let db = super::connect(&url, 4).await.unwrap();
+        super::migrate(&db).await.unwrap();
+        zaehler_app::testing::suite::run(&super::SeaOrmStore::new(db)).await;
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // @test SPEC_SEC_SESSION_CSRF
+    #[tokio::test]
+    async fn session_store_roundtrip_and_expiry() {
+        use tower_sessions::{
+            SessionStore,
+            session::{Id, Record},
+        };
+        let db = super::connect("sqlite::memory:", 1).await.unwrap();
+        super::migrate(&db).await.unwrap();
+        let store = super::DbSessionStore::new(db);
+        let mut data = std::collections::HashMap::new();
+        data.insert("user_id".to_owned(), serde_json::json!("abc"));
+        let mut record = Record {
+            id: Id::default(),
+            data,
+            expiry_date: time::OffsetDateTime::now_utc() + time::Duration::hours(1),
+        };
+        store.create(&mut record).await.unwrap();
+        assert_eq!(store.load(&record.id).await.unwrap(), Some(record.clone()));
+        record
+            .data
+            .insert("csrf".to_owned(), serde_json::json!("t"));
+        store.save(&record).await.unwrap();
+        assert_eq!(store.load(&record.id).await.unwrap().unwrap().data.len(), 2);
+        let expired = Record {
+            id: Id::default(),
+            data: std::collections::HashMap::default(),
+            expiry_date: time::OffsetDateTime::now_utc() - time::Duration::hours(1),
+        };
+        store.save(&expired).await.unwrap();
+        assert_eq!(store.load(&expired.id).await.unwrap(), None);
+        assert_eq!(store.delete_expired(chrono::Utc::now()).await.unwrap(), 1);
+        store.delete(&record.id).await.unwrap();
+        assert_eq!(store.load(&record.id).await.unwrap(), None);
     }
 }
