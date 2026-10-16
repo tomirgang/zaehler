@@ -86,3 +86,18 @@ semantisches HTML, Diagramme mit Tabellenalternative).
 Anforderungen, Spezifikationen, Code und Tests müssen durchgängig verknüpft
 sein. Der Dokumentations-Build in der CI muss bei toten Trace-Links fehlschlagen.
 ```
+
+```{req} Rückmeldung bei laufenden Aktionen
+:id: REQ_NFR_009
+:status: accepted
+:priority: should
+:release: MVP
+
+Die Oberfläche soll nach dem Auslösen einer Aktion (Button, Formular) sofort
+anzeigen, dass der Request läuft: Ladeindikator (z.B. Spinner) am auslösenden
+Element, das bis zur Antwort deaktiviert bleibt, damit keine doppelten Requests
+entstehen. Das gilt insbesondere für lang laufende Requests wie die
+Foto-Auswertung ({need}`REQ_AI_001`). Der Ladezustand muss für Hilfstechnologien
+erkennbar sein (`aria-busy`, {need}`REQ_NFR_007`) und ohne Inline-Skripte
+auskommen ({need}`REQ_NFR_003`).
+```

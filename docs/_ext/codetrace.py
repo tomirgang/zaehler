@@ -1,7 +1,7 @@
 """Sammelt Trace-Tags aus dem Rust-Code und erzeugt daraus sphinx-needs-Objekte.
 
-Konvention im Code (direkt über dem Element bzw. dem Test). In Rust mit ``//``,
-in YAML, Dockerfile, Helm-Templates und Python mit ``#``:
+Konvention im Code (direkt über dem Element bzw. dem Test). In Rust und
+JavaScript mit ``//``, in YAML, Dockerfile, Helm-Templates und Python mit ``#``:
 
     // @impl SPEC_CONS_DELTA, SPEC_CONS_DEVICE_SWAP
     pub fn intervals(...)
@@ -37,7 +37,8 @@ ITEM_RE = re.compile(
 )
 PY_ITEM_RE = re.compile(r"^\s*(?:async\s+)?(?P<what>def|class)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)")
 LOOKAHEAD = 8
-SUFFIXES = {".rs", ".py", ".yaml", ".yml", ".tpl", ".toml"}
+SUFFIXES = {".rs", ".js", ".py", ".yaml", ".yml", ".tpl", ".toml"}
+SLASH_SUFFIXES = {".rs", ".js"}
 NAMES = {"Dockerfile"}
 
 LINK = {"impl": "implements", "test": "verifies"}
@@ -83,8 +84,8 @@ def scan(roots: list[Path], base: Path) -> list[Tag]:
             rel = file.resolve().relative_to(base)
             for i, line in enumerate(lines):
                 m = TAG_RE.match(line)
-                # Rust: nur `//`; sonst nur `#` (verhindert Treffer in Docstrings/Beispielen)
-                if not m or (m.group("prefix") == "//") != (file.suffix == ".rs"):
+                # Rust/JS: nur `//`; sonst nur `#` (verhindert Treffer in Docstrings/Beispielen)
+                if not m or (m.group("prefix") == "//") != (file.suffix in SLASH_SUFFIXES):
                     continue
                 item_re = ITEM_RE if file.suffix == ".rs" else PY_ITEM_RE if file.suffix == ".py" else None
                 symbol = None

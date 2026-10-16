@@ -572,6 +572,31 @@ Lade-Indikator, Bestätigungsdialoge über `hx-confirm`), `charts.js`
 funktionieren ohne JavaScript (vollständige Seitenantworten); HTMX ergänzt
 Fragmente und Indikatoren.
 
+```{spec} Ladezustand von Formularen
+:id: SPEC_UI_BUSY
+:status: implemented
+:satisfies: REQ_NFR_009
+
+`app.js` wird in beiden Layouts (`layout/base.html`, `layout/plain.html`)
+geladen und behandelt alle Formulare ohne Markup-Änderung:
+
+- Start: per HTMX (`htmx:beforeRequest`, also nach `hx-confirm` und nach dem
+  Einsammeln der Formularwerte) oder bei normalem Absenden nach dem
+  `submit`-Event. Das Formular erhält `aria-busy="true"`, der auslösende
+  Button (`SubmitEvent.submitter`, sonst der erste Submit-Button)
+  `aria-busy="true"` und `disabled`.
+- Ein weiteres `submit` auf ein Formular mit `aria-busy` wird verworfen
+  (keine doppelten Requests, auch nicht per Enter-Taste).
+- Ende: `htmx:afterRequest` (auch bei Fehler, Timeout, Abbruch). Vor
+  `htmx:beforeHistorySave` und beim Wiederherstellen aus dem
+  Back-Forward-Cache (`pageshow`) wird der Zustand zurückgesetzt.
+- Darstellung in `app.css` über `button[aria-busy="true"]::before` (Spinner);
+  bei `prefers-reduced-motion` langsamer.
+
+Keine Inline-Skripte, die Content-Security-Policy bleibt unverändert
+({need}`SPEC_SEC_HEADERS`).
+```
+
 ## Konfiguration: Erweiterungen
 
 | Schlüssel | Default | Zweck |

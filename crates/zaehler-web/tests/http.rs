@@ -439,6 +439,19 @@ async fn probes_assets_and_security_headers() {
     );
 }
 
+// @test SPEC_UI_BUSY
+#[tokio::test]
+async fn both_layouts_load_busy_indicator_script() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    let script = "<script src=\"/static/test/app.js\" defer></script>";
+    assert!(text(c.get("/auth/login").await).await.contains(script));
+    c.login("anna").await;
+    assert!(text(c.get("/").await).await.contains(script));
+    let js = text(c.get("/static/test/app.js").await).await;
+    assert!(js.contains("htmx:beforeRequest") && js.contains("aria-busy"));
+}
+
 // @test SPEC_TEN_DEV_LOGIN, SPEC_ERR_HANDLING
 #[tokio::test]
 async fn anonymous_requests_are_redirected_and_dev_login_can_be_disabled() {
