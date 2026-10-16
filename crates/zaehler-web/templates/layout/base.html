@@ -1,15 +1,18 @@
 <!doctype html>
 <html lang="{{ ctx.lang.code() }}">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"responseHandling":[{"code":"204","swap":false},{"code":"...","swap":true}]}'>
+  <meta name="htmx-config"
+    content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"responseHandling":[{"code":"204","swap":false},{"code":"...","swap":true}]}'>
   <title>{% block title %}{{ ctx.lang.t("app-name") }}{% endblock %}</title>
   <link rel="stylesheet" href="{{ ctx.static_prefix }}/app.css">
   <script src="{{ ctx.static_prefix }}/htmx.min.js" defer></script>
   <script src="{{ ctx.static_prefix }}/app.js" defer></script>
   <script src="{{ ctx.static_prefix }}/charts.js" defer></script>
 </head>
+
 <body hx-boost="true" hx-headers='{"X-CSRF-Token": "{{ ctx.csrf }}"}'>
   <header class="topbar">
     <a class="brand" href="/">{{ ctx.lang.t("app-name") }}</a>
@@ -29,7 +32,7 @@
           <label class="visually-hidden" for="household-switch">{{ ctx.lang.t("household-switch") }}</label>
           <select id="household-switch" name="household">
             {% for h in ctx.households %}
-            <option value="{{ h.id }}"{% if h.id == ctx.active %} selected{% endif %}>{{ h.name }}</option>
+            <option value="{{ h.id }}" {% if h.id==ctx.active %} selected{% endif %}>{{ h.name }}</option>
             {% endfor %}
           </select>
           <button type="submit" class="secondary">{{ ctx.lang.t("household-switch") }}</button>
@@ -37,7 +40,6 @@
         {% else %}
         <strong class="household-name">{{ ctx.active_name() }}</strong>
         {% endif %}
-        {% if ctx.is_owner %}<a class="household-edit" href="/settings#household">{{ ctx.lang.t("household-rename") }}</a>{% endif %}
       </div>
       <span class="user muted">{{ ctx.signed_in() }}</span>
       <form method="post" action="/auth/logout" class="inline">
@@ -52,4 +54,5 @@
   </main>
   <footer class="footer">zaehler {{ ctx.version }}</footer>
 </body>
+
 </html>
