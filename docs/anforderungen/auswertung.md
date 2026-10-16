@@ -102,4 +102,51 @@ Verlauf zusätzlich für jedes Register berechnen und als Diagramme darstellen.
   kumulierter Jahresverlauf mit Prognose.
 - Die Werte der Register ergeben in Summe die Werte der Messstelle je Richtung.
 - Bei nur einem Register entfällt die Darstellung je Register.
+- Liefert ein Register allein die Werte der Messstelle einer Richtung
+  (z.B. Bezug 1.8.0 neben Einspeisung 2.8.0), entfällt seine Darstellung je
+  Register; die Monatswerte der Messstelle nennen es als Quelle.
+```
+
+```{req} Teilweise abgedeckte Monate in den Monatswerten
+:id: REQ_ANA_010
+:status: accepted
+:priority: must
+:release: MVP
+
+Das System muss in den Monatsdiagrammen auch Monate darstellen, die die
+Ablesungen nur teilweise abdecken (Monat der ersten und der letzten
+Ablesung). Der gemessene Anteil wird angezeigt, die fehlenden Tage werden
+auf Basis der gemessenen Tage dieses Monats prognostiziert.
+
+**Akzeptanzkriterien**
+- Gemessener Anteil und Prognose stehen gestapelt in einem Balken; die
+  Prognose ist als solche gekennzeichnet (eigene Legende, schraffiert) und im
+  Tooltip und in der Tabellenalternative getrennt ausgewiesen.
+- Prognose der fehlenden Tage = gemessener Anteil · fehlende Zeit /
+  gemessene Zeit des Monats.
+- Monate ohne Ablesung im oder um den Monat bleiben leer.
+- Vergleiche, Bezugsmonate und die Monatstabelle verwenden weiterhin nur
+  vollständig abgedeckte Monate.
+```
+
+```{req} Jahresverlauf mit geschätzten und prognostizierten Abschnitten
+:id: REQ_ANA_011
+:status: accepted
+:priority: must
+:release: MVP
+
+Das System muss den kumulierten Jahresverlauf auch dann darstellen, wenn
+keine Ablesung am oder vor dem Jahresbeginn vorliegt. Der Verbrauch vor der
+ersten Ablesung des Jahres wird geschätzt, der Verbrauch nach der letzten
+Ablesung prognostiziert.
+
+**Akzeptanzkriterien**
+- Zwischen zwei Ablesungen wird linear interpoliert (wie bisher).
+- Vor der ersten Ablesung des Jahres und nach der letzten Ablesung gilt die
+  durchschnittliche Rate des gemessenen Zeitraums im Jahr; Schätzung,
+  Messung und Prognose ergeben einen durchgehenden Verlauf bis Jahresende.
+- Geschätzter Abschnitt (gepunktet) und Prognose (gestrichelt) sind
+  gekennzeichnet; ein Hinweis nennt den Beginn des gemessenen Zeitraums.
+- Die Jahresprognose der Prognosetabelle stimmt mit dem Endwert des
+  Jahresverlaufs überein und weist den geschätzten Beginn aus.
 ```

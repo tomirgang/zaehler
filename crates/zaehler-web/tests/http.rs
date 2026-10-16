@@ -130,6 +130,47 @@ async fn create_meter_due(c: &mut Client, csrf: &str, name: &str, interval: &str
     loc.trim_start_matches("/meters/").to_owned()
 }
 
+/// Messstelle mit zwei Registern; das erste ist Bezug, das zweite hat
+/// die Richtung `second`. Liefert den Pfad der Detailseite.
+async fn create_two_register_meter(
+    c: &mut Client,
+    csrf: &str,
+    name: &str,
+    codes: [&str; 2],
+    second: &str,
+) -> String {
+    let res = c
+        .post(
+            "/meters",
+            &[
+                ("_csrf", csrf),
+                ("name", name),
+                ("kind", "electricity"),
+                ("unit", ""),
+                ("serial_number", ""),
+                ("rollover_digits", ""),
+                ("decimal_places", "1"),
+                ("reading_interval_days", ""),
+                ("max_daily_rate", ""),
+                ("billing_month", ""),
+                ("billing_day", ""),
+                ("start_at", "2026-01-01T00:00"),
+                ("register_count", "2"),
+                ("register_0_id", ""),
+                ("register_0_code", codes[0]),
+                ("register_0_direction", "import"),
+                ("register_0_start", "1000"),
+                ("register_1_id", ""),
+                ("register_1_code", codes[1]),
+                ("register_1_direction", second),
+                ("register_1_start", "500"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    location(&res)
+}
+
 // @test SPEC_SEC_UPLOADS, SPEC_SEC_TENANT_SCOPE
 #[tokio::test]
 async fn reading_photos_are_served_only_to_their_household() {
@@ -707,7 +748,7 @@ async fn dashboard_renders_0_1_and_20_meters_with_overdue_first() {
     assert!(html.contains("class=\"card overdue\""));
 }
 
-// @test SPEC_ANA_COMPARE_VIEW, SPEC_ANA_CHARTS, SPEC_ANA_REGISTER_CHARTS
+// @test SPEC_ANA_COMPARE_VIEW, SPEC_ANA_CHARTS, SPEC_ANA_REGISTER_CHARTS, SPEC_ANA_PARTIAL_MONTHS
 #[tokio::test]
 async fn meter_detail_shows_analysis_and_chart_data() {
     let app = test_app(true);
@@ -731,6 +772,15 @@ async fn meter_detail_shows_analysis_and_chart_data() {
     assert_eq!(json["labels"].as_array().unwrap().len(), 12);
     assert_eq!(json["labels"][2], "Mär");
     assert_eq!(json["series"]["current"]["name"], "2026");
+    assert_eq!(json["series"]["current_projected"]["name"], "2026 Prognose");
+    assert_eq!(json["series"]["estimate"]["name"], "Geschätzt");
+    assert_eq!(
+        json["series"]["previous_projected"]["data"]
+            .as_array()
+            .unwrap()
+            .len(),
+        12
+    );
     assert_eq!(
         json["series"]["forecast"]["data"].as_array().unwrap().len(),
         12
@@ -740,40 +790,22 @@ async fn meter_detail_shows_analysis_and_chart_data() {
     assert_eq!(json["registers"], serde_json::json!([]), "nur ein Register");
     assert!(!html.contains("data-register="));
 
-    // zwei Register: Prognose und Diagramme je Register
-    let res = c
-        .post(
-            "/meters",
-            &[
-                ("_csrf", csrf.as_str()),
-                ("name", "Doppeltarif"),
-                ("kind", "electricity"),
-                ("unit", ""),
-                ("serial_number", ""),
-                ("rollover_digits", ""),
-                ("decimal_places", "1"),
-                ("reading_interval_days", ""),
-                ("max_daily_rate", ""),
-                ("billing_month", ""),
-                ("billing_day", ""),
-                ("start_at", "2026-01-01T00:00"),
-                ("register_count", "2"),
-                ("register_0_id", ""),
-                ("register_0_code", "HT"),
-                ("register_0_direction", "import"),
-                ("register_0_start", "1000"),
-                ("register_1_id", ""),
-                ("register_1_code", "NT"),
-                ("register_1_direction", "import"),
-                ("register_1_start", "500"),
-            ],
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
-    let two = location(&res);
+    // zwei Bezugsregister: Summe als Quelle, Prognose und Diagramme je Register
+    let two = create_two_register_meter(&mut c, &csrf, "Doppeltarif", ["HT", "NT"], "import").await;
     let html = text(c.get(&two).await).await;
+    assert!(html.contains("Quelle: Summe der Register HT, NT (Bezug)"));
     assert!(html.contains("Register HT (Bezug)"));
     assert!(html.contains("Register NT: Jahresverlauf 2026 mit Prognose"));
+    assert!(html.contains("data-chart=\"monthly\" data-register=\"1\""));
+
+    // Bezug und Einspeisung: das Bezugsregister liefert allein die Monatswerte
+    // der Messstelle, wird als Quelle genannt und nicht erneut dargestellt
+    let pv = create_two_register_meter(&mut c, &csrf, "PV", ["1.8.0", "2.8.0"], "export").await;
+    let html = text(c.get(&pv).await).await;
+    assert!(html.contains("Quelle: Register 1.8.0 (Bezug)"));
+    assert!(!html.contains("data-register=\"0\""));
+    assert!(!html.contains("Register 1.8.0: Monatswerte"));
+    assert!(html.contains("Register 2.8.0 (Einspeisung)"));
     assert!(html.contains("data-chart=\"monthly\" data-register=\"1\""));
     let json: serde_json::Value =
         serde_json::from_str(&text(c.get(&format!("{two}/chart.json")).await).await).unwrap();

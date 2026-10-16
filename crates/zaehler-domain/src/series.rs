@@ -59,6 +59,74 @@ pub fn covered_until(registers: &[&[Interval]]) -> Option<DateTime<Utc>> {
         .flatten()
 }
 
+/// Beginn des Zeitraums, den alle Register abdecken (erste gemeinsame Ablesung).
+#[must_use]
+pub fn covered_from(registers: &[&[Interval]]) -> Option<DateTime<Utc>> {
+    registers
+        .iter()
+        .map(|intervals| intervals.first().map(|i| i.start))
+        .max()
+        .flatten()
+}
+
+/// Monatswert für Diagramme: vollständig gemessen, oder bei einem nur
+/// teilweise abgedeckten Monat gemessener Anteil und Prognose der fehlenden
+/// Zeit mit der Rate des gemessenen Anteils.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonthSplit {
+    pub month: Period,
+    pub measured: Option<Decimal>,
+    /// Nur bei teilweise abgedeckten Monaten
+    pub projected: Option<Decimal>,
+}
+
+/// Monatswerte wie [`monthly`]; ein Monat, den die Ablesungen nur teilweise
+/// abdecken (erster oder letzter Monat), erhält den gemessenen Anteil und
+/// die Prognose für die fehlende Zeit: `gemessen · fehlend / abgedeckt`
+/// (sekundengenau in der Zeitzone des Haushalts).
+// @impl SPEC_ANA_PARTIAL_MONTHS
+#[must_use]
+pub fn monthly_split(
+    registers: &[&[Interval]],
+    months: &[Period],
+    cal: Calendar,
+) -> Vec<MonthSplit> {
+    let covered = covered_from(registers).zip(covered_until(registers));
+    months
+        .iter()
+        .map(|m| {
+            let (start, end) = (cal.start_of(m.start), cal.start_of(m.end));
+            let empty = MonthSplit {
+                month: *m,
+                measured: None,
+                projected: None,
+            };
+            if let Some(value) = total_in(registers, start, end) {
+                return MonthSplit {
+                    measured: Some(value),
+                    ..empty
+                };
+            }
+            let Some((from, until)) = covered else {
+                return empty;
+            };
+            let (a, b) = (start.max(from), end.min(until));
+            let covered_secs = (b - a).num_seconds();
+            let Some(measured) = total_in(registers, a, b).filter(|_| covered_secs > 0) else {
+                return empty;
+            };
+            let missing = (end - start).num_seconds() - covered_secs;
+            MonthSplit {
+                measured: Some(measured),
+                projected: Some(
+                    (measured * Decimal::from(missing) / Decimal::from(covered_secs)).round_dp(3),
+                ),
+                ..empty
+            }
+        })
+        .collect()
+}
+
 /// Monatswerte der Register: Beginn und Ende jedes Monats in der Zeitzone des
 /// Haushalts, Verbrauch über [`total_in`]. Gerundet wird erst bei der Anzeige.
 // @impl SPEC_ANA_MONTHLY_SERIES, SPEC_ANA_REGISTER_AGG
@@ -118,6 +186,35 @@ mod tests {
         assert_eq!(series[1].value, Some(dec!(310)));
         assert_eq!(series[2].value, Some(dec!(280)), "Februar anteilig");
         assert_eq!(series[3].value, None, "März nur zur Hälfte abgedeckt");
+    }
+
+    // @test SPEC_ANA_PARTIAL_MONTHS
+    #[test]
+    fn partial_months_are_measured_and_projected() {
+        let cal = berlin();
+        // 10 Einheiten je Tag vom 21.04. bis 21.09.
+        let rs = [
+            reading(cal.start_of(d(2026, 4, 21)), dec!(0)),
+            reading(cal.start_of(d(2026, 9, 21)), dec!(1530)),
+        ];
+        let ivs = intervals(&rs).unwrap();
+        let months = months_between(d(2026, 3, 1), d(2026, 10, 1));
+        let s = monthly_split(&[&ivs], &months, cal);
+        assert_eq!((s[0].measured, s[0].projected), (None, None), "März");
+        assert_eq!(s[1].measured, Some(dec!(100)), "April: 10 Tage gemessen");
+        assert_eq!(s[1].projected, Some(dec!(200)), "20 Tage prognostiziert");
+        assert_eq!((s[2].measured, s[2].projected), (Some(dec!(310)), None));
+        assert_eq!(s[6].measured, Some(dec!(200)), "September: 20 Tage");
+        assert_eq!(s[6].projected, Some(dec!(100)));
+        assert_eq!((s[7].measured, s[7].projected), (None, None), "Oktober");
+        // vollständige Monate wie `monthly`
+        let plain = monthly(&[&ivs], &months, cal);
+        for (split, value) in s.iter().zip(&plain) {
+            if value.value.is_some() {
+                assert_eq!(split.measured, value.value);
+            }
+        }
+        assert_eq!(covered_from(&[&ivs]), Some(cal.start_of(d(2026, 4, 21))));
     }
 
     // @test SPEC_ANA_REGISTER_AGG

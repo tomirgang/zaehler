@@ -1,5 +1,40 @@
 {% extends "layout/base.html" %}
 
+{# Diagrammwerte als Tabelle; Spalten für Prognose und Schätzung nur bei Bedarf #}
+{% macro chart_table(rows, notes, year, previous, unit) %}
+<details>
+  <summary>{{ ctx.lang.t("chart-table") }}</summary>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("analysis-month") }}</th>
+        <th class="num">{{ year }} ({{ unit }})</th>
+        {% if notes.has_projected %}<th class="num">{{ notes.projected_current }}</th>{% endif %}
+        <th class="num">{{ previous }} ({{ unit }})</th>
+        {% if notes.has_projected %}<th class="num">{{ notes.projected_previous }}</th>{% endif %}
+        {% if notes.has_estimate %}<th class="num">{{ ctx.lang.t("chart-estimate-series") }}</th>{% endif %}
+        <th class="num">{{ ctx.lang.t("chart-cumulative-series") }}</th>
+        <th class="num">{{ ctx.lang.t("chart-forecast-series") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows.iter() %}
+      <tr>
+        <td>{{ row.label }}</td>
+        <td class="num">{{ row.current }}</td>
+        {% if notes.has_projected %}<td class="num">{{ row.current_projected }}</td>{% endif %}
+        <td class="num">{{ row.previous }}</td>
+        {% if notes.has_projected %}<td class="num">{{ row.previous_projected }}</td>{% endif %}
+        {% if notes.has_estimate %}<td class="num">{{ row.estimate }}</td>{% endif %}
+        <td class="num">{{ row.cumulative }}</td>
+        <td class="num">{{ row.forecast }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endmacro %}
+
 {% block content %}
 <div class="page-head">
   <h1>{{ name }}</h1>
@@ -92,7 +127,7 @@
     <tbody>
       {% for f in a.forecasts %}
       <tr>
-        <td>{{ f.label }}</td>
+        <td>{{ f.label }}{% if let Some(n) = f.note %}<br><span class="hint">{{ n }}</span>{% endif %}</td>
         {% if let Some(h) = f.hint %}
         <td colspan="3" class="muted">{{ h }}</td>
         {% else %}
@@ -108,34 +143,13 @@
 
   <div class="charts" data-chart-url="/meters/{{ id }}/chart.json" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
     <h3 id="chart-monthly-title">{{ a.chart_title_monthly }}</h3>
-    <div class="chart" data-chart="monthly" role="img" aria-labelledby="chart-monthly-title"></div>
+    {% if let Some(source) = a.chart_source %}<p class="hint" id="chart-source">{{ source }}</p>{% endif %}
+    <div class="chart" data-chart="monthly" role="img" aria-labelledby="chart-monthly-title"{% if a.chart_source.is_some() %} aria-describedby="chart-source"{% endif %}></div>
+    {% if let Some(n) = a.chart_notes.monthly %}<p class="hint">{{ n }}</p>{% endif %}
     <h3 id="chart-cumulative-title">{{ a.chart_title_cumulative }}</h3>
     <div class="chart" data-chart="cumulative" role="img" aria-labelledby="chart-cumulative-title"></div>
-    <details>
-      <summary>{{ ctx.lang.t("chart-table") }}</summary>
-      <table class="table">
-        <thead>
-          <tr>
-            <th>{{ ctx.lang.t("analysis-month") }}</th>
-            <th class="num">{{ a.chart_year }} ({{ a.unit }})</th>
-            <th class="num">{{ a.chart_previous_year }} ({{ a.unit }})</th>
-            <th class="num">{{ ctx.lang.t("chart-cumulative-series") }}</th>
-            <th class="num">{{ ctx.lang.t("chart-forecast-series") }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in a.chart_rows %}
-          <tr>
-            <td>{{ r.label }}</td>
-            <td class="num">{{ r.current }}</td>
-            <td class="num">{{ r.previous }}</td>
-            <td class="num">{{ r.cumulative }}</td>
-            <td class="num">{{ r.forecast }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </details>
+    {% if let Some(n) = a.chart_notes.cumulative %}<p class="hint">{{ n }}</p>{% endif %}
+    {% call chart_table(a.chart_rows, a.chart_notes, a.chart_year, a.chart_previous_year, a.unit) %}{% endcall %}
   </div>
 
   {% if !a.register_views.is_empty() %}
@@ -155,7 +169,7 @@
       <tbody>
         {% for f in r.forecasts %}
         <tr>
-          <td>{{ f.label }}</td>
+          <td>{{ f.label }}{% if let Some(n) = f.note %}<br><span class="hint">{{ n }}</span>{% endif %}</td>
           {% if let Some(h) = f.hint %}
           <td colspan="3" class="muted">{{ h }}</td>
           {% else %}
@@ -170,33 +184,11 @@
     <div class="charts" data-chart-url="/meters/{{ id }}/chart.json" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
       <h5 id="register-{{ r.index }}-monthly-title">{{ r.chart_title_monthly }}</h5>
       <div class="chart" data-chart="monthly" data-register="{{ r.index }}" role="img" aria-labelledby="register-{{ r.index }}-monthly-title"></div>
+      {% if let Some(n) = r.chart_notes.monthly %}<p class="hint">{{ n }}</p>{% endif %}
       <h5 id="register-{{ r.index }}-cumulative-title">{{ r.chart_title_cumulative }}</h5>
       <div class="chart" data-chart="cumulative" data-register="{{ r.index }}" role="img" aria-labelledby="register-{{ r.index }}-cumulative-title"></div>
-      <details>
-        <summary>{{ ctx.lang.t("chart-table") }}</summary>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>{{ ctx.lang.t("analysis-month") }}</th>
-              <th class="num">{{ a.chart_year }} ({{ a.unit }})</th>
-              <th class="num">{{ a.chart_previous_year }} ({{ a.unit }})</th>
-              <th class="num">{{ ctx.lang.t("chart-cumulative-series") }}</th>
-              <th class="num">{{ ctx.lang.t("chart-forecast-series") }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for c in r.chart_rows %}
-            <tr>
-              <td>{{ c.label }}</td>
-              <td class="num">{{ c.current }}</td>
-              <td class="num">{{ c.previous }}</td>
-              <td class="num">{{ c.cumulative }}</td>
-              <td class="num">{{ c.forecast }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </details>
+      {% if let Some(n) = r.chart_notes.cumulative %}<p class="hint">{{ n }}</p>{% endif %}
+      {% call chart_table(r.chart_rows, r.chart_notes, a.chart_year, a.chart_previous_year, a.unit) %}{% endcall %}
     </div>
   </section>
   {% endfor %}

@@ -73,6 +73,9 @@ impl SeasonProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Forecast {
     pub period: Period,
+    /// Beginn des gemessenen Teils; liegt er nach `period.start`, ist der
+    /// Verbrauch davor geschätzt.
+    pub observed_from: NaiveDate,
     /// Tatsächlich gemessener Verbrauch im abgedeckten Teil.
     pub observed: Decimal,
     /// Hochgerechneter Gesamtverbrauch des Zeitraums.
@@ -81,26 +84,37 @@ pub struct Forecast {
     pub coverage: Decimal,
 }
 
-/// Rechnet den in `[period.start, observed_until)` gemessenen Verbrauch
-/// anhand des Saisonprofils auf den Gesamtzeitraum hoch.
+impl Forecast {
+    /// Der Verbrauch vor `observed_from` ist geschätzt.
+    #[must_use]
+    pub fn estimated_start(&self) -> bool {
+        self.observed_from > self.period.start
+    }
+}
+
+/// Rechnet den in `observed` (Teil von `period`) gemessenen Verbrauch
+/// `value` anhand des Saisonprofils auf den Gesamtzeitraum hoch; fehlende
+/// Teile vor und nach der Messung werden mit derselben Rate geschätzt.
 // @impl SPEC_FC_PERIOD_FORECAST
 #[must_use]
 pub fn project(
     period: Period,
-    observed_until: NaiveDate,
-    observed: Decimal,
+    observed: Period,
+    value: Decimal,
     profile: &SeasonProfile,
 ) -> Option<Forecast> {
-    let until = observed_until.clamp(period.start, period.end);
-    let covered = profile.weight(Period::new(period.start, until));
+    let from = observed.start.clamp(period.start, period.end);
+    let until = observed.end.clamp(from, period.end);
+    let covered = profile.weight(Period::new(from, until));
     let total = profile.weight(period);
     if covered.is_zero() || total.is_zero() {
         return None;
     }
     Some(Forecast {
         period,
-        observed,
-        projected_total: (observed * total / covered).round_dp(3),
+        observed_from: from,
+        observed: value,
+        projected_total: (value * total / covered).round_dp(3),
         coverage: (covered / total).round_dp(4),
     })
 }
@@ -117,15 +131,18 @@ mod tests {
     // @test SPEC_FC_PERIOD_FORECAST
     #[test]
     fn uniform_projection_scales_by_days() {
-        let f = project(
-            Period::year(2026),
-            d(7, 2),
-            dec!(1820),
-            &SeasonProfile::uniform(),
-        )
-        .unwrap();
+        let year = Period::year(2026);
+        let uniform = SeasonProfile::uniform();
+        let f = project(year, Period::new(d(1, 1), d(7, 2)), dec!(1820), &uniform).unwrap();
         // 182 von 365 Tagen gemessen
         assert_eq!(f.projected_total, dec!(3650));
+        assert!(!f.estimated_start());
+
+        // gemessen erst ab 01.04.: Beginn mit derselben Rate geschätzt
+        let f = project(year, Period::new(d(4, 1), d(7, 1)), dec!(910), &uniform).unwrap();
+        assert_eq!(f.projected_total, dec!(3650));
+        assert_eq!(f.coverage, dec!(0.2493));
+        assert!(f.estimated_start());
     }
 
     // @test SPEC_FC_SEASON_PROFILE
@@ -145,7 +162,13 @@ mod tests {
             .collect();
         let p = SeasonProfile::learn(&samples);
         assert!(p.weight(Period::month_of(d(1, 1))) > p.weight(Period::month_of(d(7, 1))));
-        let f = project(Period::year(2026), d(4, 1), dec!(600), &p).unwrap();
+        let f = project(
+            Period::year(2026),
+            Period::new(d(1, 1), d(4, 1)),
+            dec!(600),
+            &p,
+        )
+        .unwrap();
         // Q1 = 600 von 1500 Gesamtjahresgewicht
         assert_eq!(f.projected_total.round(), dec!(1500));
     }

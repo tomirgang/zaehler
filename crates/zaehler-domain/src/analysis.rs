@@ -1,6 +1,6 @@
 //! Vergleichsansicht und Prognose laufender Zeiträume.
 
-use chrono::{DateTime, Datelike, Months, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, Days, Months, NaiveDate, NaiveDateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ use crate::{
     consumption::Interval,
     forecast::{Forecast, SeasonProfile, project},
     period::{Period, Reference, reference_periods},
-    series::{MonthValue, covered_until, total_in},
+    series::{MonthValue, covered_from, covered_until, total_in},
 };
 
 /// Vergleiche eines Monats in der Reihenfolge der Anzeige.
@@ -113,8 +113,8 @@ pub fn year_to_date(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PeriodForecast {
     Projected(Forecast),
-    /// Keine Ablesung vor dem Zeitraumbeginn (Startwert fehlt)
-    MissingStart,
+    /// Die Ablesungen im Zeitraum umfassen keinen ganzen Tag
+    TooShort,
     /// Keine Ablesung nach dem Zeitraumbeginn
     NoReading,
 }
@@ -129,10 +129,12 @@ impl PeriodForecast {
     }
 }
 
-/// Prognose für einen laufenden Zeitraum: gemessen bis zum Beginn des Tages
-/// der letzten gemeinsamen Ablesung aller Register, hochgerechnet mit dem
-/// Saisonprofil.
-// @impl SPEC_FC_CURRENT_YEAR
+/// Prognose für einen laufenden Zeitraum: gemessen vom Zeitraumbeginn, oder
+/// vom Beginn des Tages nach der ersten gemeinsamen Ablesung aller Register,
+/// wenn diese im Zeitraum liegt, bis zum Beginn des Tages der letzten
+/// gemeinsamen Ablesung; hochgerechnet mit dem Saisonprofil. Ein Beginn ohne
+/// Ablesung wird mit derselben Rate geschätzt (SPEC_ANA_CUMULATIVE_ESTIMATE).
+// @impl SPEC_FC_CURRENT_YEAR, SPEC_ANA_CUMULATIVE_ESTIMATE
 #[must_use]
 pub fn forecast_period(
     registers: &[&[Interval]],
@@ -140,18 +142,27 @@ pub fn forecast_period(
     period: Period,
     profile: &SeasonProfile,
 ) -> PeriodForecast {
-    let Some(last) = covered_until(registers) else {
+    let (Some(first), Some(last)) = (covered_from(registers), covered_until(registers)) else {
         return PeriodForecast::NoReading;
     };
     let until = cal.local_date(last).min(period.end);
     if until <= period.start {
         return PeriodForecast::NoReading;
     }
-    let Some(observed) = total_in(registers, cal.start_of(period.start), cal.start_of(until))
-    else {
-        return PeriodForecast::MissingStart;
+    let first_day = cal.local_date(first);
+    let from = if cal.start_of(first_day) == first {
+        first_day
+    } else {
+        first_day + Days::new(1)
+    }
+    .max(period.start);
+    if from >= until {
+        return PeriodForecast::TooShort;
+    }
+    let Some(observed) = total_in(registers, cal.start_of(from), cal.start_of(until)) else {
+        return PeriodForecast::TooShort;
     };
-    project(period, until, observed, profile)
+    project(period, Period::new(from, until), observed, profile)
         .map_or(PeriodForecast::NoReading, PeriodForecast::Projected)
 }
 
@@ -290,13 +301,39 @@ mod tests {
             dec!(3650)
         );
 
+        // ohne Ablesung vor dem 01.01.: Januar mit der Rate ab 01.02. geschätzt
         let late = ivs(
             cal,
-            &[(d(2026, 2, 1), dec!(0)), (d(2026, 7, 2), dec!(1000))],
+            &[(d(2026, 2, 1), dec!(0)), (d(2026, 7, 2), dec!(1510))],
         );
+        let PeriodForecast::Projected(f) = forecast_period(&[&late], cal, year, &uniform) else {
+            panic!("Prognose mit geschätztem Beginn erwartet");
+        };
+        assert_eq!(f.observed_from, d(2026, 2, 1));
+        assert_eq!((f.observed, f.projected_total), (dec!(1510), dec!(3650)));
+        assert_eq!(projected_cumulative(&f, &uniform, d(2026, 2, 1)), dec!(310));
+        // Ablesung im Tagesverlauf: gemessen ab dem Folgetag
+        let midday = |date: NaiveDate, value| Reading {
+            at: cal.to_utc(date.and_hms_opt(9, 0, 0).unwrap()),
+            value,
+            device_id: Uuid::nil(),
+            rollover_digits: None,
+        };
+        let iv = intervals(&[
+            midday(d(2026, 2, 1), dec!(0)),
+            midday(d(2026, 7, 2), dec!(1510)),
+        ])
+        .unwrap();
+        let f = forecast_period(&[&iv], cal, year, &uniform);
+        assert_eq!(f.projected().unwrap().observed_from, d(2026, 2, 2));
+        let short = intervals(&[
+            midday(d(2026, 2, 1), dec!(0)),
+            midday(d(2026, 2, 2), dec!(10)),
+        ])
+        .unwrap();
         assert_eq!(
-            forecast_period(&[&late], cal, year, &uniform),
-            PeriodForecast::MissingStart
+            forecast_period(&[&short], cal, year, &uniform),
+            PeriodForecast::TooShort
         );
         let old = ivs(
             cal,

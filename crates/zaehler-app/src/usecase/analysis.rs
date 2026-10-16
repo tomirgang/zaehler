@@ -15,7 +15,7 @@ use zaehler_domain::{
     meter::Direction,
     period::Period,
     reading::Reading as DomainReading,
-    series::{MonthValue, covered_until, monthly, months_between, total_in},
+    series::{MonthValue, covered_until, monthly, monthly_split, months_between, total_in},
 };
 
 use crate::{
@@ -156,10 +156,20 @@ pub struct ChartData {
     pub year: i32,
     /// Monate des laufenden Jahres
     pub months: Vec<Period>,
+    /// Gemessen; bei teilweise abgedeckten Monaten der gemessene Anteil
     pub current: Vec<Option<Decimal>>,
+    /// Prognose der fehlenden Zeit teilweise abgedeckter Monate
+    pub current_projected: Vec<Option<Decimal>>,
     pub previous: Vec<Option<Decimal>>,
-    /// Kumulierter Verbrauch am Monatsende
+    pub previous_projected: Vec<Option<Decimal>>,
+    /// Kumulierter Verbrauch am Monatsende; enthält den geschätzten Beginn
+    /// bis `estimated_until`
     pub cumulative: Vec<Option<Decimal>>,
+    /// Geschätzter kumulierter Verbrauch vor der ersten Ablesung des Jahres,
+    /// angeschlossen an den ersten Messwert
+    pub estimate: Vec<Option<Decimal>>,
+    /// Beginn des gemessenen Teils, wenn der Jahresbeginn geschätzt ist
+    pub estimated_until: Option<NaiveDate>,
     /// Kumulierte Prognose am Monatsende, beginnend am letzten Messwert
     pub forecast: Vec<Option<Decimal>>,
 }
@@ -241,39 +251,71 @@ fn forecasts(
 }
 
 /// Monatswerte und kumulierter Verlauf des laufenden Jahres und des Vorjahres.
-// @impl SPEC_ANA_CHARTS
+// @impl SPEC_ANA_CHARTS, SPEC_ANA_PARTIAL_MONTHS, SPEC_ANA_CUMULATIVE_ESTIMATE
 fn chart_data(unit: &str, regs: &[&[Interval]], cal: Calendar, today: NaiveDate) -> ChartData {
     let year = today.year();
     let period = Period::year(year);
     let months = months_between(period.start, period.start + Months::new(11));
     let previous_months: Vec<Period> = months.iter().map(|m| m.shift_months(-12)).collect();
-    let values = |series: Vec<MonthValue>| series.into_iter().map(|m| m.value).collect();
     let year_start = cal.start_of(period.start);
+    let profile = SeasonProfile::uniform();
+    let projected = match forecast_period(regs, cal, period, &profile) {
+        PeriodForecast::Projected(f) => Some(f),
+        _ => None,
+    };
+    // ohne Ablesung am Jahresbeginn: Verbrauch bis `from` geschätzt
+    let estimated = projected.as_ref().filter(|f| f.estimated_start()).map(|f| {
+        (
+            f.observed_from,
+            projected_cumulative(f, &profile, f.observed_from),
+        )
+    });
     let cumulative: Vec<Option<Decimal>> = months
         .iter()
-        .map(|m| total_in(regs, year_start, cal.start_of(m.end)))
+        .map(|m| {
+            total_in(regs, year_start, cal.start_of(m.end)).or_else(|| {
+                let (from, base) = estimated.filter(|(from, _)| m.end >= *from)?;
+                total_in(regs, cal.start_of(from), cal.start_of(m.end)).map(|v| base + v)
+            })
+        })
         .collect();
-    let profile = SeasonProfile::uniform();
     let mut forecast = vec![None; months.len()];
-    if let PeriodForecast::Projected(f) = forecast_period(regs, cal, period, &profile)
+    let mut estimate = vec![None; months.len()];
+    if let Some(f) = &projected
         && let Some(until) = covered_until(regs).map(|t| cal.local_date(t))
     {
         let last_actual = cumulative.iter().rposition(Option::is_some);
         for (i, m) in months.iter().enumerate() {
             if m.end > until {
-                forecast[i] = Some(projected_cumulative(&f, &profile, m.end));
+                forecast[i] = Some(projected_cumulative(f, &profile, m.end));
             } else if Some(i) == last_actual {
                 forecast[i] = cumulative[i];
             }
+            if f.estimated_start() && m.end <= f.observed_from {
+                estimate[i] = Some(projected_cumulative(f, &profile, m.end));
+            }
+        }
+        // Schätzung an den ersten Messwert bzw. die Prognose anschließen
+        if let Some(last) = estimate.iter().rposition(Option::is_some)
+            && cumulative[last].is_none()
+            && let Some(next) = estimate.get_mut(last + 1)
+        {
+            *next = cumulative[last + 1].or(forecast[last + 1]);
         }
     }
+    let current = monthly_split(regs, &months, cal);
+    let previous = monthly_split(regs, &previous_months, cal);
     ChartData {
         unit: unit.to_owned(),
         year,
-        current: values(monthly(regs, &months, cal)),
-        previous: values(monthly(regs, &previous_months, cal)),
+        current: current.iter().map(|m| m.measured).collect(),
+        current_projected: current.iter().map(|m| m.projected).collect(),
+        previous: previous.iter().map(|m| m.measured).collect(),
+        previous_projected: previous.iter().map(|m| m.projected).collect(),
         months,
         cumulative,
+        estimate,
+        estimated_until: estimated.map(|(from, _)| from),
         forecast,
     }
 }

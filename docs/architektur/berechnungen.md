@@ -118,8 +118,10 @@ normiert. Fehlt ein Monat in der Historie, gilt die Gleichverteilung.
 :satisfies: REQ_FC_001, REQ_CAR_006
 
 `Prognose = gemessen · Gewicht(Zeitraum) / Gewicht(gemessener Teil)`. Der
-Abdeckungsgrad `Gewicht(gemessen) / Gewicht(Zeitraum)` wird mit ausgegeben.
-Ohne gemessenen Anteil gibt es keine Prognose.
+gemessene Teil ist ein Abschnitt des Zeitraums; fehlende Abschnitte davor
+und danach erhalten dieselbe Rate. Der Abdeckungsgrad
+`Gewicht(gemessen) / Gewicht(Zeitraum)` wird mit ausgegeben. Ohne
+gemessenen Anteil gibt es keine Prognose.
 ```
 
 ## Tarife und Kosten

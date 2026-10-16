@@ -210,7 +210,7 @@ umgesetzt mit Medien-, Port-, Anwendungsfall- und HTTP-Tests.
 :status: done
 :milestone: M3
 :depends: WP_MVP_05
-:covers: REQ_ANA_001, REQ_ANA_003, REQ_ANA_004, REQ_ANA_005, REQ_ANA_007, REQ_ANA_009, REQ_FC_001, SPEC_ANA_MONTHLY_SERIES, SPEC_ANA_REGISTER_AGG, SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR, SPEC_ANA_CHARTS, SPEC_ANA_REGISTER_CHARTS
+:covers: REQ_ANA_001, REQ_ANA_003, REQ_ANA_004, REQ_ANA_005, REQ_ANA_007, REQ_ANA_009, REQ_ANA_010, REQ_ANA_011, REQ_FC_001, SPEC_ANA_MONTHLY_SERIES, SPEC_ANA_REGISTER_AGG, SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR, SPEC_ANA_CHARTS, SPEC_ANA_REGISTER_CHARTS, SPEC_ANA_PARTIAL_MONTHS, SPEC_ANA_CUMULATIVE_ESTIMATE
 
 Domain-Module `series` und `analysis`, Anwendungsfälle `MeterAnalysis` und
 `MeterChartData`, Auswertungsbereich
@@ -227,7 +227,9 @@ Chromium mit der bestehenden Content-Security-Policy geprüft. ECharts wird
 abweichend vom Entwurf nur auf der Detailseite geladen, das Dashboard enthält
 im MVP keine Diagramme. Nachträglich aufgenommen: Prognose und Diagramme je
 Register ({need}`REQ_ANA_009`, {need}`SPEC_ANA_REGISTER_CHARTS`) mit
-Anwendungsfall- und HTTP-Test.
+Anwendungsfall- und HTTP-Test; teilweise abgedeckte Monate mit gestapelter
+Prognose ({need}`REQ_ANA_010`) und Jahresverlauf mit geschätztem Beginn
+({need}`REQ_ANA_011`) mit Domain-, Anwendungsfall- und HTTP-Test.
 ```
 
 ```{wp} Dashboard

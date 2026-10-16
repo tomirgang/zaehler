@@ -1232,6 +1232,92 @@ async fn meter_analysis_sums_registers_across_a_device_swap() {
     assert_eq!(a.month.unwrap().start.month(), 4);
 }
 
+// @test SPEC_ANA_PARTIAL_MONTHS, SPEC_ANA_CUMULATIVE_ESTIMATE
+#[tokio::test]
+async fn charts_project_partial_months_and_estimate_the_start_of_the_year() {
+    use zaehler_domain::analysis::PeriodForecast;
+    let (uc, tenant, clock) = setup().await;
+    clock.advance(berlin_day(2026, 10, 16) - clock.now());
+    // 10 km je Tag vom 21.04. bis 21.09.2026, keine Ablesung davor
+    let mut input = meter_input("Auto");
+    input.start_at = berlin_day(2026, 4, 21);
+    input.registers.truncate(1);
+    input.registers[0].start_value = Some(dec!(0));
+    let id = uc.create_meter.execute(&tenant, input).await.unwrap();
+    let register = uc
+        .get_meter
+        .execute(&tenant, id)
+        .await
+        .unwrap()
+        .aggregate
+        .registers[0]
+        .id;
+    let reading = ReadingsInput {
+        meter_id: id,
+        at: berlin_day(2026, 9, 21),
+        values: vec![(register, dec!(1530))],
+        note: None,
+    };
+    uc.record_readings
+        .execute(&tenant, &reading, true, ReadingSource::Manual)
+        .await
+        .unwrap();
+
+    let a = uc.meter_analysis.execute(&tenant, id, None).await.unwrap();
+    let PeriodForecast::Projected(f) = &a.forecasts[0].forecast else {
+        panic!("Prognose mit geschätztem Beginn erwartet");
+    };
+    assert!(f.estimated_start());
+    assert_eq!((f.observed, f.projected_total), (dec!(1530), dec!(3650)));
+
+    let c = &a.chart;
+    // Monatsbalken: April und September gemessen und prognostiziert
+    assert_eq!((c.current[2], c.current_projected[2]), (None, None), "März");
+    assert_eq!(
+        (c.current[3], c.current_projected[3]),
+        (Some(dec!(100)), Some(dec!(200)))
+    );
+    assert_eq!(
+        (c.current[4], c.current_projected[4]),
+        (Some(dec!(310)), None)
+    );
+    assert_eq!(
+        (c.current[8], c.current_projected[8]),
+        (Some(dec!(200)), Some(dec!(100)))
+    );
+    assert_eq!(
+        (c.current[9], c.current_projected[9]),
+        (None, None),
+        "Oktober"
+    );
+    // Jahresverlauf: Beginn bis 21.04. geschätzt, dann gemessen, dann Prognose
+    assert_eq!(
+        c.estimated_until,
+        chrono::NaiveDate::from_ymd_opt(2026, 4, 21)
+    );
+    assert_eq!(c.estimate[0], Some(dec!(310)));
+    assert_eq!(c.estimate[2], Some(dec!(900)));
+    assert_eq!(c.cumulative[2], None);
+    assert_eq!(
+        c.cumulative[3],
+        Some(dec!(1200)),
+        "1100 geschätzt + 100 gemessen"
+    );
+    assert_eq!(
+        c.estimate[3], c.cumulative[3],
+        "Anschluss an den ersten Messwert"
+    );
+    assert_eq!(c.estimate[4], None);
+    assert_eq!(c.cumulative[7], Some(dec!(2430)));
+    assert_eq!(
+        c.forecast[7],
+        Some(dec!(2430)),
+        "Anschluss an den letzten Messwert"
+    );
+    assert_eq!(c.forecast[8], Some(dec!(2730)));
+    assert_eq!(c.forecast[11], Some(dec!(3650)));
+}
+
 // @test SPEC_UI_DASHBOARD
 #[tokio::test]
 async fn dashboard_lists_overdue_meters_first() {

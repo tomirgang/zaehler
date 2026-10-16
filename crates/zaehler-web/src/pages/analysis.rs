@@ -14,7 +14,9 @@ use serde_json::json;
 use zaehler_app::{
     AppError,
     ids::MeterId,
-    usecase::analysis::{Analysis, ChartData, ForecastScope, MeterCharts, ScopedForecast},
+    usecase::analysis::{
+        Analysis, ChartData, ForecastScope, MeterCharts, RegisterSeries, ScopedForecast,
+    },
 };
 use zaehler_domain::{
     analysis::{MonthComparison, PeriodForecast, YearToDate},
@@ -61,14 +63,31 @@ pub struct ForecastView {
     pub projected: String,
     pub coverage: String,
     pub hint: Option<String>,
+    /// Hinweis auf einen geschätzten Zeitraumbeginn
+    pub note: Option<String>,
 }
 
 pub struct ChartRow {
     pub label: String,
     pub current: String,
+    pub current_projected: String,
     pub previous: String,
+    pub previous_projected: String,
     pub cumulative: String,
+    pub estimate: String,
     pub forecast: String,
+}
+
+/// Spalten und Hinweise der Diagramme, die nur bei Schätzungen erscheinen
+/// (SPEC_ANA_PARTIAL_MONTHS, SPEC_ANA_CUMULATIVE_ESTIMATE).
+pub struct ChartNotes {
+    pub has_projected: bool,
+    /// Spaltenköpfe der Prognose für laufendes Jahr und Vorjahr
+    pub projected_current: String,
+    pub projected_previous: String,
+    pub has_estimate: bool,
+    pub monthly: Option<String>,
+    pub cumulative: Option<String>,
 }
 
 /// Prognosen und Diagramme eines Registers (SPEC_ANA_REGISTER_CHARTS).
@@ -80,6 +99,7 @@ pub struct RegisterView {
     pub chart_title_monthly: String,
     pub chart_title_cumulative: String,
     pub chart_rows: Vec<ChartRow>,
+    pub chart_notes: ChartNotes,
 }
 
 /// View-Modell des Auswertungsbereichs.
@@ -101,7 +121,10 @@ pub struct AnalysisView {
     pub chart_year: i32,
     pub chart_previous_year: i32,
     pub chart_rows: Vec<ChartRow>,
-    /// Nur bei mehreren Registern
+    pub chart_notes: ChartNotes,
+    /// Quelle der Monatswerte, nur bei mehreren Registern
+    pub chart_source: Option<String>,
+    /// Nur bei mehreren Registern, ohne das alleinige Quellregister
     pub register_views: Vec<RegisterView>,
 }
 
@@ -179,13 +202,20 @@ fn forecast_view(lang: Lang, f: &ScopedForecast, places: u8) -> ForecastView {
             projected: format::decimal(lang, p.projected_total, places),
             coverage: format::percent(lang, p.coverage, 0),
             hint: None,
+            note: p.estimated_start().then(|| {
+                lang.ta(
+                    "forecast-estimated_start",
+                    &[("from", format::date(lang, p.observed_from))],
+                )
+            }),
         },
-        PeriodForecast::MissingStart => ForecastView {
+        PeriodForecast::TooShort => ForecastView {
             label,
             observed: String::new(),
             projected: String::new(),
             coverage: String::new(),
-            hint: Some(lang.t("forecast-missing_start")),
+            hint: Some(lang.t("forecast-too_short")),
+            note: None,
         },
         PeriodForecast::NoReading => ForecastView {
             label,
@@ -193,6 +223,7 @@ fn forecast_view(lang: Lang, f: &ScopedForecast, places: u8) -> ForecastView {
             projected: String::new(),
             coverage: String::new(),
             hint: Some(lang.t("forecast-no_reading")),
+            note: None,
         },
     }
 }
@@ -269,6 +300,8 @@ pub fn view(lang: Lang, a: &Analysis) -> AnalysisView {
         chart_year: chart.year,
         chart_previous_year: chart.year - 1,
         chart_rows: chart_rows(lang, chart, places),
+        chart_notes: chart_notes(lang, chart),
+        chart_source: if multi { chart_source(lang, a) } else { None },
         register_views: if multi {
             register_views(lang, a, places)
         } else {
@@ -277,11 +310,55 @@ pub fn view(lang: Lang, a: &Analysis) -> AnalysisView {
     }
 }
 
-/// Prognosen und Diagramme je Register (SPEC_ANA_REGISTER_CHARTS).
+/// Register, aus denen die Werte der Messstelle stammen (Richtung `primary`).
+fn source_registers(a: &Analysis) -> Vec<&RegisterSeries> {
+    a.registers
+        .iter()
+        .filter(|r| r.register.data.direction == a.primary)
+        .collect()
+}
+
+/// Quelle der Monatswerte der Messstelle: ein Register oder die Summe mehrerer.
+fn chart_source(lang: Lang, a: &Analysis) -> Option<String> {
+    let sources = source_registers(a);
+    let direction = lang.t(&format!("direction-{}", a.primary.as_str()));
+    match sources.as_slice() {
+        [] => None,
+        [r] => Some(lang.ta(
+            "chart-source-register",
+            &[
+                ("code", r.register.data.code.clone()),
+                ("direction", direction),
+            ],
+        )),
+        all => Some(
+            lang.ta(
+                "chart-source-sum",
+                &[
+                    (
+                        "codes",
+                        all.iter()
+                            .map(|r| r.register.data.code.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                    ("direction", direction),
+                ],
+            ),
+        ),
+    }
+}
+
+/// Prognosen und Diagramme je Register (SPEC_ANA_REGISTER_CHARTS). Ein
+/// Register, das allein die Werte der Messstelle liefert, entfällt; die
+/// Messstelle nennt es als Quelle (`chart_source`).
 fn register_views(lang: Lang, a: &Analysis, places: u8) -> Vec<RegisterView> {
+    let sources = source_registers(a);
+    let redundant = |r: &RegisterSeries| sources.len() == 1 && std::ptr::eq(sources[0], r);
     a.registers
         .iter()
         .enumerate()
+        .filter(|(_, r)| !redundant(r))
         .map(|(index, r)| {
             let args = [
                 ("code", r.register.data.code.clone()),
@@ -312,6 +389,7 @@ fn register_views(lang: Lang, a: &Analysis, places: u8) -> Vec<RegisterView> {
                     ("year", r.chart.year.to_string()),
                 ),
                 chart_rows: chart_rows(lang, &r.chart, places),
+                chart_notes: chart_notes(lang, &r.chart),
             }
         })
         .collect()
@@ -327,6 +405,26 @@ fn monthly_title(lang: Lang, chart: &ChartData) -> String {
     )
 }
 
+/// Hinweise zu geschätzten Werten der Diagramme.
+fn chart_notes(lang: Lang, chart: &ChartData) -> ChartNotes {
+    let has_projected = chart
+        .current_projected
+        .iter()
+        .chain(&chart.previous_projected)
+        .any(Option::is_some);
+    let projected = |year: i32| lang.ta("chart-projected-series", &[("year", year.to_string())]);
+    ChartNotes {
+        has_projected,
+        projected_current: projected(chart.year),
+        projected_previous: projected(chart.year - 1),
+        has_estimate: chart.estimate.iter().any(Option::is_some),
+        monthly: has_projected.then(|| lang.t("chart-projected-note")),
+        cumulative: chart
+            .estimated_until
+            .map(|from| lang.ta("chart-estimate-note", &[("from", format::date(lang, from))])),
+    }
+}
+
 /// Diagrammwerte als Tabelle (Alternative zu den Diagrammen).
 fn chart_rows(lang: Lang, chart: &ChartData, places: u8) -> Vec<ChartRow> {
     chart
@@ -336,8 +434,11 @@ fn chart_rows(lang: Lang, chart: &ChartData, places: u8) -> Vec<ChartRow> {
         .map(|(i, m)| ChartRow {
             label: format::month_short(lang, m.start),
             current: opt(lang, chart.current[i], places),
+            current_projected: opt(lang, chart.current_projected[i], places),
             previous: opt(lang, chart.previous[i], places),
+            previous_projected: opt(lang, chart.previous_projected[i], places),
             cumulative: opt(lang, chart.cumulative[i], places),
+            estimate: opt(lang, chart.estimate[i], places),
             forecast: opt(lang, chart.forecast[i], places),
         })
         .collect()
@@ -432,15 +533,24 @@ fn series_json(lang: Lang, c: &ChartData) -> serde_json::Value {
         "labels": c.months.iter().map(|m| format::month_short(lang, m.start)).collect::<Vec<_>>(),
         "series": {
             "current": { "name": c.year.to_string(), "data": numbers(&c.current) },
+            "current_projected": {
+                "name": lang.ta("chart-projected-series", &[("year", c.year.to_string())]),
+                "data": numbers(&c.current_projected),
+            },
             "previous": { "name": (c.year - 1).to_string(), "data": numbers(&c.previous) },
+            "previous_projected": {
+                "name": lang.ta("chart-projected-series", &[("year", (c.year - 1).to_string())]),
+                "data": numbers(&c.previous_projected),
+            },
             "cumulative": { "name": lang.t("chart-cumulative-series"), "data": numbers(&c.cumulative) },
+            "estimate": { "name": lang.t("chart-estimate-series"), "data": numbers(&c.estimate) },
             "forecast": { "name": lang.t("chart-forecast-series"), "data": numbers(&c.forecast) },
         },
     })
 }
 
 /// `GET /meters/{id}/chart.json`
-// @impl SPEC_ANA_CHARTS
+// @impl SPEC_ANA_CHARTS, SPEC_ANA_PARTIAL_MONTHS, SPEC_ANA_CUMULATIVE_ESTIMATE
 pub async fn chart(
     State(state): State<WebState>,
     ctx: Ctx,

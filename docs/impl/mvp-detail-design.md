@@ -543,11 +543,16 @@ Prognose für das laufende Kalenderjahr und, falls an der Messstelle ein
 Beginn des Abrechnungsjahres hinterlegt ist, für das laufende Abrechnungsjahr.
 Gemessen = Verbrauch vom Zeitraumbeginn bis zum Beginn des Tages der letzten
 gemeinsamen Ablesung aller Register (`analysis::forecast_period`), damit
-Messung und Gewichtung dieselben ganzen Tage umfassen; Prognose über
+Messung und Gewichtung dieselben ganzen Tage umfassen; liegt die erste
+gemeinsame Ablesung im Zeitraum, beginnt der gemessene Teil am Beginn des
+Folgetags (bzw. am Tag der Ablesung, wenn sie um 0:00 Uhr liegt) und der
+Beginn wird geschätzt ({need}`SPEC_ANA_CUMULATIVE_ESTIMATE`). Prognose über
 `forecast::project` mit `SeasonProfile::uniform()` (das gelernte Profil folgt
-mit {need}`REQ_ANA_002`, v1). Ausgabe: gemessen, Prognose, Abdeckungsgrad.
-Ohne Ablesung nach dem Zeitraumbeginn bzw. ohne Ablesung vor dem
-Zeitraumbeginn (Startwert fehlt) entfällt die Prognose mit Hinweis.
+mit {need}`REQ_ANA_002`, v1). Ausgabe: gemessen, Prognose, Abdeckungsgrad,
+bei geschätztem Beginn der Hinweis „Gemessen ab …, Verbrauch davor
+geschätzt“. Ohne Ablesung nach dem Zeitraumbeginn entfällt die Prognose mit
+Hinweis, ebenso wenn die Ablesungen im Zeitraum keinen ganzen Tag umfassen
+(`PeriodForecast::TooShort`).
 ```
 
 ```{spec} Diagramme
@@ -563,10 +568,12 @@ Detailseite, das Dashboard enthält keine Diagramme), auch nach
 HTMX-Seitenwechseln und Wiederherstellung aus dem Verlauf. Es lädt JSON von
 `GET /meters/{id}/chart.json` (Monatsnamen in der Sprache des Nutzers, Werte
 auf 3 Stellen gerundet) und rendert: (1) Monatsbalken laufendes Jahr
-und Vorjahr nebeneinander, unvollständige Monate leer; (2) kumulierter
-Jahresverlauf als Linie, Prognose gestrichelt bis Jahresende
-(`analysis::projected_cumulative`, beginnend am letzten Monatsende mit
-Messwert). Kein Inline-Skript; Farben über CSS-Variablen ausgelesen; bei
+und Vorjahr nebeneinander, teilweise abgedeckte Monate nach
+{need}`SPEC_ANA_PARTIAL_MONTHS`, nicht abgedeckte Monate leer; (2)
+kumulierter Jahresverlauf als Linie, geschätzter Beginn nach
+{need}`SPEC_ANA_CUMULATIVE_ESTIMATE` gepunktet, Prognose gestrichelt bis
+Jahresende (`analysis::projected_cumulative`, beginnend am letzten
+Monatsende mit Messwert). Kein Inline-Skript; Farben über CSS-Variablen ausgelesen; bei
 `prefers-reduced-motion` ohne Animation. Unter den Diagrammen steht dieselbe
 Information als Tabelle (`<details>`); schlägt das Laden fehl, bleiben nur
 die Tabellen. Der Tooltip wird als DOM mit CSS-Klassen erzeugt, da die
@@ -588,11 +595,64 @@ Prognosen ({need}`SPEC_FC_CURRENT_YEAR`) und Diagrammdaten
 der Messstelle (`main`) und, bei mehr als einem Register, je Register
 (`registers`). `chart.json` enthält die Daten der Messstelle wie bisher und
 zusätzlich `registers` (Code und Reihen je Register, sonst leer). Die
-Detailseite zeigt bei mehreren Registern den Abschnitt „Auswertung je
-Register“ mit Prognosetabelle, Monats- und Verlaufsdiagramm sowie
-Tabellenalternative je Register; die Diagrammcontainer tragen
-`data-register` (Position in `registers`). `charts.js` ruft `chart.json` je
+Detailseite nennt bei mehreren Registern unter den Monatswerten der
+Messstelle deren Quelle: das einzige Register der Hauptrichtung
+(`Analysis.primary`) oder die Summe der Register dieser Richtung. Der
+Abschnitt „Auswertung je Register“ zeigt Prognosetabelle, Monats- und
+Verlaufsdiagramm sowie Tabellenalternative je Register; ein Register, das
+allein die Werte der Messstelle liefert (z.B. 1.8.0 neben 2.8.0), entfällt
+dort, da seine Werte mit denen der Messstelle übereinstimmen. Die
+Diagrammcontainer tragen `data-register` (Position in `registers`). `charts.js` ruft `chart.json` je
 Seite einmal ab.
+```
+
+```{spec} Teilweise abgedeckte Monate
+:id: SPEC_ANA_PARTIAL_MONTHS
+:status: implemented
+:satisfies: REQ_ANA_010
+:links: SPEC_ANA_CHARTS, SPEC_CONS_INTERPOLATION
+
+`series::monthly_split(registers, months, calendar) -> Vec<MonthSplit>` mit
+`MonthSplit { month, measured, projected }`. Vollständig abgedeckte Monate
+liefern `measured` wie `series::monthly`. Für andere Monate gilt der
+Schnitt aus Monat und gemeinsam abgedecktem Zeitraum aller Register
+(`covered_from` bis `covered_until`); ist er nicht leer, ist `measured` der
+interpolierte Verbrauch darin und
+`projected = measured · (Monatsdauer - abgedeckte Dauer) / abgedeckte Dauer`
+(sekundengenau, Monatsgrenzen in der Zeitzone des Haushalts, auf 3 Stellen
+gerundet). `ChartData` enthält `current`/`previous` (gemessen) und
+`current_projected`/`previous_projected`; `chart.json` die Reihen
+`current_projected` und `previous_projected` mit dem Namen „JJJJ Prognose“.
+`charts.js` stapelt je Jahr gemessen und Prognose (`stack`), die Prognose
+in der Farbe des Jahres mit geringerer Deckkraft und Schraffur (ECharts
+`decal`); Prognosereihen erscheinen nur, wenn sie Werte haben, und der
+Tooltip zeigt sie nur in Monaten mit Wert. Ein Hinweis unter dem Diagramm
+erklärt die Darstellung; die Tabellenalternative erhält je Jahr eine Spalte
+„Prognose“. `series::monthly` und damit Vergleiche, Bezugsmonate und
+Monatstabelle bleiben unverändert.
+```
+
+```{spec} Jahresverlauf mit geschätztem Beginn
+:id: SPEC_ANA_CUMULATIVE_ESTIMATE
+:status: implemented
+:satisfies: REQ_ANA_011
+:links: SPEC_ANA_CHARTS, SPEC_FC_CURRENT_YEAR, SPEC_FC_PERIOD_FORECAST
+
+`forecast_period` misst ab dem Beginn des Tages nach der ersten gemeinsamen
+Ablesung, wenn diese im Zeitraum liegt (`Forecast.observed_from`,
+`Forecast::estimated_start`); `forecast::project` rechnet den gemessenen
+Teil mit derselben Rate auf den Zeitraum hoch, sodass geschätzter Beginn,
+Messung und Prognose dieselbe Rate verwenden. `chart_data` bildet daraus:
+`cumulative` am Monatsende = `projected_cumulative(observed_from)` +
+gemessener Verbrauch ab `observed_from`; `estimate` =
+`projected_cumulative(Monatsende)` für Monate, die bis `observed_from`
+enden, angeschlossen an den ersten Messwert (oder, ohne vollständigen
+Messmonat, an die Prognose); `estimated_until` = `observed_from`.
+`chart.json` enthält die Reihe `estimate` („Geschätzt“), `charts.js` zeichnet
+sie gepunktet, die Prognose gestrichelt. Ein Hinweis unter dem Diagramm
+nennt den Beginn des gemessenen Zeitraums; die Tabellenalternative erhält
+die Spalte „Geschätzt“. Liegt eine Ablesung am oder vor dem Jahresbeginn
+vor, entfällt die Schätzung.
 ```
 
 ### Dashboard, PWA, Import

@@ -2,7 +2,7 @@
 // nachgeladen; ohne JavaScript bleiben die Tabellen unter den Diagrammen.
 "use strict";
 
-// @impl SPEC_ANA_CHARTS
+// @impl SPEC_ANA_CHARTS, SPEC_ANA_PARTIAL_MONTHS, SPEC_ANA_CUMULATIVE_ESTIMATE
 (() => {
   let loading = null;
   const charts = new Set();
@@ -38,7 +38,11 @@
     head.className = "chart-tip-head";
     head.textContent = params[0]?.axisValueLabel ?? "";
     box.append(head);
+    // Prognose- und Schätzreihen nur in Monaten mit Wert
     params.forEach((p) => {
+      if (p.value == null && String(p.seriesId).endsWith("-estimate")) {
+        return;
+      }
       const row = document.createElement("div");
       row.className = "chart-tip-row";
       const mark = document.createElement("span");
@@ -87,37 +91,85 @@
     };
   }
 
+  const present = (series) => series?.data?.some((v) => v != null);
+
+  // Schraffur für prognostizierte Anteile (SPEC_ANA_PARTIAL_MONTHS)
+  const hatch = {
+    symbol: "rect",
+    symbolSize: 1,
+    dashArrayX: [1, 0],
+    dashArrayY: [2, 4],
+    rotation: -Math.PI / 4,
+    color: "rgba(255, 255, 255, 0.75)",
+  };
+
   const builders = {
-    // Monatsbalken laufendes Jahr und Vorjahr; unvollständige Monate bleiben leer
+    // Monatsbalken laufendes Jahr und Vorjahr; teilweise abgedeckte Monate
+    // als gemessener Anteil mit gestapelter, schraffierter Prognose
+    // (SPEC_ANA_PARTIAL_MONTHS); nicht abgedeckte Monate bleiben leer
     monthly(data) {
       const s = data.series;
-      return {
-        ...base(data),
-        color: [css("--accent"), css("--muted")],
-        series: [
-          { type: "bar", name: s.current.name, data: s.current.data },
-          { type: "bar", name: s.previous.name, data: s.previous.data },
-        ],
-      };
+      const colors = { current: css("--accent"), previous: css("--muted") };
+      const series = [];
+      ["current", "previous"].forEach((key) => {
+        const color = colors[key];
+        series.push({
+          id: key,
+          type: "bar",
+          stack: key,
+          name: s[key].name,
+          data: s[key].data,
+          itemStyle: { color },
+        });
+        const projected = s[`${key}_projected`];
+        if (present(projected)) {
+          series.push({
+            id: `${key}-estimate`,
+            type: "bar",
+            stack: key,
+            name: projected.name,
+            data: projected.data,
+            itemStyle: { color, opacity: 0.55, decal: hatch },
+          });
+        }
+      });
+      return { ...base(data), series };
     },
-    // Kumulierter Verlauf, Prognose gestrichelt bis Jahresende
+    // Kumulierter Verlauf, geschätzter Jahresbeginn gepunktet
+    // (SPEC_ANA_CUMULATIVE_ESTIMATE), Prognose gestrichelt bis Jahresende
     cumulative(data) {
       const s = data.series;
       const accent = css("--accent");
-      return {
-        ...base(data),
-        color: [accent, accent],
-        series: [
-          { type: "line", name: s.cumulative.name, data: s.cumulative.data, symbolSize: 6 },
-          {
-            type: "line",
-            name: s.forecast.name,
-            data: s.forecast.data,
-            symbol: "none",
-            lineStyle: { type: "dashed" },
-          },
-        ],
-      };
+      const series = [
+        {
+          type: "line",
+          name: s.cumulative.name,
+          data: s.cumulative.data,
+          symbolSize: 6,
+          itemStyle: { color: accent },
+        },
+      ];
+      if (present(s.estimate)) {
+        series.push({
+          id: "cumulative-estimate",
+          type: "line",
+          name: s.estimate.name,
+          data: s.estimate.data,
+          symbol: "none",
+          itemStyle: { color: accent },
+          lineStyle: { type: "dotted", width: 2 },
+        });
+      }
+      series.push({
+        id: "forecast-estimate",
+        type: "line",
+        name: s.forecast.name,
+        data: s.forecast.data,
+        symbol: "none",
+        itemStyle: { color: accent },
+        lineStyle: { type: "dashed" },
+      });
+      return { ...base(data), series };
     },
   };
 
