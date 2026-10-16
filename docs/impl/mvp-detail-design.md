@@ -238,7 +238,7 @@ AI-Konfiguration verdrahtet `zaehler-server` keinen Recognizer, und
 | `ConfirmDraft` | Blob umkopieren, Ablesung mit `source=photo` speichern, Entwurf abschließen, `commit`, Entwurfsblob löschen | {need}`SPEC_AI_DRAFTS` |
 | `DiscardDraft` | Entwurf verwerfen, Blob löschen | {need}`SPEC_AI_DRAFTS` |
 | `MeterAnalysis` | Ablesungen laden, Domain-Funktionen, Ergebnisobjekt | {need}`SPEC_ANA_COMPARE_VIEW`, {need}`SPEC_FC_CURRENT_YEAR` |
-| `MeterChartData` | Monatsserien laufendes Jahr und Vorjahr, kumuliert mit Prognose | {need}`SPEC_ANA_CHARTS` |
+| `MeterChartData` | Monatsserien laufendes Jahr und Vorjahr, kumuliert mit Prognose, gesamt und je Register | {need}`SPEC_ANA_CHARTS`, {need}`SPEC_ANA_REGISTER_CHARTS` |
 | `Dashboard` | je Messstelle letzter Stand, Prognose, Vergleich Vormonat, Fälligkeit | {need}`SPEC_UI_DASHBOARD` |
 | `UploadCsv`, `PreviewImport`, `CommitImport` | siehe {need}`SPEC_IMP_CSV_FORMAT` | {need}`SPEC_IMP_CSV` |
 | `Housekeeping` | siehe {need}`SPEC_OPS_HOUSEKEEPING` | {need}`SPEC_OPS_HOUSEKEEPING` |
@@ -268,9 +268,10 @@ mit CSRF-Token.
 
 Rechts in der Titelleiste steht ein umrandeter Bereich mit der Bezeichnung
 „Haushalt“ und dem Namen des aktiven Haushalts (fett); bei mehreren
-Haushalten an seiner Stelle die Auswahl zum Wechseln. Ownern zeigt der Bereich
-den Link „Umbenennen“ zu `/settings#household`, wo `UpdateHousehold` Name und
-Zeitzone speichert (`POST /settings/household`). Der angemeldete Nutzer steht
+Haushalten an seiner Stelle die Auswahl zum Wechseln. Umbenannt wird
+ausschließlich in den Einstellungen im Abschnitt `/settings#household`, wo
+`UpdateHousehold` Name und Zeitzone speichert (`POST /settings/household`);
+die Titelleiste enthält dafür keinen eigenen Link. Der angemeldete Nutzer steht
 getrennt davon als „Angemeldet als {Name}“. Da `ResolveTenant` die Haushalte
 bei jedem Request lädt, zeigt die Titelleiste einen geänderten Namen ab der
 nächsten Seite.
@@ -290,7 +291,7 @@ diesen Weg.
 
 ```{spec} Haushalt vollständig löschen
 :id: SPEC_PRIV_HOUSEHOLD_DELETE
-:status: draft
+:status: implemented
 :satisfies: REQ_NFR_004
 
 Owner löschen einen Haushalt nach Eingabe des Haushaltsnamens als
@@ -356,7 +357,7 @@ Werte eingeben → Speichern (drei Interaktionen).
 
 ```{spec} Ablesung löschen
 :id: SPEC_RDG_DELETE
-:status: draft
+:status: implemented
 :links: REQ_RDG_003
 
 Löschen einer einzelnen Ablesung (Rolle `member`) nach Bestätigung, inklusive
@@ -568,7 +569,30 @@ Jahresverlauf als Linie, Prognose gestrichelt bis Jahresende
 Messwert). Kein Inline-Skript; Farben über CSS-Variablen ausgelesen; bei
 `prefers-reduced-motion` ohne Animation. Unter den Diagrammen steht dieselbe
 Information als Tabelle (`<details>`); schlägt das Laden fehl, bleiben nur
-die Tabellen.
+die Tabellen. Der Tooltip wird als DOM mit CSS-Klassen erzeugt, da die
+Content-Security-Policy die Inline-Styles des Standard-Tooltips von ECharts
+blockiert (fehlender Abstand zwischen Reihenname und Wert, fehlende
+Farbmarke).
+```
+
+```{spec} Prognose und Diagramme je Register
+:id: SPEC_ANA_REGISTER_CHARTS
+:status: implemented
+:satisfies: REQ_ANA_009
+:links: SPEC_ANA_CHARTS, SPEC_FC_CURRENT_YEAR, SPEC_ANA_REGISTER_AGG
+
+`MeterAnalysis` berechnet für jedes Register mit dessen Intervallen dieselben
+Prognosen ({need}`SPEC_FC_CURRENT_YEAR`) und Diagrammdaten
+({need}`SPEC_ANA_CHARTS`) wie für die Messstelle (`RegisterSeries.forecasts`,
+`RegisterSeries.chart`). `MeterChartData` liefert `MeterCharts` mit den Daten
+der Messstelle (`main`) und, bei mehr als einem Register, je Register
+(`registers`). `chart.json` enthält die Daten der Messstelle wie bisher und
+zusätzlich `registers` (Code und Reihen je Register, sonst leer). Die
+Detailseite zeigt bei mehreren Registern den Abschnitt „Auswertung je
+Register“ mit Prognosetabelle, Monats- und Verlaufsdiagramm sowie
+Tabellenalternative je Register; die Diagrammcontainer tragen
+`data-register` (Position in `registers`). `charts.js` ruft `chart.json` je
+Seite einmal ab.
 ```
 
 ### Dashboard, PWA, Import
@@ -589,16 +613,25 @@ Verweis auf „Messstelle anlegen“ und „CSV-Import“. Die Ampel
 
 ```{spec} Progressive Web App
 :id: SPEC_UI_PWA
-:status: draft
+:status: implemented
 :satisfies: REQ_NFR_001
 
-`GET /manifest.webmanifest` (Name, Kurzname, `display: standalone`,
-`start_url: /`, Theme-Farben, Icons 192/512 px und maskable). `GET /sw.js`
-registriert einen Service Worker ohne Offline-Cache (Netzwerk-Durchreichung);
-Offline-Betrieb ist nicht Teil des MVP. Layout ab 360 px Breite ohne
-horizontales Scrollen, Bedienelemente mindestens 44 px hoch. Foto-Erfassung
-über `<input type="file" accept="image/jpeg,image/png,image/webp"
-capture="environment">`.
+`GET /manifest.webmanifest` (Name und Beschreibung in der Sprache aus
+`Accept-Language`, `display: standalone`, `start_url` und `scope` `/`,
+Theme- und Hintergrundfarbe, Icons 192 und 512 px sowie 512 px maskable unter
+dem versionierten Pfad der statischen Dateien). Beide Layouts verweisen auf
+Manifest, SVG-Icon und `apple-touch-icon` (180 px); die Icons erzeugt
+`crates/zaehler-web/tools/make_icons.py`. `GET /sw.js` liefert einen Service
+Worker ohne `fetch`-Handler und ohne Cache: Anfragen gehen unverändert an den
+Server; Offline-Betrieb ist nicht Teil des MVP. `app.js` registriert ihn.
+Layout ab 360 px Breite ohne horizontales Scrollen (Tabellen scrollen in
+sich), Bedienelemente mindestens 44 px hoch (Buttons, Eingabefelder,
+Navigation, Links in Aktionsleisten). Foto-Erfassung über
+`<input type="file" accept="image/jpeg,image/png,image/webp" multiple>`;
+abweichend vom Entwurf ohne `capture="environment"`, da das Attribut auf
+Mobilgeräten direkt die Kamera öffnet und die Auswahl mehrerer Fotos aus der
+Galerie verhindert ({need}`REQ_AI_008`). Die Auswahl bietet Kamera und
+Galerie an.
 ```
 
 ```{spec} CSV-Format und Import-Ablauf
@@ -859,7 +892,7 @@ Ende der Phase mindestens einen Test.
 
 ```{spec} Leistungsbudget
 :id: SPEC_PERF_BUDGET
-:status: draft
+:status: implemented
 :satisfies: REQ_NFR_006
 
 Seed-Daten: ein Haushalt, 20 Messstellen mit je 2 Registern, 10 Jahre
@@ -867,7 +900,9 @@ monatliche Ablesungen (4 800 Ablesungen). Messung im Release-Build gegen
 SQLite und PostgreSQL, je 200 Requests nach Aufwärmen: Dashboard,
 Auswertungsseite und `chart.json` mit p95 < 300 ms serverseitig. Der Test
 läuft in der CI als eigener Job und meldet die Werte; eine Überschreitung
-lässt den Job fehlschlagen.
+lässt den Job fehlschlagen. Umsetzung: `crates/zaehler-server/src/perf_tests.rs`
+(Seed über die Anwendungsfälle, Messung über den vollständigen Router mit
+allen Adaptern; `cargo test --release -p zaehler-server perf_ -- --ignored`).
 ```
 
 ## Vorbereitung v1

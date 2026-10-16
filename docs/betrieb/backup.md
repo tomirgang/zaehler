@@ -57,10 +57,32 @@ neueren Version enthält.
 
 ## PostgreSQL / CNPG
 
-CNPG sichert per Barman Cloud (Plugin) in einen Objektspeicher inkl. WAL-Archiv
-(Point-in-Time-Recovery). Die Konfiguration erfolgt am `Cluster`-Objekt; das
-Chart wird dafür Werte bereitstellen (offen). Wiederherstellung über einen neuen
-Cluster mit `bootstrap.recovery`.
+CNPG sichert per Barman Cloud in einen Objektspeicher inkl. WAL-Archiv
+(Point-in-Time-Recovery). Das Chart übernimmt `database.cnpg.backup`
+unverändert als `spec.backup` des `Cluster`-Objekts;
+`database.cnpg.scheduledBackup.enabled=true` legt zusätzlich ein
+`ScheduledBackup` an (Standard täglich 02:00 UTC, `schedule` im
+Cron-Format von CNPG mit Sekunden). Beispiel:
+
+```yaml
+database:
+  cnpg:
+    backup:
+      retentionPolicy: 30d
+      barmanObjectStore:
+        destinationPath: s3://backup/zaehler
+        endpointURL: https://s3.example.com
+        s3Credentials:
+          accessKeyId: { name: zaehler-backup-s3, key: ACCESS_KEY_ID }
+          secretAccessKey: { name: zaehler-backup-s3, key: ACCESS_SECRET_KEY }
+    scheduledBackup:
+      enabled: true
+```
+
+Wiederherstellung über einen neuen Cluster mit `bootstrap.recovery` gemäß
+CNPG-Dokumentation. Neuere CNPG-Versionen sichern über das
+Barman-Cloud-Plugin; dessen Konfiguration (`plugins`) ist nicht Teil des
+Charts.
 
 ## SQLite
 

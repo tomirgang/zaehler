@@ -1,5 +1,6 @@
 //! Auswertungsbereich der Detailseite und Diagrammdaten
-//! (SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR, SPEC_ANA_CHARTS).
+//! (SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR, SPEC_ANA_CHARTS,
+//! SPEC_ANA_REGISTER_CHARTS).
 
 use axum::{
     Json,
@@ -13,7 +14,7 @@ use serde_json::json;
 use zaehler_app::{
     AppError,
     ids::MeterId,
-    usecase::analysis::{Analysis, ChartData, ForecastScope, ScopedForecast},
+    usecase::analysis::{Analysis, ChartData, ForecastScope, MeterCharts, ScopedForecast},
 };
 use zaehler_domain::{
     analysis::{MonthComparison, PeriodForecast, YearToDate},
@@ -70,6 +71,17 @@ pub struct ChartRow {
     pub forecast: String,
 }
 
+/// Prognosen und Diagramme eines Registers (SPEC_ANA_REGISTER_CHARTS).
+pub struct RegisterView {
+    /// Position in `registers` von `chart.json`
+    pub index: usize,
+    pub title: String,
+    pub forecasts: Vec<ForecastView>,
+    pub chart_title_monthly: String,
+    pub chart_title_cumulative: String,
+    pub chart_rows: Vec<ChartRow>,
+}
+
 /// View-Modell des Auswertungsbereichs.
 pub struct AnalysisView {
     pub unit: String,
@@ -89,6 +101,8 @@ pub struct AnalysisView {
     pub chart_year: i32,
     pub chart_previous_year: i32,
     pub chart_rows: Vec<ChartRow>,
+    /// Nur bei mehreren Registern
+    pub register_views: Vec<RegisterView>,
 }
 
 fn opt(lang: Lang, v: Option<Decimal>, places: u8) -> String {
@@ -250,29 +264,83 @@ pub fn view(lang: Lang, a: &Analysis) -> AnalysisView {
                 )
             })
             .collect(),
-        chart_title_monthly: lang.ta(
-            "chart-monthly",
-            &[
-                ("year", chart.year.to_string()),
-                ("previous", (chart.year - 1).to_string()),
-            ],
-        ),
+        chart_title_monthly: monthly_title(lang, chart),
         chart_title_cumulative: lang.ta("chart-cumulative", &[("year", chart.year.to_string())]),
         chart_year: chart.year,
         chart_previous_year: chart.year - 1,
-        chart_rows: chart
-            .months
-            .iter()
-            .enumerate()
-            .map(|(i, m)| ChartRow {
-                label: format::month_short(lang, m.start),
-                current: opt(lang, chart.current[i], places),
-                previous: opt(lang, chart.previous[i], places),
-                cumulative: opt(lang, chart.cumulative[i], places),
-                forecast: opt(lang, chart.forecast[i], places),
-            })
-            .collect(),
+        chart_rows: chart_rows(lang, chart, places),
+        register_views: if multi {
+            register_views(lang, a, places)
+        } else {
+            Vec::new()
+        },
     }
+}
+
+/// Prognosen und Diagramme je Register (SPEC_ANA_REGISTER_CHARTS).
+fn register_views(lang: Lang, a: &Analysis, places: u8) -> Vec<RegisterView> {
+    a.registers
+        .iter()
+        .enumerate()
+        .map(|(index, r)| {
+            let args = [
+                ("code", r.register.data.code.clone()),
+                (
+                    "direction",
+                    lang.t(&format!("direction-{}", r.register.data.direction.as_str())),
+                ),
+            ];
+            let with = |key: &str, extra: (&str, String)| {
+                let mut all = args.to_vec();
+                all.push(extra);
+                lang.ta(key, &all)
+            };
+            RegisterView {
+                index,
+                title: lang.ta("analysis-register-title", &args),
+                forecasts: r
+                    .forecasts
+                    .iter()
+                    .map(|f| forecast_view(lang, f, places))
+                    .collect(),
+                chart_title_monthly: with(
+                    "chart-register-monthly",
+                    ("year", r.chart.year.to_string()),
+                ),
+                chart_title_cumulative: with(
+                    "chart-register-cumulative",
+                    ("year", r.chart.year.to_string()),
+                ),
+                chart_rows: chart_rows(lang, &r.chart, places),
+            }
+        })
+        .collect()
+}
+
+fn monthly_title(lang: Lang, chart: &ChartData) -> String {
+    lang.ta(
+        "chart-monthly",
+        &[
+            ("year", chart.year.to_string()),
+            ("previous", (chart.year - 1).to_string()),
+        ],
+    )
+}
+
+/// Diagrammwerte als Tabelle (Alternative zu den Diagrammen).
+fn chart_rows(lang: Lang, chart: &ChartData, places: u8) -> Vec<ChartRow> {
+    chart
+        .months
+        .iter()
+        .enumerate()
+        .map(|(i, m)| ChartRow {
+            label: format::month_short(lang, m.start),
+            current: opt(lang, chart.current[i], places),
+            previous: opt(lang, chart.previous[i], places),
+            cumulative: opt(lang, chart.cumulative[i], places),
+            forecast: opt(lang, chart.forecast[i], places),
+        })
+        .collect()
 }
 
 /// Monatstabelle, neuester Monat zuerst; Spalten je Register nur bei mehreren.
@@ -339,10 +407,26 @@ fn numbers(values: &[Option<Decimal>]) -> Vec<Option<f64>> {
         .collect()
 }
 
-/// JSON für `charts.js`; Beschriftungen in der Sprache des Nutzers.
-// @impl SPEC_ANA_CHARTS
+/// JSON für `charts.js`: Messstelle gesamt, bei mehreren Registern dazu
+/// `registers` in der Reihenfolge der Register.
+// @impl SPEC_ANA_CHARTS, SPEC_ANA_REGISTER_CHARTS
 #[must_use]
-pub fn chart_json(lang: Lang, c: &ChartData) -> serde_json::Value {
+pub fn chart_json(lang: Lang, c: &MeterCharts) -> serde_json::Value {
+    let mut out = series_json(lang, &c.main);
+    out["registers"] = c
+        .registers
+        .iter()
+        .map(|r| {
+            let mut v = series_json(lang, &r.chart);
+            v["code"] = json!(r.register.data.code);
+            v
+        })
+        .collect();
+    out
+}
+
+/// Beschriftungen in der Sprache des Nutzers.
+fn series_json(lang: Lang, c: &ChartData) -> serde_json::Value {
     json!({
         "unit": c.unit,
         "labels": c.months.iter().map(|m| format::month_short(lang, m.start)).collect::<Vec<_>>(),

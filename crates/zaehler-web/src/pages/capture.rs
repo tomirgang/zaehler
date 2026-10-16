@@ -190,7 +190,7 @@ pub async fn analyse(
         }
     }
     if !token.is_some_and(|t| constant_time_eq(&t, &ctx.page.csrf)) {
-        return Err((StatusCode::FORBIDDEN, "CSRF-Prüfung fehlgeschlagen").into_response());
+        return Err(crate::security::csrf_failed(ctx.page.lang));
     }
     if photos.is_empty() {
         if errors.is_empty() {

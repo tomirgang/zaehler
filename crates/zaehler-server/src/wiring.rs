@@ -24,6 +24,9 @@ use crate::{
 pub struct App {
     pub router: Router,
     pub housekeeping: Housekeeping,
+    /// Anwendungsfälle des Routers (Seed-Daten im Leistungstest)
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub uc: Arc<UseCases>,
 }
 
 /// Datenbank, Speicher und Ports; unabhängig vom Schemastand erzeugbar.
@@ -109,8 +112,9 @@ pub async fn prepare_database(config: &Config, a: &Adapters) -> anyhow::Result<(
     Ok(())
 }
 
-/// Baut den HTTP-Router und das Housekeeping mit allen Adaptern.
-pub async fn build(config: &Config) -> anyhow::Result<App> {
+/// Baut den HTTP-Router und das Housekeeping mit allen Adaptern; `traces`
+/// übernimmt den Trace-Context eingehender Requests (SPEC_OPS_OTEL).
+pub async fn build(config: &Config, traces: bool) -> anyhow::Result<App> {
     let recognizer: Option<Arc<dyn MeterRecognizer>> = if let Some(ai) = &config.ai {
         tracing::info!(model = %ai.model, "AI-Erkennung aktiv");
         Some(Arc::new(
@@ -149,11 +153,12 @@ pub async fn build(config: &Config) -> anyhow::Result<App> {
         tracing::warn!("Entwicklungs-Login aktiv (auth.dev_login); nicht für den Produktivbetrieb");
     }
 
+    let uc = Arc::new(UseCases::new(&a.ports));
     let state = WebState {
-        uc: Arc::new(UseCases::new(&a.ports)),
+        uc: uc.clone(),
         readiness: a.store.clone(),
-        cfg: Arc::new(
-            WebConfig::new(
+        cfg: Arc::new({
+            let web = WebConfig::new(
                 &config.server.public_url,
                 config.auth.dev_login,
                 config.cookie_secure(),
@@ -162,8 +167,13 @@ pub async fn build(config: &Config) -> anyhow::Result<App> {
             )
             .with_max_photo_bytes(config.upload.max_photo_bytes)
             .with_max_csv_bytes(config.upload.max_csv_bytes)
-            .with_max_backup_bytes(config.upload.max_backup_bytes),
-        ),
+            .with_max_backup_bytes(config.upload.max_backup_bytes);
+            if traces {
+                web.with_trace_parent(crate::telemetry::set_remote_parent)
+            } else {
+                web
+            }
+        }),
         oidc,
         analysis: Arc::default(),
     };
@@ -175,5 +185,6 @@ pub async fn build(config: &Config) -> anyhow::Result<App> {
             a.ports.clock.clone(),
             chrono::Duration::hours(config.housekeeping.draft_ttl_hours),
         ),
+        uc,
     })
 }

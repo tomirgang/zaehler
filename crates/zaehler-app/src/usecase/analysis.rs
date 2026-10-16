@@ -105,13 +105,33 @@ fn primary_direction(agg: &MeterAggregate) -> Direction {
     }
 }
 
-/// Monatswerte eines Registers.
+/// Monatswerte, Prognosen und Diagrammdaten eines Registers.
 #[derive(Debug, Clone)]
 pub struct RegisterSeries {
     pub register: Register,
     pub months: Vec<MonthValue>,
     /// Ablesungen sind inkonsistent; keine Auswertung möglich.
     pub invalid: bool,
+    /// Prognosen des Registers (SPEC_ANA_REGISTER_CHARTS)
+    pub forecasts: Vec<ScopedForecast>,
+    /// Monatswerte und Verlauf des Registers (SPEC_ANA_REGISTER_CHARTS)
+    pub chart: ChartData,
+}
+
+/// Diagrammdaten eines Registers.
+#[derive(Debug, Clone)]
+pub struct RegisterChart {
+    pub register: Register,
+    pub chart: ChartData,
+}
+
+/// Ergebnis von [`MeterChartData`]: Messstelle gesamt und, bei mehreren
+/// Registern, je Register.
+#[derive(Debug, Clone)]
+pub struct MeterCharts {
+    pub main: ChartData,
+    /// Leer bei nur einem Register
+    pub registers: Vec<RegisterChart>,
 }
 
 /// Bezugsgröße einer Prognose.
@@ -262,6 +282,7 @@ impl MeterAnalysis {
     /// `month`: gewünschter Bezugsmonat (ein Tag darin); ohne Angabe oder
     /// wenn nicht vollständig abgedeckt der letzte vollständige Monat.
     // @impl SPEC_ANA_MONTHLY_SERIES, SPEC_ANA_REGISTER_AGG, SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR
+    #[tracing::instrument(name = "MeterAnalysis", skip_all)]
     pub async fn execute(
         &self,
         t: &Tenant,
@@ -304,19 +325,25 @@ impl MeterAnalysis {
             .map(Period::month_of)
             .filter(|m| complete_months.contains(m))
             .or_else(|| last_complete(main));
+        let unit = &agg.meter.data.unit;
         let registers = per_register
             .iter()
-            .map(|r| RegisterSeries {
-                register: r.register.clone(),
-                months: monthly(&[r.intervals.as_deref().unwrap_or(&[])], &months, cal),
-                invalid: r.intervals.is_err(),
+            .map(|r| {
+                let own: &[&[Interval]] = &[r.intervals.as_deref().unwrap_or(&[])];
+                RegisterSeries {
+                    register: r.register.clone(),
+                    months: monthly(own, &months, cal),
+                    invalid: r.intervals.is_err(),
+                    forecasts: forecasts(&agg.meter, own, cal, today),
+                    chart: chart_data(unit, own, cal, today),
+                }
             })
             .collect();
         Ok(Analysis {
             comparisons: selected.map(|m| compare_month(main, m)).unwrap_or_default(),
             year_to_date: covered_until(main_regs).and_then(|u| year_to_date(main_regs, cal, u)),
             forecasts: forecasts(&agg.meter, main_regs, cal, today),
-            chart: chart_data(&agg.meter.data.unit, main_regs, cal, today),
+            chart: chart_data(unit, main_regs, cal, today),
             month: selected,
             complete_months,
             registers,
@@ -329,16 +356,32 @@ impl MeterAnalysis {
 }
 
 impl MeterChartData {
-    // @impl SPEC_ANA_CHARTS
-    pub async fn execute(&self, t: &Tenant, id: MeterId) -> Result<ChartData, AppError> {
+    // @impl SPEC_ANA_CHARTS, SPEC_ANA_REGISTER_CHARTS
+    #[tracing::instrument(name = "MeterChartData", skip_all)]
+    pub async fn execute(&self, t: &Tenant, id: MeterId) -> Result<MeterCharts, AppError> {
         t.require(Role::Viewer)?;
         let mut uow = self.p.uow.begin().await?;
         let Loaded { detail, cal, today } = load(&self.p, uow.as_mut(), t, id).await?;
         drop(uow);
         let agg = &detail.aggregate;
+        let unit = &agg.meter.data.unit;
         let per_register = register_intervals(agg, &detail.readings);
         let regs = side(&per_register, primary_direction(agg));
-        Ok(chart_data(&agg.meter.data.unit, &regs, cal, today))
+        let registers = if per_register.len() > 1 {
+            per_register
+                .iter()
+                .map(|r| RegisterChart {
+                    register: r.register.clone(),
+                    chart: chart_data(unit, &[r.intervals.as_deref().unwrap_or(&[])], cal, today),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(MeterCharts {
+            main: chart_data(unit, &regs, cal, today),
+            registers,
+        })
     }
 }
 
@@ -422,6 +465,7 @@ fn card(detail: &MeterDetail, cal: Calendar, now: DateTime<Utc>) -> DashboardCar
 impl Dashboard {
     /// Aktive Messstellen; überfällige zuerst, dann nach Name.
     // @impl SPEC_UI_DASHBOARD
+    #[tracing::instrument(name = "Dashboard", skip_all)]
     pub async fn execute(&self, t: &Tenant) -> Result<Vec<DashboardCard>, AppError> {
         t.require(Role::Viewer)?;
         let mut uow = self.p.uow.begin().await?;

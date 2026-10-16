@@ -387,6 +387,68 @@ async fn record_readings_with_plausibility_and_confirmation() {
     ));
 }
 
+// @test SPEC_RDG_PLAUSIBILITY
+#[tokio::test]
+async fn reading_before_installation_moves_first_device_but_not_a_later_one() {
+    let (uc, tenant, _) = setup().await;
+    let mut input = meter_input("Auto");
+    input.registers.truncate(1);
+    input.max_daily_rate = None;
+    let id = uc.create_meter.execute(&tenant, input).await.unwrap();
+    let detail = uc.get_meter.execute(&tenant, id).await.unwrap();
+    let reg = detail.aggregate.registers[0].id;
+
+    // vor dem Startstand: Hinweis, nach Bestätigung Einbau vorverlegt
+    let earlier = ReadingsInput {
+        meter_id: id,
+        at: start() - Duration::days(60),
+        values: vec![(reg, dec!(900))],
+        note: None,
+    };
+    assert!(matches!(
+        uc.record_readings
+            .execute(&tenant, &earlier, false, ReadingSource::Manual)
+            .await
+            .unwrap(),
+        RecordOutcome::NeedsConfirmation(_)
+    ));
+    uc.record_readings
+        .execute(&tenant, &earlier, true, ReadingSource::Manual)
+        .await
+        .unwrap();
+    let detail = uc.get_meter.execute(&tenant, id).await.unwrap();
+    assert_eq!(detail.aggregate.devices[0].data.installed_at, earlier.at);
+
+    // nach einem Zählerwechsel gehört ein Stand davor zum alten Gerät
+    let swap_at = start() + Duration::days(10);
+    uc.swap_device
+        .execute(
+            &tenant,
+            id,
+            SwapInput {
+                at: swap_at,
+                end_values: vec![(reg, dec!(1100))],
+                serial_number: Some("NEU".into()),
+                rollover_digits: None,
+                decimal_places: 1,
+                start_values: vec![(reg, dec!(0))],
+            },
+        )
+        .await
+        .unwrap();
+    let before_swap = ReadingsInput {
+        at: swap_at - Duration::days(1),
+        values: vec![(reg, dec!(5))],
+        ..earlier.clone()
+    };
+    assert!(matches!(
+        uc.record_readings
+            .execute(&tenant, &before_swap, true, ReadingSource::Manual)
+            .await,
+        Err(AppError::Validation(_))
+    ));
+}
+
 // @test SPEC_MTR_SWAP_FLOW, SPEC_CONS_DEVICE_SWAP, SPEC_RDG_DELETE
 #[tokio::test]
 async fn device_swap_keeps_consumption_series_and_locks_swap_readings() {
@@ -1067,7 +1129,7 @@ async fn analysis_setup() -> (UseCases, Tenant, MeterId) {
     (uc, tenant, id)
 }
 
-// @test SPEC_ANA_MONTHLY_SERIES, SPEC_ANA_REGISTER_AGG, SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR, SPEC_CONS_DEVICE_SWAP
+// @test SPEC_ANA_MONTHLY_SERIES, SPEC_ANA_REGISTER_AGG, SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR, SPEC_CONS_DEVICE_SWAP, SPEC_ANA_REGISTER_CHARTS
 #[tokio::test]
 async fn meter_analysis_sums_registers_across_a_device_swap() {
     use chrono::Datelike;
@@ -1130,8 +1192,36 @@ async fn meter_analysis_sums_registers_across_a_device_swap() {
         "Anschluss an den Messwert"
     );
     assert_eq!(chart.forecast[11], Some(dec!(1764.167)));
-    let json = uc.meter_chart_data.execute(&tenant, id).await.unwrap();
-    assert_eq!(json.cumulative, chart.cumulative);
+    let charts = uc.meter_chart_data.execute(&tenant, id).await.unwrap();
+    assert_eq!(charts.main.cumulative, chart.cumulative);
+
+    // je Register: Verlauf und Prognose, in Summe gleich der Messstelle
+    assert_eq!(charts.registers.len(), 2);
+    let sum = |i: usize| -> Option<Decimal> {
+        charts.registers.iter().map(|r| r.chart.cumulative[i]).sum()
+    };
+    assert_eq!(sum(3), Some(dec!(580)));
+    for r in &a.registers {
+        assert_eq!(
+            r.chart.cumulative,
+            charts
+                .registers
+                .iter()
+                .find(|c| c.register.id == r.register.id)
+                .unwrap()
+                .chart
+                .cumulative
+        );
+    }
+    let observed: Decimal = a
+        .registers
+        .iter()
+        .map(|r| match &r.forecasts[0].forecast {
+            PeriodForecast::Projected(f) => f.observed,
+            other => panic!("Prognose je Register erwartet: {other:?}"),
+        })
+        .sum();
+    assert_eq!(observed, dec!(580));
 
     // Bezugsmonat wählbar, nur vollständige Monate
     let feb = chrono::NaiveDate::from_ymd_opt(2026, 2, 10);

@@ -60,4 +60,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if and (eq .Values.storage.kind "fs") (ne .Values.database.type "sqlite") (gt (int .Values.replicaCount) 1) }}
 {{- fail "storage.kind=fs mit mehreren Replicas benötigt ReadWriteMany; storage.kind=s3 oder replicaCount=1 setzen" }}
 {{- end }}
+{{- if and .Values.database.cnpg.scheduledBackup.enabled (not .Values.database.cnpg.backup) }}
+{{- fail "database.cnpg.scheduledBackup.enabled setzt database.cnpg.backup voraus" }}
+{{- end }}
 {{- end }}

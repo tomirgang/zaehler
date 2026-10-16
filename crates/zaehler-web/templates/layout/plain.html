@@ -4,14 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ lang.t("app-name") }}</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#2f6f4f">
+  <link rel="icon" href="{{ static_prefix }}/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ static_prefix }}/apple-touch-icon.png">
   <link rel="stylesheet" href="{{ static_prefix }}/app.css">
   <script src="{{ static_prefix }}/app.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">{{ lang.t("skip-to-content") }}</a>
   <header class="topbar">
     <span class="brand">{{ lang.t("app-name") }}</span>
   </header>
-  <main class="container narrow">
+  <main id="main" class="container narrow">
     {% block content %}{% endblock %}
   </main>
 </body>

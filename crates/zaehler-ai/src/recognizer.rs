@@ -55,14 +55,30 @@ impl MeterRecognizer for OpenRouter {
     }
 
     /// Sendet nur das normalisierte JPEG und den festen Prompt (REQ_AI_006).
-    // @impl SPEC_AI_EXTRACTION, SPEC_AI_FLOW
+    /// Span mit Modell und Ergebnis, ohne Bildinhalt (SPEC_OPS_OTEL).
+    // @impl SPEC_AI_EXTRACTION, SPEC_AI_FLOW, SPEC_OPS_OTEL
+    #[tracing::instrument(
+        name = "ai.recognize",
+        skip_all,
+        fields(model = %self.model_name(), outcome = tracing::field::Empty)
+    )]
     async fn recognize(&self, jpeg: &NormalizedJpeg) -> Result<Recognition, RecognitionError> {
         let doc = Document::Image {
             mime: "image/jpeg".into(),
             bytes: jpeg.bytes.to_vec(),
         };
-        let suggestion = self.read_meter(&doc).await.map_err(to_error)?;
-        to_recognition(suggestion)
+        let result = match self.read_meter(&doc).await {
+            Ok(suggestion) => to_recognition(suggestion),
+            Err(e) => Err(to_error(e)),
+        };
+        let outcome = match &result {
+            Ok(_) => "ok",
+            Err(RecognitionError::Timeout) => "timeout",
+            Err(RecognitionError::Invalid(_)) => "invalid",
+            Err(RecognitionError::Failed(_)) => "error",
+        };
+        tracing::Span::current().record("outcome", outcome);
+        result
     }
 }
 

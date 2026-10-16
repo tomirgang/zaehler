@@ -201,6 +201,7 @@ async fn check_unique(
 
 impl CreateMeter {
     // @impl SPEC_MTR_MANAGE
+    #[tracing::instrument(name = "CreateMeter", skip_all)]
     pub async fn execute(&self, t: &Tenant, input: MeterInput) -> Result<MeterId, AppError> {
         self.create(t, input, None).await
     }
@@ -209,6 +210,7 @@ impl CreateMeter {
     /// Der erste Startstand erhält das Foto (`source = photo`), der Entwurf
     /// wird als bestätigt abgeschlossen.
     // @impl SPEC_AI_NEW_METER
+    #[tracing::instrument(name = "CreateMeter::execute_from_draft", skip_all)]
     pub async fn execute_from_draft(
         &self,
         t: &Tenant,
@@ -377,6 +379,7 @@ impl UpdateMeter {
     /// Art, Einheit und Register-Richtung sind nach der ersten Ablesung fest;
     /// Register werden umbenannt oder ergänzt, nie gelöscht.
     // @impl SPEC_MTR_MANAGE
+    #[tracing::instrument(name = "UpdateMeter", skip_all)]
     pub async fn execute(
         &self,
         t: &Tenant,
@@ -462,6 +465,7 @@ impl UpdateMeter {
 }
 
 impl ListMeters {
+    #[tracing::instrument(name = "ListMeters", skip_all)]
     pub async fn execute(&self, t: &Tenant) -> Result<Vec<MeterSummary>, AppError> {
         let mut uow = self.p.uow.begin().await?;
         Ok(uow.meters().list(t).await?)
@@ -469,6 +473,7 @@ impl ListMeters {
 }
 
 impl GetMeter {
+    #[tracing::instrument(name = "GetMeter", skip_all)]
     pub async fn execute(&self, t: &Tenant, id: MeterId) -> Result<MeterDetail, AppError> {
         let mut uow = self.p.uow.begin().await?;
         let aggregate = uow.meters().get(t, id).await?.ok_or(AppError::NotFound)?;
@@ -483,6 +488,7 @@ impl GetMeter {
 impl SwapDevice {
     /// Endstände des alten und Startstände des neuen Geräts zum selben Zeitpunkt.
     // @impl SPEC_MTR_SWAP_FLOW, SPEC_CONS_DEVICE_SWAP
+    #[tracing::instrument(name = "SwapDevice", skip_all)]
     pub async fn execute(
         &self,
         t: &Tenant,

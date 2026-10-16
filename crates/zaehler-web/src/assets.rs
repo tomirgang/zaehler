@@ -33,6 +33,32 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
         "text/javascript; charset=utf-8",
         include_bytes!("../static/echarts.min.js"),
     ),
+    // App-Icons (SPEC_UI_PWA), erzeugt mit `tools/make_icons.py`
+    (
+        "icon.svg",
+        "image/svg+xml",
+        include_bytes!("../static/icon.svg"),
+    ),
+    (
+        "icon-192.png",
+        "image/png",
+        include_bytes!("../static/icon-192.png"),
+    ),
+    (
+        "icon-512.png",
+        "image/png",
+        include_bytes!("../static/icon-512.png"),
+    ),
+    (
+        "icon-maskable-512.png",
+        "image/png",
+        include_bytes!("../static/icon-maskable-512.png"),
+    ),
+    (
+        "apple-touch-icon.png",
+        "image/png",
+        include_bytes!("../static/apple-touch-icon.png"),
+    ),
 ];
 
 /// Die Version im Pfad macht Dateien unveränderlich cachebar; in

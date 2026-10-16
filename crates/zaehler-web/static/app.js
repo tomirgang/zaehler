@@ -87,3 +87,11 @@ window.addEventListener("pageshow", (e) => {
     clearAllBusy();
   }
 });
+
+// @impl SPEC_UI_PWA
+// Service Worker ohne Offline-Cache; macht die App installierbar.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}

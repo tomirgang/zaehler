@@ -118,7 +118,9 @@ impl ObjectStoreBlobStore {
 
 #[async_trait]
 impl BlobStore for ObjectStoreBlobStore {
+    // Spans je Port-Aufruf (SPEC_OPS_OTEL)
     // @impl SPEC_STORE_BLOBS
+    #[tracing::instrument(name = "blob.put", skip_all)]
     async fn put(&self, key: &BlobKey, bytes: Bytes) -> PortResult<()> {
         self.store
             .put(&path(key), PutPayload::from_bytes(bytes))
@@ -127,6 +129,7 @@ impl BlobStore for ObjectStoreBlobStore {
             .map_err(store_err)
     }
 
+    #[tracing::instrument(name = "blob.get", skip_all)]
     async fn get(&self, key: &BlobKey) -> PortResult<Bytes> {
         self.store
             .get(&path(key))
@@ -137,6 +140,7 @@ impl BlobStore for ObjectStoreBlobStore {
             .map_err(store_err)
     }
 
+    #[tracing::instrument(name = "blob.copy", skip_all)]
     async fn copy(&self, from: &BlobKey, to: &BlobKey) -> PortResult<()> {
         self.store
             .copy(&path(from), &path(to))
@@ -144,10 +148,12 @@ impl BlobStore for ObjectStoreBlobStore {
             .map_err(store_err)
     }
 
+    #[tracing::instrument(name = "blob.delete", skip_all)]
     async fn delete(&self, key: &BlobKey) -> PortResult<()> {
         self.delete_all(vec![path(key)]).await
     }
 
+    #[tracing::instrument(name = "blob.delete_household", skip_all)]
     async fn delete_household(&self, household: HouseholdId) -> PortResult<()> {
         let prefix = Path::from(BlobKey::household_prefix(household).as_str());
         let paths: Vec<Path> = self
@@ -161,6 +167,7 @@ impl BlobStore for ObjectStoreBlobStore {
     }
 
     // @impl SPEC_STORE_BLOBS, SPEC_OPS_HOUSEKEEPING
+    #[tracing::instrument(name = "blob.list_tmp_older_than", skip_all)]
     async fn list_tmp_older_than(&self, cutoff: DateTime<Utc>) -> PortResult<Vec<BlobKey>> {
         // je Haushalt nur das Verzeichnis tmp/ listen, nicht alle Fotos
         let households = match self
@@ -217,12 +224,14 @@ mod tests {
 
     // @test SPEC_STORE_BLOBS
     #[tokio::test]
+    #[tracing::instrument(name = "blob.object_store_in_memory_passes_blob_suite", skip_all)]
     async fn object_store_in_memory_passes_blob_suite() {
         suite::blob_store(&ObjectStoreBlobStore::new(Arc::new(InMemory::new()))).await;
     }
 
     // @test SPEC_STORE_BLOBS
     #[tokio::test]
+    #[tracing::instrument(name = "blob.local_filesystem_passes_blob_suite", skip_all)]
     async fn local_filesystem_passes_blob_suite() {
         let dir = temp_dir();
         suite::blob_store(&ObjectStoreBlobStore::local(&dir).unwrap()).await;
@@ -234,6 +243,7 @@ mod tests {
     /// `ZAEHLER_TEST_S3_SECRET_KEY`.
     // @test SPEC_STORE_BLOBS
     #[tokio::test]
+    #[tracing::instrument(name = "blob.s3_passes_blob_suite", skip_all)]
     async fn s3_passes_blob_suite() {
         let Ok(endpoint) = std::env::var("ZAEHLER_TEST_S3_ENDPOINT") else {
             eprintln!("ZAEHLER_TEST_S3_ENDPOINT nicht gesetzt, Test übersprungen");
@@ -254,6 +264,10 @@ mod tests {
 
     // @test SPEC_OPS_HOUSEKEEPING
     #[tokio::test]
+    #[tracing::instrument(
+        name = "blob.housekeeping_on_filesystem_is_idempotent_in_parallel",
+        skip_all
+    )]
     async fn housekeeping_on_filesystem_is_idempotent_in_parallel() {
         let dir = temp_dir();
         let blobs = Arc::new(ObjectStoreBlobStore::local(&dir).unwrap());

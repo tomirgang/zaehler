@@ -147,5 +147,18 @@ def setup(app):
 
 # --- Code-Tracing (docs/_ext/codetrace.py) ---------------------------------
 
-codetrace_roots = ["../crates", "../deploy", "../Dockerfile", "../compose.yaml", "../compose.postgres.yaml", "../clippy.toml", "_ext"]
+codetrace_roots = [
+    "../crates",
+    "../deploy",
+    "../Dockerfile",
+    "../Cargo.toml",
+    "../compose.yaml",
+    "../compose.postgres.yaml",
+    "../compose.s3.yaml",
+    "../compose.otel.yaml",
+    "../compose.keycloak.yaml",
+    "../clippy.toml",
+    "../.forgejo/workflows",
+    "_ext",
+]
 codetrace_output = "nachverfolgung/code.md"

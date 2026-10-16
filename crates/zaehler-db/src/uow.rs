@@ -17,6 +17,7 @@ use sea_orm::{
     ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, DatabaseTransaction, DbErr,
     EntityTrait, QueryFilter, QueryOrder, QuerySelect, SqlErr, TransactionTrait, sea_query::Expr,
 };
+use tracing::Instrument;
 use uuid::Uuid;
 use zaehler_app::{
     PortError, Role, Tenant,
@@ -71,8 +72,16 @@ impl SeaOrmStore {
 impl UnitOfWorkFactory for SeaOrmStore {
     // @impl SPEC_ARCH_UOW
     async fn begin(&self) -> PortResult<Box<dyn UnitOfWork>> {
-        let txn = self.db.begin().await.map_err(db_err)?;
-        Ok(Box::new(SeaOrmUow { txn }))
+        // Span über die Dauer der Transaktion, endet mit `commit` oder Abbruch
+        // (SPEC_OPS_OTEL)
+        let span = tracing::info_span!("db.transaction");
+        let txn = self
+            .db
+            .begin()
+            .instrument(span.clone())
+            .await
+            .map_err(db_err)?;
+        Ok(Box::new(SeaOrmUow { txn, span }))
     }
 }
 
@@ -139,6 +148,7 @@ impl MaintenanceRepository for SeaOrmStore {
 
 struct SeaOrmUow {
     txn: DatabaseTransaction,
+    span: tracing::Span,
 }
 
 #[async_trait]
@@ -162,7 +172,8 @@ impl UnitOfWork for SeaOrmUow {
         self
     }
     async fn commit(self: Box<Self>) -> PortResult<()> {
-        self.txn.commit().await.map_err(db_err)
+        let Self { txn, span } = *self;
+        txn.commit().instrument(span).await.map_err(db_err)
     }
 }
 

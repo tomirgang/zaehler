@@ -1,0 +1,33 @@
+{
+  "realm": "zaehler",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "zaehler",
+      "name": "Zähler (lokal)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "zaehler-dev-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:8080/auth/callback"],
+      "webOrigins": ["http://localhost:8080"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8080/*"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "demo",
+      "enabled": true,
+      "email": "demo@example.invalid",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Nutzer",
+      "credentials": [{ "type": "password", "value": "demo", "temporary": false }]
+    }
+  ]
+}

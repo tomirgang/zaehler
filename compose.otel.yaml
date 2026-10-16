@@ -1,0 +1,21 @@
+# @impl SPEC_OPS_COMPOSE, SPEC_OPS_OTEL
+# Override: OpenTelemetry-Collector, der Traces per OTLP/HTTP annimmt und im
+# eigenen Log ausgibt; Metriken liest er von /metrics der App.
+#   docker compose -f compose.yaml -f compose.otel.yaml up -d
+#   docker compose -f compose.yaml -f compose.otel.yaml logs -f otel-collector
+
+services:
+  zaehler:
+    environment:
+      ZAEHLER_OTEL__ENDPOINT: http://otel-collector:4318
+      ZAEHLER_OTEL__SERVICE_NAME: zaehler
+    depends_on:
+      otel-collector:
+        condition: service_started
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.137.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/compose/otel-collector.yaml:/etc/otelcol/config.yaml:ro

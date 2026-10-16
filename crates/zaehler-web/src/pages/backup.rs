@@ -126,7 +126,7 @@ pub async fn import(
         }
     }
     if !token.is_some_and(|t| constant_time_eq(&t, &ctx.page.csrf)) {
-        return Err((StatusCode::FORBIDDEN, "CSRF-Prüfung fehlgeschlagen").into_response());
+        return Err(crate::security::csrf_failed(ctx.page.lang));
     }
     let Some(mut file) = archive else {
         return Ok(back_with(&ctx, "err-backup-file_required").await);

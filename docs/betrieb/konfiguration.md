@@ -46,6 +46,8 @@ zugleich ist unzulässig.
 | `session.cookie_secure` | `ZAEHLER_SESSION__COOKIE_SECURE` | aus dem Schema von `public_url` |
 | `ai.api_key`, `ai.model`, `ai.base_url`, `ai.timeout_secs` | `ZAEHLER_AI__…` | Base-URL `https://openrouter.ai/api/v1`, 60 s |
 | `notify.smtp.*` | `ZAEHLER_NOTIFY__SMTP__…` | Port 587 |
+| `otel.endpoint` | `ZAEHLER_OTEL__ENDPOINT` | leer; ohne Angabe `OTEL_EXPORTER_OTLP_ENDPOINT`, sonst kein Trace-Export |
+| `otel.service_name` | `ZAEHLER_OTEL__SERVICE_NAME` | `zaehler` |
 
 S3-Zugangsdaten werden aus `storage.access_key_id` und
 `storage.secret_access_key` gelesen, ohne Angabe aus den Standardvariablen
@@ -65,3 +67,5 @@ Ohne Abschnitt `ai` ist die automatische Erkennung abgeschaltet
 ({need}`REQ_AI_006`); die Foto-Erfassung speichert dann das Foto und
 verlangt die Eingabe des Stands von Hand. An OpenRouter gehen nur das
 verkleinerte JPEG ohne Metadaten und ein fester Prompt.
+
+Logs, Metriken und Traces beschreibt {doc}`observability`.

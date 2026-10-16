@@ -10,6 +10,9 @@ license = "MIT OR Apache-2.0"
 repository = "https://example.invalid/zaehler"
 publish = false
 
+# Abhängigkeiten der Crates gemäß ADR_022; geprüft in
+# crates/zaehler-server/tests/architecture.rs
+# @impl SPEC_ARCH_LAYERS
 [workspace.dependencies]
 zaehler-domain = { path = "crates/zaehler-domain" }
 zaehler-db = { path = "crates/zaehler-db" }
@@ -37,6 +40,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 kamadak-exif = "0.6"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
+opentelemetry = { version = "0.33", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
 object_store = { version = "0.14", features = ["aws"] }
 proptest = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
@@ -55,6 +61,7 @@ time = "0.3"
 tower-sessions = { version = "0.15", default-features = false }
 tower-http = { version = "0.7", features = ["fs", "trace", "compression-gzip", "request-id", "timeout"] }
 tracing = "0.1"
+tracing-opentelemetry = { version = "0.34", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 

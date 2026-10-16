@@ -30,6 +30,31 @@
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
+  // Tooltip als DOM statt HTML-Text: die CSP verbietet Inline-Styles, mit
+  // denen ECharts sonst Abstand und Farbmarke setzt (SPEC_SEC_HEADERS).
+  function tooltip(params, nf, unit) {
+    const box = document.createElement("div");
+    const head = document.createElement("div");
+    head.className = "chart-tip-head";
+    head.textContent = params[0]?.axisValueLabel ?? "";
+    box.append(head);
+    params.forEach((p) => {
+      const row = document.createElement("div");
+      row.className = "chart-tip-row";
+      const mark = document.createElement("span");
+      mark.className = "chart-tip-mark";
+      mark.style.background = p.color;
+      const name = document.createElement("span");
+      name.textContent = p.seriesName;
+      const value = document.createElement("span");
+      value.className = "chart-tip-value";
+      value.textContent = p.value == null ? "-" : `${nf.format(p.value)} ${unit}`;
+      row.append(mark, name, value);
+      box.append(row);
+    });
+    return box;
+  }
+
   function base(data) {
     const fg = css("--fg");
     const muted = css("--muted");
@@ -44,7 +69,7 @@
       legend: { top: 0, textStyle: { color: fg } },
       tooltip: {
         trigger: "axis",
-        valueFormatter: (v) => (v == null ? "-" : `${nf.format(v)} ${data.unit}`),
+        formatter: (params) => tooltip(params, nf, data.unit),
       },
       xAxis: {
         type: "category",
@@ -96,31 +121,44 @@
     },
   };
 
-  async function render(section) {
+  // `requests`: ein Abruf je URL für alle Diagrammbereiche einer Seite
+  async function render(section, requests) {
     const nodes = section.querySelectorAll(".chart[data-chart]");
     if (nodes.length === 0) {
       return;
     }
-    try {
-      const [echarts, data] = await Promise.all([
-        loadEcharts(section.dataset.echarts),
-        fetch(section.dataset.chartUrl, { headers: { Accept: "application/json" } }).then((r) => {
+    const url = section.dataset.chartUrl;
+    if (!requests.has(url)) {
+      requests.set(
+        url,
+        fetch(url, { headers: { Accept: "application/json" } }).then((r) => {
           if (!r.ok) {
             throw new Error(`HTTP ${r.status}`);
           }
           return r.json();
         }),
+      );
+    }
+    try {
+      const [echarts, data] = await Promise.all([
+        loadEcharts(section.dataset.echarts),
+        requests.get(url),
       ]);
       nodes.forEach((node) => {
         const build = builders[node.dataset.chart];
-        if (!build) {
+        // `data-register`: Diagramm eines Registers (SPEC_ANA_REGISTER_CHARTS)
+        const series =
+          node.dataset.register === undefined
+            ? data
+            : { ...data.registers?.[Number(node.dataset.register)], unit: data.unit };
+        if (!build || !series.series) {
           return;
         }
         echarts.getInstanceByDom(node)?.dispose();
         // Inhalt aus einem wiederhergestellten HTMX-Verlauf entfernen
         node.replaceChildren();
         const chart = echarts.init(node);
-        chart.setOption(build(data));
+        chart.setOption(build(series));
         charts.add(chart);
       });
     } catch {
@@ -136,7 +174,8 @@
         charts.delete(c);
       }
     });
-    document.querySelectorAll("[data-chart-url]").forEach(render);
+    const requests = new Map();
+    document.querySelectorAll("[data-chart-url]").forEach((section) => render(section, requests));
   }
 
   document.addEventListener("DOMContentLoaded", init);

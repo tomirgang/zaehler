@@ -41,6 +41,8 @@ jobs:
           key: cargo-${{ hashFiles('Cargo.lock') }}
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --all --check
+      # clippy.toml verbietet SQL aus Zeichenketten
+      # @test SPEC_SEC_SQL_PARAMS
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # S3-kompatibler Server für den Objektspeicher-Test (MinIO wird nicht
       # mehr verteilt); Backend posix: ein Verzeichnis je Bucket
@@ -59,6 +61,47 @@ jobs:
           cat /tmp/versitygw.log; exit 1
       - run: cargo test --workspace --locked
 
+  # Leistungsbudget: Release-Build, SQLite und PostgreSQL; meldet p95 je
+  # Seite, eine Überschreitung lässt den Job fehlschlagen
+  # @impl SPEC_PERF_BUDGET
+  perf:
+    runs-on: docker
+    container:
+      image: rust:1.98-trixie
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: zaehler
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      ZAEHLER_TEST_DATABASE_URL: postgres://postgres:test@postgres:5432/zaehler
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+      - uses: https://code.forgejo.org/actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-release-${{ hashFiles('Cargo.lock') }}
+      - run: cargo test --release --locked -p zaehler-server perf_ -- --ignored --nocapture
+
+  # Auslieferung mit docker compose (SQLite; PostgreSQL mit S3 und OTel)
+  # @test SPEC_OPS_COMPOSE, SPEC_OPS_IMAGE
+  smoke:
+    needs: [rust]
+    runs-on: docker
+    container:
+      image: catthehacker/ubuntu:act-latest
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+      - run: deploy/smoke-test.sh
+      - run: deploy/smoke-test.sh compose.postgres.yaml compose.s3.yaml compose.otel.yaml
+
   docs:
     runs-on: docker
     container:
@@ -67,6 +110,7 @@ jobs:
       - uses: https://code.forgejo.org/actions/checkout@v4
       - run: apt-get update && apt-get install -y --no-install-recommends graphviz
       # -W: Warnungen (u.a. tote Trace-Links, Schema-Verletzungen) brechen den Build
+      # @test SPEC_DOC_TRACING
       - run: uv run --project docs sphinx-build -W --keep-going -b html docs docs/_build/html
       - uses: https://code.forgejo.org/actions/upload-artifact@v4
         with:
@@ -85,6 +129,7 @@ jobs:
       # Mermaid rendert im Browser; Syntaxfehler fallen im Sphinx-Build nicht auf
       - run: node docs/tools/check-mermaid.mjs docs
 
+  # @test SPEC_OPS_HELM
   helm:
     runs-on: docker
     container:
@@ -98,9 +143,16 @@ jobs:
       - run: helm lint deploy/helm/zaehler --set "$OIDC" --set storage.kind=s3,replicaCount=2
       # ohne OIDC muss das Chart die Installation verweigern
       - run: "! helm template t deploy/helm/zaehler"
+      - run: >-
+          helm lint deploy/helm/zaehler --set "$OIDC"
+          --set otel.endpoint=http://otel-collector:4318,session.cookieSecure=true
+          --set database.cnpg.backup.barmanObjectStore.destinationPath=s3://backup/zaehler
+          --set database.cnpg.scheduledBackup.enabled=true
+      # Sicherungsplan ohne Sicherungsziel wird verweigert
+      - run: '! helm template t deploy/helm/zaehler --set "$OIDC" --set database.cnpg.scheduledBackup.enabled=true'
 
   image:
-    needs: [rust, docs, mermaid, helm]
+    needs: [rust, perf, smoke, docs, mermaid, helm]
     if: github.event_name == 'push'
     runs-on: docker
     container:

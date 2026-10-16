@@ -251,7 +251,9 @@ default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:
 blob:; connect-src 'self'; frame-ancestors 'none'; form-action 'self';
 base-uri 'none'`, `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: same-origin`, `Permissions-Policy: camera=(self),
-geolocation=()`. HTMX wird über `<meta name="htmx-config">` mit
+geolocation=()`, bei HTML ohne eigene Angabe `Cache-Control: private,
+no-cache`. Eine Request-ID eines vorgelagerten Proxys (`x-request-id`) wird
+nur mit höchstens 64 sichtbaren ASCII-Zeichen übernommen. HTMX wird über `<meta name="htmx-config">` mit
 `includeIndicatorStyles: false` und `allowEval: false` konfiguriert; Templates
 enthalten keine Inline-Skripte und keine `style`-Attribute. HSTS setzt der
 Ingress.
@@ -339,15 +341,22 @@ Details nur im Log; `Unauthenticated` leitet bei HTML-Requests auf
 
 ```{spec} OpenTelemetry-Export
 :id: SPEC_OPS_OTEL
-:status: draft
+:status: implemented
 :satisfies: REQ_OPS_004
 
-`zaehler-server` aktiviert bei gesetztem `otel.endpoint` oder
-`OTEL_EXPORTER_OTLP_ENDPOINT` einen `tracing-opentelemetry`-Layer mit
-OTLP-Export. Spans: HTTP-Request (Route-Template, Status), Anwendungsfall,
-Port-Aufruf je Adapter (AI mit Modell, Dauer, Ergebnis, ohne Bildinhalt;
-Objektspeicher; Datenbank-Transaktion). W3C-Trace-Context aus eingehenden
-Headern wird übernommen. Ohne Endpunkt ist der Layer nicht aktiv.
+`zaehler-server` aktiviert bei gesetztem `otel.endpoint` (Basis-URL, der Pfad
+`/v1/traces` wird angehängt) oder `OTEL_EXPORTER_OTLP_ENDPOINT` einen
+`tracing-opentelemetry`-Layer mit OTLP/HTTP-Export (Protobuf, Batch,
+Ressource `service.name` aus `otel.service_name` und `service.version`).
+Spans: HTTP-Request (Route-Template, Methode, Status, Request-ID, Haushalt,
+Nutzer), Anwendungsfall, Port-Aufruf je Adapter (AI mit Modell und Ergebnis,
+ohne Bildinhalt; Objektspeicher; Datenbank-Transaktion). W3C-Trace-Context
+aus eingehenden Headern wird übernommen; `zaehler-web` erhält dafür eine
+Funktion über `WebConfig::with_trace_parent` und bleibt frei von
+OpenTelemetry-Abhängigkeiten. Jede Antwort trägt `x-request-id` (vom Client
+übernommen oder neu erzeugt); die Felder des Request-Spans erscheinen in den
+JSON-Logs. Ohne Endpunkt ist der Layer nicht aktiv. Beim Beenden werden
+ausstehende Spans exportiert.
 ```
 
 ```{spec} Housekeeping

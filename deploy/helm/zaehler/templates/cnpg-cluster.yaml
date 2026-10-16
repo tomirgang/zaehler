@@ -21,4 +21,22 @@ spec:
     {{- end }}
   monitoring:
     enablePodMonitor: {{ .Values.serviceMonitor.enabled }}
+  {{- with .Values.database.cnpg.backup }}
+  backup:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- if .Values.database.cnpg.scheduledBackup.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ include "zaehler.cnpgCluster" . }}
+  labels:
+    {{- include "zaehler.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.database.cnpg.scheduledBackup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ include "zaehler.cnpgCluster" . }}
+{{- end }}
 {{- end }}

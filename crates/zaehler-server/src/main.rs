@@ -2,6 +2,8 @@
 
 mod backup;
 mod config;
+#[cfg(test)]
+mod perf_tests;
 mod scheduler;
 mod telemetry;
 mod wiring;
@@ -57,10 +59,19 @@ async fn main() -> anyhow::Result<()> {
     }
     let cli = Cli::parse();
     let config = Config::load(cli.config.as_deref()).context("Konfiguration ungültig")?;
-    telemetry::init_tracing(&config.log);
+    let telemetry = telemetry::init_tracing(&config.log, &config.otel)?;
+    let result = run(cli.command.unwrap_or(Command::Serve), config, &telemetry).await;
+    telemetry.shutdown().await;
+    result
+}
 
-    match cli.command.unwrap_or(Command::Serve) {
-        Command::Serve => serve(config).await,
+async fn run(
+    command: Command,
+    config: Config,
+    telemetry: &telemetry::Telemetry,
+) -> anyhow::Result<()> {
+    match command {
+        Command::Serve => serve(config, telemetry.exports_traces()).await,
         Command::Migrate => {
             let a = wiring::adapters(&config, None).await?;
             wiring::prepare_database(&config, &a).await
@@ -128,12 +139,13 @@ fn describe(e: &zaehler_app::AppError) -> String {
     }
 }
 
-async fn serve(config: Config) -> anyhow::Result<()> {
+async fn serve(config: Config, traces: bool) -> anyhow::Result<()> {
     let metrics = telemetry::init_metrics()?;
     let wiring::App {
         router: app,
         housekeeping,
-    } = wiring::build(&config).await?;
+        ..
+    } = wiring::build(&config, traces).await?;
     let housekeeping_task = scheduler::spawn_housekeeping(
         housekeeping,
         std::time::Duration::from_secs(config.housekeeping.interval_minutes * 60),

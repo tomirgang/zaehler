@@ -10,4 +10,5 @@ verknüpft; `depends` beschreibt die Reihenfolge.
 MVP
 mvp-architektur
 mvp-detail-design
+mvp-abnahme
 ```

@@ -183,6 +183,7 @@ impl QueuePhotos {
     /// im Status `queued` an. Nicht lesbare Fotos werden mit Grund
     /// zurückgemeldet, die übrigen trotzdem angelegt.
     // @impl SPEC_AI_MULTI, SPEC_IMG_PROCESSING, SPEC_IMG_CAPTURE_TIME
+    #[tracing::instrument(name = "QueuePhotos", skip_all)]
     pub async fn execute(&self, t: &Tenant, photos: Vec<Bytes>) -> Result<QueuedPhotos, AppError> {
         t.require(Role::Member)?;
         if photos.is_empty() {
@@ -296,6 +297,7 @@ impl AnalyseQueued {
     /// keiner wartet. Die Hintergrundaufgabe ruft dies wiederholt auf, sodass
     /// die Fotos nacheinander analysiert werden.
     // @impl SPEC_AI_MULTI
+    #[tracing::instrument(name = "AnalyseQueued::next", skip_all)]
     pub async fn next(&self, t: &Tenant) -> Result<Option<DraftId>, AppError> {
         t.require(Role::Member)?;
         let now = self.p.clock.now();
@@ -315,6 +317,7 @@ impl AnalyseQueued {
     /// Analysiert diesen Entwurf, falls er wartet; `false`, wenn er bereits
     /// analysiert ist oder ein anderer Lauf ihn hat.
     // @impl SPEC_AI_MULTI
+    #[tracing::instrument(name = "AnalyseQueued::draft", skip_all)]
     pub async fn draft(&self, t: &Tenant, id: DraftId) -> Result<bool, AppError> {
         t.require(Role::Member)?;
         let now = self.p.clock.now();
@@ -399,6 +402,7 @@ impl AnalysePhoto {
     /// AI-Konfiguration oder bei Fehlern der Erkennung entsteht ein Entwurf
     /// mit Status `failed` zur manuellen Eingabe.
     // @impl SPEC_AI_FLOW, SPEC_AI_DRAFTS, SPEC_IMG_PROCESSING
+    #[tracing::instrument(name = "AnalysePhoto", skip_all)]
     pub async fn execute(&self, t: &Tenant, photo: Bytes) -> Result<DraftId, AppError> {
         let queued = QueuePhotos::new(self.p.clone())
             .execute(t, vec![photo])
@@ -444,6 +448,7 @@ impl DraftView {
 impl GetDraft {
     /// Nächster offener Entwurf nach dem Abschluss von `done` (SPEC_AI_MULTI).
     // @impl SPEC_AI_MULTI
+    #[tracing::instrument(name = "GetDraft::next_open", skip_all)]
     pub async fn next_open(&self, t: &Tenant, done: DraftId) -> Result<Option<DraftId>, AppError> {
         t.require(Role::Member)?;
         let open = self.p.uow.begin().await?.drafts().list_open(t).await?;
@@ -453,6 +458,7 @@ impl GetDraft {
 
 impl GetDraft {
     // @impl SPEC_AI_DRAFTS
+    #[tracing::instrument(name = "GetDraft", skip_all)]
     pub async fn execute(
         &self,
         t: &Tenant,
@@ -527,6 +533,7 @@ impl ConfirmDraft {
     /// schließt den Entwurf ab. Reihenfolge: Foto kopieren, Ablesung und
     /// Entwurf in einer Transaktion, danach Entwurfsfoto löschen.
     // @impl SPEC_AI_DRAFTS, SPEC_RDG_PLAUSIBILITY
+    #[tracing::instrument(name = "ConfirmDraft", skip_all)]
     pub async fn execute(
         &self,
         t: &Tenant,
@@ -601,6 +608,7 @@ impl ConfirmDraft {
 
 impl DiscardDraft {
     // @impl SPEC_AI_DRAFTS
+    #[tracing::instrument(name = "DiscardDraft", skip_all)]
     pub async fn execute(&self, t: &Tenant, id: DraftId) -> Result<(), AppError> {
         t.require(Role::Member)?;
         let mut uow = self.p.uow.begin().await?;
@@ -622,6 +630,7 @@ impl DiscardDraft {
 
 impl GetDraftPhoto {
     // @impl SPEC_AI_DRAFTS, SPEC_SEC_UPLOADS
+    #[tracing::instrument(name = "GetDraftPhoto", skip_all)]
     pub async fn execute(&self, t: &Tenant, id: DraftId) -> Result<Bytes, AppError> {
         t.require(Role::Member)?;
         let mut uow = self.p.uow.begin().await?;

@@ -38,6 +38,7 @@ bytes.workspace = true
 tokio.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tower-sessions = { workspace = true, features = ["axum-core", "memory-store"] }
+wiremock = "0.6"
 
 [lints]
 workspace = true

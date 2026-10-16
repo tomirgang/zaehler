@@ -1,0 +1,33 @@
+# @impl SPEC_OPS_OTEL
+# Collector für die lokale Umgebung (compose.otel.yaml): Traces per OTLP/HTTP,
+# Metriken von der App; Ausgabe im Log des Collectors.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: zaehler
+          scrape_interval: 30s
+          static_configs:
+            - targets: ["zaehler:9090"]
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [prometheus]
+      processors: [batch]
+      exporters: [debug]

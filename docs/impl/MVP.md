@@ -59,7 +59,7 @@ PostgreSQL.
 :id: WP_MVP_01
 :status: done
 :milestone: M1
-:covers: REQ_NFR_003, SPEC_ARCH_LAYERS, SPEC_ERR_HANDLING, SPEC_SEC_HEADERS, SPEC_I18N
+:covers: REQ_NFR_003, REQ_NFR_009, SPEC_ARCH_LAYERS, SPEC_ERR_HANDLING, SPEC_SEC_HEADERS, SPEC_I18N, SPEC_UI_BUSY
 
 Umbau des Grundgerüsts auf die Crates gemäß {need}`ADR_022`: `zaehler-app`
 (Ids, `AppError`, Port-Traits als Gerüst), `zaehler-web` (Router, Handler,
@@ -73,6 +73,9 @@ Formatierungsfunktionen, Extraktor `Lang`.
 Verstoß rot; Fehlerseiten 404/422/500 in beiden Formaten (HTML, HTMX);
 CSP-Header auf allen HTML-Antworten; Schlüsseltest `de`/`en` vorhanden;
 vorhandene Tests weiterhin grün.
+
+**Stand:** Nachträglich aufgenommen: Ladezustand von Formularen
+({need}`REQ_NFR_009`, {need}`SPEC_UI_BUSY`) in `app.js`.
 ```
 
 ```{wp} Ports, Unit of Work, DB-Adapter und Tenant
@@ -207,7 +210,7 @@ umgesetzt mit Medien-, Port-, Anwendungsfall- und HTTP-Tests.
 :status: done
 :milestone: M3
 :depends: WP_MVP_05
-:covers: REQ_ANA_001, REQ_ANA_003, REQ_ANA_004, REQ_ANA_005, REQ_ANA_007, REQ_FC_001, SPEC_ANA_MONTHLY_SERIES, SPEC_ANA_REGISTER_AGG, SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR, SPEC_ANA_CHARTS
+:covers: REQ_ANA_001, REQ_ANA_003, REQ_ANA_004, REQ_ANA_005, REQ_ANA_007, REQ_ANA_009, REQ_FC_001, SPEC_ANA_MONTHLY_SERIES, SPEC_ANA_REGISTER_AGG, SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR, SPEC_ANA_CHARTS, SPEC_ANA_REGISTER_CHARTS
 
 Domain-Module `series` und `analysis`, Anwendungsfälle `MeterAnalysis` und
 `MeterChartData`, Auswertungsbereich
@@ -222,7 +225,9 @@ Schaltjahr, Prognose), Anwendungsfall-Test über zwei Register und
 Zählerwechsel sowie HTTP-Test für Detailseite und `chart.json`. Diagramme in
 Chromium mit der bestehenden Content-Security-Policy geprüft. ECharts wird
 abweichend vom Entwurf nur auf der Detailseite geladen, das Dashboard enthält
-im MVP keine Diagramme.
+im MVP keine Diagramme. Nachträglich aufgenommen: Prognose und Diagramme je
+Register ({need}`REQ_ANA_009`, {need}`SPEC_ANA_REGISTER_CHARTS`) mit
+Anwendungsfall- und HTTP-Test.
 ```
 
 ```{wp} Dashboard
@@ -269,7 +274,7 @@ Geräts wird bei älteren Ablesungen vorverlegt). Mit dem CSV-Limit ist
 
 ```{wp} Englische Oberfläche
 :id: WP_MVP_11
-:status: open
+:status: done
 :milestone: M4
 :depends: WP_MVP_01
 :covers: REQ_NFR_002, SPEC_I18N
@@ -278,6 +283,12 @@ Englische Texte für alle Seiten, Sprachauswahl in den Einstellungen,
 `Accept-Language`, englische Zahlen- und Datumsformate.
 
 **Abnahme:** jede Seite rendert in `de` und `en` ohne fehlende Schlüssel.
+
+**Stand:** HTTP-Test `every_page_renders_in_german_and_english` rendert alle
+Seiten (inklusive Foto-Prüfung, Import-Zuordnung, `chart.json`, Fehlerseite
+und Anmeldeseite nach `Accept-Language`) in beiden Sprachen ohne unbekannte
+Schlüssel und ohne offene Platzhalter. Bisher nur deutsche Antworttexte
+(CSRF-Fehler, interner Fehler ohne Sitzung) sind lokalisiert.
 ```
 
 ```{wp} Progressive Web App
@@ -291,11 +302,19 @@ Manifest, Icons, Service Worker, Prüfung des Layouts ab 360 px.
 
 **Abnahme:** Installation auf Android (Chrome) und iOS (Safari, „Zum
 Home-Bildschirm“); Lighthouse-Kategorie PWA ohne Fehler.
+
+**Stand:** Manifest, Icons (192, 512, maskable, Apple), Service Worker und
+Registrierung umgesetzt und per HTTP-Test geprüft; Layout aller Seiten in
+Chromium bei 360 px ohne horizontales Scrollen und ohne Bedienelemente unter
+44 px geprüft. Offen ist die Installation auf Android und iOS; sie erfordert
+Geräte. Lighthouse enthält seit Version 12 keine Kategorie PWA mehr; die
+Installierbarkeit zeigt Chrome in den DevTools unter „Application“. Bis zur
+Geräteprüfung bleibt das Arbeitspaket `open`.
 ```
 
 ```{wp} Observability
 :id: WP_MVP_13
-:status: open
+:status: done
 :milestone: M4
 :depends: WP_MVP_01
 :covers: REQ_OPS_004, SPEC_OPS_OTEL
@@ -305,11 +324,16 @@ Log-Felder (Request-ID, Haushalt, Nutzer).
 
 **Abnahme:** Traces in einem lokalen OTel-Collector (compose-Override)
 sichtbar; Metriken unter `/metrics`.
+
+**Stand:** Mit `compose.otel.yaml` kommen die Traces im Collector an (geprüft
+im Smoke-Test); Unit-Tests für Endpunkt und W3C-Trace-Context, HTTP-Test für
+`x-request-id`, Test der HTTP-Metriken mit Route-Template. Betriebsdoku unter
+{doc}`../betrieb/observability`.
 ```
 
 ```{wp} Betrieb und Auslieferung
 :id: WP_MVP_14
-:status: open
+:status: done
 :milestone: M4
 :depends: WP_MVP_06, WP_MVP_13
 :covers: REQ_OPS_001, REQ_OPS_003, REQ_OPS_005, REQ_OPS_006, REQ_OPS_007
@@ -320,11 +344,22 @@ MinIO und OTel-Collector; CI-Smoke-Test mit compose; Betriebsdoku.
 
 **Abnahme:** `helm lint` aller Varianten; Smoke-Test in der CI grün;
 Installation mit CNPG in einem Test-Cluster.
+
+**Stand:** `helm lint` aller Varianten mit `alpine/helm:3.19.0` grün.
+`deploy/smoke-test.sh` lokal grün für SQLite sowie für PostgreSQL mit S3
+und OTel; der CI-Job `smoke` ist angelegt, ein CI-Lauf steht aus.
+Installation mit CNPG 1.27.1 in einem kind-Cluster: Cluster gesund,
+Migrationen angewendet, `/readyz` 200, Weiterleitung zum OIDC-Provider
+(Keycloak im Cluster), Metriken auf Port 9090. Die App startete einmal neu,
+weil die Datenbank noch nicht bereit war. Anmeldung mit `compose.keycloak.yaml`
+in Chromium geprüft. Neu: compose-Overrides für S3 (Versity Gateway statt
+MinIO), OTel und Keycloak, Chart-Werte für Sitzung, Upload, Bild,
+Housekeeping, OTel, S3 ohne TLS und CNPG-Sicherung.
 ```
 
 ```{wp} Qualitätssicherung und Abschluss
 :id: WP_MVP_15
-:status: open
+:status: done
 :milestone: M4
 :depends: WP_MVP_07, WP_MVP_08, WP_MVP_09, WP_MVP_10, WP_MVP_11, WP_MVP_12, WP_MVP_14
 :covers: REQ_NFR_006, REQ_NFR_008, SPEC_PERF_BUDGET
@@ -337,6 +372,10 @@ aktualisieren.
 **Abnahme:** {need}`SPEC_PERF_BUDGET` eingehalten; keine offenen Befunde der
 Schwere hoch; Lückenlisten unter {doc}`../nachverfolgung/index` ohne
 MVP-Einträge.
+
+**Stand:** Ergebnisse in {doc}`mvp-abnahme`. Die manuellen Abnahmen von
+WP_MVP_07 (Probe mit 20 Zählerfotos) und WP_MVP_12 (Installation auf
+Geräten) stehen aus.
 ```
 
 ```{wp} Export, Import und Upgrade ohne Datenverlust

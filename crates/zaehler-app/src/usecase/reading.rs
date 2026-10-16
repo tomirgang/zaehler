@@ -99,6 +99,7 @@ pub(crate) fn check_all(
 
 impl CheckReadings {
     /// Prüfung ohne Speichern (Hinweise im Formular).
+    #[tracing::instrument(name = "CheckReadings", skip_all)]
     pub async fn execute(
         &self,
         t: &Tenant,
@@ -164,12 +165,28 @@ pub(crate) async fn record_in(
         .ok_or(AppError::NotFound)?;
     let readings = uow.readings().list_for_meter(t, input.meter_id).await?;
     let checks = check_all(&agg, &readings, input)?;
-    if !confirmed && checks.iter().any(|c| c.plausibility != Plausibility::Ok) {
-        return Ok(RecordOutcome::NeedsConfirmation(checks));
-    }
     let device = agg
         .active_device()
         .ok_or(AppError::Conflict("meter.no_active_device"))?;
+    // Vor dem Einbau des aktiven Geräts ist nur beim ersten Gerät zulässig;
+    // vor einem Zählerwechsel gehört der Stand zum alten Gerät.
+    let before_installation = input.at < device.data.installed_at;
+    let first_device = agg.devices.first().is_some_and(|d| d.id == device.id);
+    if before_installation && !first_device {
+        let mut e = FieldErrors::default();
+        e.add("at", "reading.before_installation");
+        e.into_result()?;
+    }
+    if !confirmed && checks.iter().any(|c| c.plausibility != Plausibility::Ok) {
+        return Ok(RecordOutcome::NeedsConfirmation(checks));
+    }
+    if before_installation {
+        // wie beim CSV-Import: Einbau des ersten Geräts vorverlegen
+        // (SPEC_RDG_PLAUSIBILITY, SPEC_IMP_CSV_FORMAT)
+        let mut data = device.data.clone();
+        data.installed_at = input.at;
+        uow.meters().update_device(t, device.id, &data).await?;
+    }
     let note = input
         .note
         .as_ref()
@@ -208,6 +225,7 @@ impl RecordReadings {
     /// Speichert alle Werte in einer Transaktion. Mit Warnungen und ohne
     /// `confirmed` wird nichts gespeichert.
     // @impl SPEC_RDG_FORM, SPEC_RDG_PLAUSIBILITY
+    #[tracing::instrument(name = "RecordReadings", skip_all)]
     pub async fn execute(
         &self,
         t: &Tenant,
@@ -240,6 +258,7 @@ impl DeleteReading {
     /// Löscht eine Ablesung. Ablesungen eines Zählerwechsels (Endstand des
     /// alten, Startstand eines nachfolgenden Geräts) sind gesperrt.
     // @impl SPEC_RDG_DELETE
+    #[tracing::instrument(name = "DeleteReading", skip_all)]
     pub async fn execute(&self, t: &Tenant, id: ReadingId) -> Result<MeterId, AppError> {
         t.require(Role::Member)?;
         let mut uow = self.p.uow.begin().await?;
@@ -274,6 +293,7 @@ impl DeleteReading {
 impl GetReadingPhoto {
     /// Belegfoto einer Ablesung des Haushalts (JPEG).
     // @impl SPEC_SEC_UPLOADS, SPEC_STORE_BLOBS
+    #[tracing::instrument(name = "GetReadingPhoto", skip_all)]
     pub async fn execute(&self, t: &Tenant, id: ReadingId) -> Result<Bytes, AppError> {
         t.require(Role::Viewer)?;
         let mut uow = self.p.uow.begin().await?;

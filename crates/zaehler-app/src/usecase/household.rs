@@ -39,6 +39,7 @@ use_case!(
 
 impl CreateHousehold {
     // @impl SPEC_TEN_HOUSEHOLDS
+    #[tracing::instrument(name = "CreateHousehold", skip_all)]
     pub async fn execute(
         &self,
         user: UserId,
@@ -56,6 +57,7 @@ impl CreateHousehold {
 }
 
 impl GetHousehold {
+    #[tracing::instrument(name = "GetHousehold", skip_all)]
     pub async fn execute(&self, t: &Tenant) -> Result<Household, AppError> {
         let mut uow = self.p.uow.begin().await?;
         Ok(uow.households().get(t).await?)
@@ -64,6 +66,7 @@ impl GetHousehold {
 
 impl UpdateHousehold {
     // @impl SPEC_TEN_HOUSEHOLDS
+    #[tracing::instrument(name = "UpdateHousehold", skip_all)]
     pub async fn execute(&self, t: &Tenant, data: HouseholdData) -> Result<(), AppError> {
         t.require(Role::Owner)?;
         validate_data(&data)?;
@@ -76,6 +79,7 @@ impl UpdateHousehold {
 
 impl DeleteHousehold {
     // @impl SPEC_PRIV_HOUSEHOLD_DELETE
+    #[tracing::instrument(name = "DeleteHousehold", skip_all)]
     pub async fn execute(&self, t: &Tenant, confirm_name: &str) -> Result<(), AppError> {
         t.require(Role::Owner)?;
         let mut uow = self.p.uow.begin().await?;

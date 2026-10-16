@@ -22,7 +22,15 @@ database:
     storage:
       size: 5Gi
       storageClass: ""
-    # Backups (barman-cloud plugin / objectStore) gemäß CNPG-Doku ergänzen
+    # Wird unverändert als spec.backup in den Cluster übernommen, z.B.
+    # barmanObjectStore (siehe docs/betrieb/backup.md und CNPG-Doku).
+    backup: {}
+    # Optional: regelmäßige Sicherung (CNPG ScheduledBackup); setzt
+    # database.cnpg.backup voraus.
+    scheduledBackup:
+      enabled: false
+      # Cron-Ausdruck mit Sekunden (CNPG), Standard täglich 02:00 UTC
+      schedule: "0 0 2 * * *"
   existing:
     secretName: ""
     secretKey: uri
@@ -55,6 +63,8 @@ storage:
     region: ""
     # Secret mit AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
     credentialsSecret: ""
+    # Endpunkt ohne TLS zulassen (z.B. Objektspeicher im selben Cluster)
+    allowHttp: false
   fs:
     persistence:
       size: 5Gi
@@ -88,6 +98,31 @@ notify:
 
 session:
   ttlHours: 720
+  # leer: Secure-Flag aus dem Schema von publicUrl (https)
+  cookieSecure: ""
+
+# Upload-Grenzen in Byte. Ein Foto-Upload umfasst bis zu 20 Fotos; die
+# Grenze des Ingress-Controllers entsprechend setzen, z.B. bei ingress-nginx
+# nginx.ingress.kubernetes.io/proxy-body-size: "320m".
+upload:
+  maxPhotoBytes: 15728640
+  maxCsvBytes: 5242880
+  maxBackupBytes: 1073741824
+
+# Bildverarbeitung vor Ablage und AI-Erkennung
+imageProcessing:
+  maxPixels: 2000000
+  jpegQuality: 85
+
+housekeeping:
+  intervalMinutes: 60
+  draftTtlHours: 24
+
+# Trace-Export per OTLP/HTTP, z.B. http://otel-collector.monitoring:4318;
+# leer: kein Export
+otel:
+  endpoint: ""
+  serviceName: zaehler
 
 log:
   format: json

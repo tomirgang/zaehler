@@ -76,7 +76,7 @@ gekennzeichnet anzeigen und `owner`n ermöglichen, den Namen des Haushalts zu
 **Akzeptanzkriterien**
 - Die Titelleiste zeigt den Namen des aktiven Haushalts mit der Bezeichnung
   „Haushalt“, getrennt vom Namen des angemeldeten Nutzers.
-- Von der Titelleiste führt ein direkter Weg zum Umbenennen.
+- Umbenannt wird in den Einstellungen im Abschnitt „Haushalt“.
 - Nach dem Speichern erscheint der neue Name sofort in der Titelleiste und in
   der Haushaltsauswahl.
 ```

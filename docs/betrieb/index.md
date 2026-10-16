@@ -6,5 +6,6 @@
 konfiguration
 docker-compose
 kubernetes
+observability
 backup
 ```

@@ -10,7 +10,7 @@
   <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
   <div class="field{% if !errors.is_empty() %} has-error{% endif %}">
     <label for="photo">{{ ctx.lang.t("capture-photo") }}</label>
-    <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple required>
+    <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" multiple required>
     <p class="hint">{{ photo_hint }}</p>
     {% for e in errors %}<p class="field-error">{{ e }}</p>{% endfor %}
   </div>

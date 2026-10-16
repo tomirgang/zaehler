@@ -1,0 +1,35 @@
+# @impl SPEC_OPS_COMPOSE
+# Override: Fotos und Archive in einem S3-kompatiblen Objektspeicher statt im
+# Volume. Als Server dient Versity Gateway (Backend posix, ein Verzeichnis je
+# Bucket); MinIO verteilt keine Community-Images mehr.
+#   docker compose -f compose.yaml -f compose.s3.yaml up -d
+# Zugangsdaten nur für die lokale Umgebung; über S3_ACCESS_KEY und
+# S3_SECRET_KEY in .env änderbar.
+
+services:
+  zaehler:
+    environment:
+      ZAEHLER_STORAGE__KIND: s3
+      ZAEHLER_STORAGE__BUCKET: zaehler
+      ZAEHLER_STORAGE__ENDPOINT: http://s3:7070
+      ZAEHLER_STORAGE__REGION: us-east-1
+      ZAEHLER_STORAGE__ALLOW_HTTP: "true"
+      ZAEHLER_STORAGE__ACCESS_KEY_ID: ${S3_ACCESS_KEY:-zaehler}
+      ZAEHLER_STORAGE__SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-zaehler-secret}
+    depends_on:
+      s3:
+        condition: service_started
+
+  s3:
+    image: versity/versitygw:v1.9.0
+    restart: unless-stopped
+    environment:
+      ROOT_ACCESS_KEY: ${S3_ACCESS_KEY:-zaehler}
+      ROOT_SECRET_KEY: ${S3_SECRET_KEY:-zaehler-secret}
+    # Bucket als Verzeichnis anlegen, danach den Server starten
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /data/zaehler && exec versitygw --port :7070 posix /data"]
+    volumes:
+      - s3-data:/data
+
+volumes:
+  s3-data:

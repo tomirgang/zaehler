@@ -86,3 +86,20 @@ kumulierter Jahresverlauf gegen Prognose und Erwartungsband.
 Das System soll ein Dashboard mit allen aktiven Zählern zeigen: letzter Stand,
 Ampel, Jahresprognose (Verbrauch, ab v1 auch Kosten) und fällige Ablesungen.
 ```
+
+```{req} Auswertung je Register
+:id: REQ_ANA_009
+:status: accepted
+:priority: must
+:release: MVP
+
+Das System muss bei Messstellen mit mehreren Registern die Prognose und den
+Verlauf zusätzlich für jedes Register berechnen und als Diagramme darstellen.
+
+**Akzeptanzkriterien**
+- Je Register: Prognose für Kalenderjahr und, falls hinterlegt,
+  Abrechnungsjahr; Monatswerte des laufenden Jahres und des Vorjahres;
+  kumulierter Jahresverlauf mit Prognose.
+- Die Werte der Register ergeben in Summe die Werte der Messstelle je Richtung.
+- Bei nur einem Register entfällt die Darstellung je Register.
+```

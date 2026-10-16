@@ -732,6 +732,7 @@ impl UploadCsv {
     /// Prüft Kodierung und Aufbau und legt die Datei unter `tmp/` ab
     /// (Housekeeping entfernt sie spätestens nach 24 Stunden).
     // @impl SPEC_IMP_CSV, SPEC_SEC_UPLOADS
+    #[tracing::instrument(name = "UploadCsv", skip_all)]
     pub async fn execute(&self, t: &Tenant, bytes: Bytes) -> Result<BlobKey, AppError> {
         t.require(Role::Member)?;
         let (_, rows) = parse_rows(decode(&bytes)?)?;
@@ -751,6 +752,7 @@ impl UploadCsv {
 impl PreviewImport {
     /// Aufbau der Datei mit Zuordnungsvorschlag.
     // @impl SPEC_IMP_CSV_FORMAT
+    #[tracing::instrument(name = "PreviewImport::sheet", skip_all)]
     pub async fn sheet(&self, t: &Tenant, key: &BlobKey) -> Result<ImportSheet, AppError> {
         t.require(Role::Member)?;
         let (delimiter, rows) = load_rows(&self.p, t, key).await?;
@@ -773,6 +775,7 @@ impl PreviewImport {
 
     /// Prüfergebnis je Zeile, ohne Speicherung.
     // @impl SPEC_IMP_CSV
+    #[tracing::instrument(name = "PreviewImport", skip_all)]
     pub async fn execute(
         &self,
         t: &Tenant,
@@ -806,6 +809,7 @@ impl CommitImport {
     /// Einbau des ersten Geräts, wird der Einbau vorverlegt. Danach wird die
     /// Datei gelöscht.
     // @impl SPEC_IMP_CSV, SPEC_IMP_CSV_FORMAT
+    #[tracing::instrument(name = "CommitImport", skip_all)]
     pub async fn execute(
         &self,
         t: &Tenant,

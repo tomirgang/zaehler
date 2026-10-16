@@ -150,6 +150,7 @@ fn present_photos(reader: &ArchiveReader<impl Read + Seek>, data: &BackupData) -
 impl ExportInstallation {
     /// Schreibt alle Daten der Installation als Archiv (Betrieb, ohne Tenant).
     // @impl SPEC_BACKUP_INSTALLATION
+    #[tracing::instrument(name = "ExportInstallation", skip_all)]
     pub async fn execute<W: Write + Seek + Send>(
         &self,
         out: W,
@@ -164,6 +165,7 @@ impl ImportInstallation {
     /// Objektschlüssel bleiben erhalten. Schlägt der Datenbankteil fehl,
     /// werden die bereits abgelegten Fotos wieder entfernt.
     // @impl SPEC_BACKUP_INSTALLATION
+    #[tracing::instrument(name = "ImportInstallation", skip_all)]
     pub async fn execute<R: Read + Seek + Send>(
         &self,
         source: R,
@@ -196,6 +198,7 @@ impl ImportInstallation {
 impl ExportHousehold {
     /// Archiv des Haushalts des Tenants (nur Owner).
     // @impl SPEC_BACKUP_HOUSEHOLD
+    #[tracing::instrument(name = "ExportHousehold", skip_all)]
     pub async fn execute<W: Write + Seek + Send>(
         &self,
         t: &Tenant,
@@ -274,6 +277,7 @@ impl ImportHousehold {
     /// IDs werden neu vergeben, damit derselbe Haushalt mehrfach und in jede
     /// Installation importiert werden kann.
     // @impl SPEC_BACKUP_HOUSEHOLD
+    #[tracing::instrument(name = "ImportHousehold", skip_all)]
     pub async fn execute<R: Read + Seek + Send>(
         &self,
         t: &Tenant,

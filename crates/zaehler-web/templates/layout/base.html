@@ -7,6 +7,10 @@
   <meta name="htmx-config"
     content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"responseHandling":[{"code":"204","swap":false},{"code":"...","swap":true}]}'>
   <title>{% block title %}{{ ctx.lang.t("app-name") }}{% endblock %}</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#2f6f4f">
+  <link rel="icon" href="{{ ctx.static_prefix }}/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ ctx.static_prefix }}/apple-touch-icon.png">
   <link rel="stylesheet" href="{{ ctx.static_prefix }}/app.css">
   <script src="{{ ctx.static_prefix }}/htmx.min.js" defer></script>
   <script src="{{ ctx.static_prefix }}/app.js" defer></script>
@@ -14,6 +18,7 @@
 </head>
 
 <body hx-boost="true" hx-headers='{"X-CSRF-Token": "{{ ctx.csrf }}"}'>
+  <a class="skip-link" href="#main">{{ ctx.lang.t("skip-to-content") }}</a>
   <header class="topbar">
     <a class="brand" href="/">{{ ctx.lang.t("app-name") }}</a>
     <nav>
@@ -48,7 +53,7 @@
       </form>
     </div>
   </header>
-  <main class="container">
+  <main id="main" class="container">
     {% if let Some(f) = ctx.flash %}<p class="flash" role="status">{{ ctx.lang.t(f) }}</p>{% endif %}
     {% block content %}{% endblock %}
   </main>

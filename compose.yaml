@@ -4,7 +4,12 @@
 #   docker compose up -d --build
 #   docker compose -f compose.yaml -f compose.postgres.yaml up -d   # PostgreSQL statt SQLite
 #
+# Weitere Overrides: compose.s3.yaml (S3-Objektspeicher), compose.otel.yaml
+# (OpenTelemetry-Collector), compose.keycloak.yaml (OIDC mit Keycloak).
+#
 # Geheimnisse (OpenRouter-Key, OIDC, SMTP) in .env ablegen, siehe .env.example.
+# COMPOSE_HTTP_PORT ändert den Port auf dem Host, COMPOSE_APP_ENV_FILE die
+# Datei mit den Variablen für den Container.
 # Ohne OIDC-Konfiguration ist der Entwicklungs-Login aktiv; er ist nur mit
 # einer public_url auf localhost zulässig. Für andere Adressen OIDC in .env
 # konfigurieren und ZAEHLER_AUTH__DEV_LOGIN=false setzen.
@@ -15,9 +20,9 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "${COMPOSE_HTTP_PORT:-8080}:8080"
     env_file:
-      - path: .env
+      - path: ${COMPOSE_APP_ENV_FILE:-.env}
         required: false
     environment:
       ZAEHLER_LOG__FORMAT: pretty

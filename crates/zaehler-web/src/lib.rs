@@ -22,8 +22,14 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use tower_http::{compression::CompressionLayer, timeout::TimeoutLayer, trace::TraceLayer};
+use tower_http::{
+    compression::CompressionLayer,
+    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    timeout::TimeoutLayer,
+    trace::TraceLayer,
+};
 use tower_sessions::{Expiry, SessionManagerLayer, SessionStore, cookie::SameSite};
+use tracing::{Span, field::Empty};
 
 pub use auth::OidcClient;
 pub use state::{WebConfig, WebState};
@@ -124,20 +130,82 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
         ))
         .layer(sessions);
 
+    let trace_parent = state.cfg.trace_parent;
     Router::new()
         .route("/static/{version}/{name}", get(assets::serve))
+        .route("/manifest.webmanifest", get(pages::pwa::manifest))
+        .route("/sw.js", get(pages::pwa::service_worker))
         .route("/healthz", get(pages::live))
         .route("/readyz", get(pages::ready))
         .merge(app)
         .layer(middleware::from_fn(security::security_headers))
         .layer(middleware::from_fn(track_metrics))
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(move |req: &Request| request_span(req, trace_parent))
+                .on_response(record_status),
+        )
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(120),
         ))
+        .layer(PropagateRequestIdLayer::x_request_id())
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+        .layer(middleware::map_request(drop_invalid_request_id))
         .with_state(state)
+}
+
+/// Übernimmt eine Request-ID eines vorgelagerten Proxys nur mit höchstens
+/// 64 sichtbaren ASCII-Zeichen; sonst wird eine neue erzeugt (SPEC_OPS_OTEL).
+async fn drop_invalid_request_id(mut req: Request) -> Request {
+    let valid = req.headers().get("x-request-id").is_none_or(|v| {
+        let b = v.as_bytes();
+        !b.is_empty() && b.len() <= 64 && b.iter().all(u8::is_ascii_graphic)
+    });
+    if !valid {
+        req.headers_mut().remove("x-request-id");
+    }
+    req
+}
+
+/// Span je Request mit Route-Template und Request-ID; Haushalt und Nutzer
+/// trägt der Extraktor `Ctx` nach (SPEC_OPS_OTEL).
+// @impl SPEC_OPS_OTEL
+fn request_span(req: &Request, trace_parent: Option<state::TraceParent>) -> Span {
+    let route = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or("unmatched", MatchedPath::as_str);
+    let request_id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let span = tracing::info_span!(
+        "http_request",
+        otel.name = %format_args!("{} {route}", req.method()),
+        otel.kind = "server",
+        otel.status_code = Empty,
+        http.request.method = %req.method(),
+        http.route = route,
+        http.response.status_code = Empty,
+        request_id,
+        household = Empty,
+        user = Empty,
+    );
+    if let Some(set_parent) = trace_parent {
+        set_parent(req.headers(), &span);
+    }
+    span
+}
+
+fn record_status(res: &Response, latency: Duration, span: &Span) {
+    span.record("http.response.status_code", res.status().as_u16());
+    if res.status().is_server_error() {
+        span.record("otel.status_code", "ERROR");
+    }
+    tracing::debug!(latency_ms = latency.as_millis(), "request finished");
 }
 
 /// HTTP-Metriken mit Route-Template statt konkreter IDs (SPEC_OPS_METRICS).

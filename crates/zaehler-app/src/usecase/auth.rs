@@ -61,6 +61,7 @@ async fn create_default_household(
 
 impl SignIn {
     // @impl SPEC_TEN_HOUSEHOLDS
+    #[tracing::instrument(name = "SignIn", skip_all)]
     pub async fn execute(&self, identity: &Identity) -> Result<SignedIn, AppError> {
         if identity.issuer.is_empty() || identity.subject.is_empty() {
             return Err(AppError::Unauthenticated);
@@ -92,6 +93,7 @@ impl ResolveTenant {
     /// Wählt `preferred`, falls der Nutzer Mitglied ist, sonst den ersten
     /// Haushalt; ohne Mitgliedschaft wird ein Haushalt angelegt.
     // @impl SPEC_SEC_TENANT_SCOPE, SPEC_TEN_HOUSEHOLDS
+    #[tracing::instrument(name = "ResolveTenant", skip_all)]
     pub async fn execute(
         &self,
         user_id: UserId,
@@ -123,6 +125,7 @@ impl ResolveTenant {
 }
 
 impl SetLocale {
+    #[tracing::instrument(name = "SetLocale", skip_all)]
     pub async fn execute(&self, user: UserId, locale: &str) -> Result<(), AppError> {
         if !SUPPORTED_LOCALES.contains(&locale) {
             return Err(AppError::field("locale", "settings.locale_invalid"));

@@ -50,6 +50,7 @@ impl Housekeeping {
     /// Führt alle Schritte aus, auch wenn einer fehlschlägt; liefert dann den
     /// ersten Fehler.
     // @impl SPEC_OPS_HOUSEKEEPING
+    #[tracing::instrument(name = "Housekeeping", skip_all)]
     pub async fn execute(&self) -> Result<HousekeepingReport, AppError> {
         let now = self.clock.now();
         let mut report = HousekeepingReport::default();

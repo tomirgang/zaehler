@@ -35,6 +35,7 @@ pub struct PageCtx {
 
 impl PageCtx {
     /// Name des aktiven Haushalts für die Titelleiste (SPEC_UI_TOPBAR).
+    // @impl SPEC_UI_TOPBAR
     #[must_use]
     pub fn active_name(&self) -> &str {
         self.households
@@ -89,8 +90,13 @@ pub fn login_redirect(hx: bool) -> Response {
 }
 
 fn internal(e: impl std::fmt::Display) -> Response {
-    tracing::error!(error = %e, "request context failed");
-    (StatusCode::INTERNAL_SERVER_ERROR, "Interner Fehler").into_response()
+    let reference = uuid::Uuid::now_v7();
+    tracing::error!(%reference, error = %e, "request context failed");
+    // Sprache des Nutzers ist hier noch unbekannt
+    let text = [Lang::De, Lang::En]
+        .map(|l| l.ta("error-internal", &[("ref", reference.to_string())]))
+        .join("\n");
+    (StatusCode::INTERNAL_SERVER_ERROR, text).into_response()
 }
 
 impl FromRequestParts<WebState> for Ctx {
@@ -125,6 +131,10 @@ impl FromRequestParts<WebState> for Ctx {
             Err(e) => return Err(internal(e)),
         };
         let active = resolved.tenant.household_id();
+        // Log- und Trace-Felder des Request-Spans (SPEC_OPS_OTEL)
+        let span = tracing::Span::current();
+        span.record("household", tracing::field::display(active));
+        span.record("user", tracing::field::display(user_id));
         if preferred != Some(active) {
             session
                 .insert(SESSION_HOUSEHOLD, active)

@@ -60,7 +60,10 @@ Prüfung gegen den letzten Stand desselben Geräts in dieser Reihenfolge:
 gilt ein Überlauf nur als plausibel, wenn er weniger als 10ⁿ/2 Einheiten
 ergibt), `RateTooHigh` (Tagesrate des Verbrauchs, bei Überlauf inklusive
 Überlauf, größer als `max_daily_rate`), sonst `Ok`. Das Ergebnis ist ein
-Hinweis; Speichern nach Bestätigung bleibt möglich.
+Hinweis; Speichern nach Bestätigung bleibt möglich. Liegt ein bestätigter
+Stand vor dem Einbau des ersten Geräts, wird dessen Einbau auf diesen
+Zeitpunkt vorverlegt (wie beim CSV-Import); vor dem Einbau eines späteren
+Geräts, also vor einem Zählerwechsel, ist das Speichern unzulässig.
 ```
 
 ## Vergleiche und Erwartung

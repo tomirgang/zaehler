@@ -1,0 +1,50 @@
+# @impl SPEC_OPS_COMPOSE
+# Override: Anmeldung über OIDC mit Keycloak statt Entwicklungs-Login.
+#   docker compose -f compose.yaml -f compose.keycloak.yaml up -d
+# Anmeldung unter http://localhost:8080 mit Nutzer "demo", Passwort "demo".
+# Keycloak ist im Browser und im Container unter http://keycloak.localhost:8180
+# erreichbar (*.localhost zeigt im Browser auf 127.0.0.1, im Compose-Netz ist
+# der Name ein Alias des Containers); dadurch stimmt der Issuer überein.
+# Zugangsdaten und Client-Secret nur für die lokale Umgebung.
+
+services:
+  zaehler:
+    environment:
+      ZAEHLER_AUTH__DEV_LOGIN: "false"
+      ZAEHLER_OIDC__ISSUER_URL: http://keycloak.localhost:8180/realms/zaehler
+      ZAEHLER_OIDC__CLIENT_ID: zaehler
+      ZAEHLER_OIDC__CLIENT_SECRET: zaehler-dev-secret
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    restart: unless-stopped
+    command:
+      - start-dev
+      - --import-realm
+      - --http-port=8180
+      - --hostname=http://keycloak.localhost:8180
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8180:8180"
+    networks:
+      default:
+        aliases:
+          - keycloak.localhost
+    volumes:
+      - ./deploy/compose/keycloak-realm.json:/opt/keycloak/data/import/zaehler-realm.json:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '200 OK' <&3
+      interval: 5s
+      timeout: 3s
+      retries: 60

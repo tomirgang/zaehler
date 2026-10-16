@@ -138,6 +138,70 @@
     </details>
   </div>
 
+  {% if !a.register_views.is_empty() %}
+  <h3>{{ ctx.lang.t("analysis-registers-title") }}</h3>
+  {% for r in a.register_views %}
+  <section class="register-analysis" aria-labelledby="register-{{ r.index }}-title">
+    <h4 id="register-{{ r.index }}-title">{{ r.title }}</h4>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{ ctx.lang.t("analysis-period") }}</th>
+          <th class="num">{{ ctx.lang.t("forecast-observed") }} ({{ a.unit }})</th>
+          <th class="num">{{ ctx.lang.t("forecast-projected") }} ({{ a.unit }})</th>
+          <th class="num">{{ ctx.lang.t("forecast-coverage") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in r.forecasts %}
+        <tr>
+          <td>{{ f.label }}</td>
+          {% if let Some(h) = f.hint %}
+          <td colspan="3" class="muted">{{ h }}</td>
+          {% else %}
+          <td class="num">{{ f.observed }}</td>
+          <td class="num">{{ f.projected }}</td>
+          <td class="num">{{ f.coverage }}</td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="charts" data-chart-url="/meters/{{ id }}/chart.json" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
+      <h5 id="register-{{ r.index }}-monthly-title">{{ r.chart_title_monthly }}</h5>
+      <div class="chart" data-chart="monthly" data-register="{{ r.index }}" role="img" aria-labelledby="register-{{ r.index }}-monthly-title"></div>
+      <h5 id="register-{{ r.index }}-cumulative-title">{{ r.chart_title_cumulative }}</h5>
+      <div class="chart" data-chart="cumulative" data-register="{{ r.index }}" role="img" aria-labelledby="register-{{ r.index }}-cumulative-title"></div>
+      <details>
+        <summary>{{ ctx.lang.t("chart-table") }}</summary>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{ ctx.lang.t("analysis-month") }}</th>
+              <th class="num">{{ a.chart_year }} ({{ a.unit }})</th>
+              <th class="num">{{ a.chart_previous_year }} ({{ a.unit }})</th>
+              <th class="num">{{ ctx.lang.t("chart-cumulative-series") }}</th>
+              <th class="num">{{ ctx.lang.t("chart-forecast-series") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in r.chart_rows %}
+            <tr>
+              <td>{{ c.label }}</td>
+              <td class="num">{{ c.current }}</td>
+              <td class="num">{{ c.previous }}</td>
+              <td class="num">{{ c.cumulative }}</td>
+              <td class="num">{{ c.forecast }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </details>
+    </div>
+  </section>
+  {% endfor %}
+  {% endif %}
+
   {% if !a.rows.is_empty() %}
   <details>
     <summary>{{ ctx.lang.t("analysis-monthly-table") }}</summary>

@@ -23,7 +23,12 @@ pub struct WebConfig {
     pub max_csv_bytes: usize,
     /// Grenze für Haushaltsarchive in Byte (SPEC_BACKUP_HOUSEHOLD)
     pub max_backup_bytes: usize,
+    /// Übernimmt den Trace-Context eingehender Requests (SPEC_OPS_OTEL)
+    pub trace_parent: Option<TraceParent>,
 }
+
+/// Setzt den Eltern-Span des Request-Spans aus den Request-Headern.
+pub type TraceParent = fn(&axum::http::HeaderMap, &tracing::Span);
 
 /// Standard für `upload.max_backup_bytes`: 1 GiB.
 pub const DEFAULT_MAX_BACKUP_BYTES: usize = 1024 * 1024 * 1024;
@@ -61,7 +66,14 @@ impl WebConfig {
             max_photo_bytes: DEFAULT_MAX_PHOTO_BYTES,
             max_csv_bytes: DEFAULT_MAX_CSV_BYTES,
             max_backup_bytes: DEFAULT_MAX_BACKUP_BYTES,
+            trace_parent: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_trace_parent(mut self, f: TraceParent) -> Self {
+        self.trace_parent = Some(f);
+        self
     }
 
     #[must_use]

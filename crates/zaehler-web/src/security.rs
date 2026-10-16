@@ -11,7 +11,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use tower_sessions::Session;
 use uuid::Uuid;
 
-use crate::{extract::SESSION_CSRF, state::WebState};
+use crate::{extract::SESSION_CSRF, i18n::Lang, state::WebState};
 
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; \
                    connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'";
@@ -37,6 +37,16 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
         "permissions-policy",
         HeaderValue::from_static("camera=(self), geolocation=()"),
     );
+    // Seiten mit Haushaltsdaten nicht in gemeinsamen Caches ablegen
+    let html = h
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|v| v.as_bytes().starts_with(b"text/html"));
+    if html && !h.contains_key(header::CACHE_CONTROL) {
+        h.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-cache"),
+        );
+    }
     res
 }
 
@@ -107,8 +117,10 @@ fn origin_allowed(origin: &str, public_origin: &str) -> bool {
 /// Routen mit Multipart-Body; ihre Handler prüfen das Feld `_csrf` selbst.
 const MULTIPART_ROUTES: [&str; 3] = ["/capture", "/import/upload", "/settings/import"];
 
-fn forbidden() -> Response {
-    (StatusCode::FORBIDDEN, "CSRF-Prüfung fehlgeschlagen").into_response()
+/// Antwort bei fehlgeschlagener CSRF-Prüfung.
+#[must_use]
+pub fn csrf_failed(lang: Lang) -> Response {
+    (StatusCode::FORBIDDEN, lang.t("error-csrf")).into_response()
 }
 
 /// Prüft bei zustandsändernden Requests das CSRF-Token (Header
@@ -123,6 +135,12 @@ pub async fn csrf_guard(
     if matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
         return next.run(req).await;
     }
+    let lang = Lang::from_accept_language(
+        req.headers()
+            .get(header::ACCEPT_LANGUAGE)
+            .and_then(|v| v.to_str().ok()),
+    );
+    let forbidden = || csrf_failed(lang);
     if let Some(origin) = req
         .headers()
         .get(header::ORIGIN)

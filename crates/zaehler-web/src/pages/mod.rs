@@ -9,6 +9,7 @@ pub mod capture;
 pub mod dashboard;
 pub mod import;
 pub mod meters;
+pub mod pwa;
 pub mod readings;
 pub mod settings;
 

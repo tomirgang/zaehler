@@ -31,6 +31,8 @@ pub struct Config {
     pub upload: UploadConfig,
     #[serde(default)]
     pub backup: BackupConfig,
+    #[serde(default)]
+    pub otel: OtelConfig,
     /// Ohne Abschnitt `ai` ist die Erkennung abgeschaltet (REQ_AI_006).
     #[serde(skip_serializing)]
     pub ai: Option<zaehler_ai::OpenRouterConfig>,
@@ -201,6 +203,30 @@ impl Default for BackupConfig {
     }
 }
 
+/// Trace-Export per OTLP (SPEC_OPS_OTEL).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OtelConfig {
+    /// Basis-URL des Collectors (OTLP/HTTP, z.B. `http://collector:4318`);
+    /// ohne Angabe gilt `OTEL_EXPORTER_OTLP_ENDPOINT`, sonst kein Export.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default = "default_service_name")]
+    pub service_name: String,
+}
+
+fn default_service_name() -> String {
+    "zaehler".into()
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: None,
+            service_name: default_service_name(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcConfig {
     pub issuer_url: String,
@@ -272,6 +298,7 @@ impl Default for Config {
             housekeeping: HousekeepingConfig::default(),
             upload: UploadConfig::default(),
             backup: BackupConfig::default(),
+            otel: OtelConfig::default(),
             ai: None,
             notify: NotifyConfig::default(),
         }
@@ -295,6 +322,7 @@ impl Config {
     pub fn redacted(&self) -> String {
         let mut c = self.clone();
         c.database.url = redact_url(&c.database.url);
+        c.otel.endpoint = c.otel.endpoint.as_deref().map(redact_url);
         serde_json::to_string_pretty(&c).unwrap_or_default()
     }
 
@@ -362,6 +390,11 @@ impl Config {
         }
         if self.backup.keep == 0 {
             return Err("backup.keep muss mindestens 1 sein".into());
+        }
+        if let Some(e) = self.otel.endpoint.as_deref().filter(|e| !e.is_empty())
+            && !(e.starts_with("http://") || e.starts_with("https://"))
+        {
+            return Err("otel.endpoint muss mit http:// oder https:// beginnen".into());
         }
         Ok(())
     }

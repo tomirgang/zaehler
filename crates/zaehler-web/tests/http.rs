@@ -313,7 +313,9 @@ async fn photo_capture_workflow() {
 
     let page = text(c.get("/capture").await).await;
     assert!(page.contains("enctype=\"multipart/form-data\""));
-    assert!(page.contains("capture=\"environment\""));
+    // ohne `capture`: Kamera und Galerie mit Mehrfachauswahl (SPEC_UI_PWA)
+    assert!(!page.contains("capture=\""));
+    assert!(page.contains(" multiple required"));
 
     // ohne Token und auf anderen Routen wird Multipart abgelehnt
     let photo = fake_jpeg(200 * 1024);
@@ -585,7 +587,7 @@ async fn topbar_marks_the_household_and_renaming_updates_it() {
     let page = text(c.get("/").await).await;
     assert!(page.contains("id=\"household-label\" class=\"household-label\">Haushalt</span>"));
     assert!(page.contains("<strong class=\"household-name\">anna</strong>"));
-    assert!(page.contains("href=\"/settings#household\">Umbenennen</a>"));
+    assert!(!page.contains("href=\"/settings#household\""));
     assert!(page.contains("Angemeldet als anna"));
     assert!(
         text(c.get("/settings").await)
@@ -705,7 +707,7 @@ async fn dashboard_renders_0_1_and_20_meters_with_overdue_first() {
     assert!(html.contains("class=\"card overdue\""));
 }
 
-// @test SPEC_ANA_COMPARE_VIEW, SPEC_ANA_CHARTS
+// @test SPEC_ANA_COMPARE_VIEW, SPEC_ANA_CHARTS, SPEC_ANA_REGISTER_CHARTS
 #[tokio::test]
 async fn meter_detail_shows_analysis_and_chart_data() {
     let app = test_app(true);
@@ -735,6 +737,56 @@ async fn meter_detail_shows_analysis_and_chart_data() {
     );
     let js = c.get("/static/test/echarts.min.js").await;
     assert_eq!(js.status(), StatusCode::OK);
+    assert_eq!(json["registers"], serde_json::json!([]), "nur ein Register");
+    assert!(!html.contains("data-register="));
+
+    // zwei Register: Prognose und Diagramme je Register
+    let res = c
+        .post(
+            "/meters",
+            &[
+                ("_csrf", csrf.as_str()),
+                ("name", "Doppeltarif"),
+                ("kind", "electricity"),
+                ("unit", ""),
+                ("serial_number", ""),
+                ("rollover_digits", ""),
+                ("decimal_places", "1"),
+                ("reading_interval_days", ""),
+                ("max_daily_rate", ""),
+                ("billing_month", ""),
+                ("billing_day", ""),
+                ("start_at", "2026-01-01T00:00"),
+                ("register_count", "2"),
+                ("register_0_id", ""),
+                ("register_0_code", "HT"),
+                ("register_0_direction", "import"),
+                ("register_0_start", "1000"),
+                ("register_1_id", ""),
+                ("register_1_code", "NT"),
+                ("register_1_direction", "import"),
+                ("register_1_start", "500"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let two = location(&res);
+    let html = text(c.get(&two).await).await;
+    assert!(html.contains("Register HT (Bezug)"));
+    assert!(html.contains("Register NT: Jahresverlauf 2026 mit Prognose"));
+    assert!(html.contains("data-chart=\"monthly\" data-register=\"1\""));
+    let json: serde_json::Value =
+        serde_json::from_str(&text(c.get(&format!("{two}/chart.json")).await).await).unwrap();
+    let registers = json["registers"].as_array().unwrap();
+    assert_eq!(registers.len(), 2);
+    assert_eq!(registers[0]["code"], "HT");
+    assert_eq!(
+        registers[1]["series"]["forecast"]["data"]
+            .as_array()
+            .unwrap()
+            .len(),
+        12
+    );
 
     let mut bob = Client::new(&app);
     bob.login("bob").await;
@@ -925,6 +977,7 @@ async fn probes_assets_and_security_headers() {
         .to_owned();
     assert!(csp.contains("script-src 'self'") && !csp.contains("unsafe-inline"));
     assert_eq!(login.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(login.headers()[header::CACHE_CONTROL], "private, no-cache");
     assert_eq!(
         c.get("/gibt-es-nicht").await.status(),
         StatusCode::NOT_FOUND
@@ -1276,4 +1329,189 @@ async fn settings_language_households_and_logout() {
     let res = c.post("/auth/logout", &[("_csrf", &csrf)]).await;
     assert_eq!(location(&res), "/auth/login?logged_out=true");
     assert_eq!(c.get("/").await.status(), StatusCode::SEE_OTHER);
+}
+
+/// Kein fehlender Schlüssel und kein offener Fluent-Platzhalter.
+fn assert_translated(page: &str, what: &str) {
+    assert!(
+        !page.contains("Unknown localization key"),
+        "{what}: fehlender Schlüssel"
+    );
+    assert!(
+        !page.contains("{ $") && !page.contains("{$"),
+        "{what}: offener Platzhalter"
+    );
+}
+
+// @test SPEC_I18N
+#[tokio::test]
+async fn every_page_renders_in_german_and_english() {
+    let app = capture_app(1024 * 1024);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let meter = create_meter(&mut c, &csrf, "Strom").await;
+    let register =
+        detail_register_id(&text(c.get(&format!("/meters/{meter}/readings/new")).await).await);
+    let value_field = format!("value_{register}");
+    let res = c
+        .post(
+            &format!("/meters/{meter}/readings"),
+            &[
+                ("_csrf", csrf.as_str()),
+                ("at", "2026-01-10T10:00"),
+                (value_field.as_str(), "1100,5"),
+                ("note", ""),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(64)).await;
+    let draft = location(&res);
+    reviewed(&mut c, &draft).await;
+    let res = upload_csv(
+        &mut c,
+        Some(&csrf),
+        "Datum;Wert\n01.01.2026;1000\n".as_bytes(),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    let pages = [
+        "/".to_owned(),
+        "/meters".into(),
+        "/meters/new".into(),
+        format!("/meters/{meter}"),
+        format!("/meters/{meter}/edit"),
+        format!("/meters/{meter}/swap"),
+        format!("/meters/{meter}/readings/new"),
+        format!("/meters/{meter}/chart.json"),
+        "/capture".into(),
+        draft.clone(),
+        "/import".into(),
+        "/import/preview".into(),
+        "/settings".into(),
+    ];
+    for (locale, nav) in [("de", "Übersicht"), ("en", "Overview")] {
+        let res = c
+            .post("/settings/locale", &[("_csrf", &csrf), ("locale", locale)])
+            .await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        for path in &pages {
+            let res = c.get(path).await;
+            assert_eq!(res.status(), StatusCode::OK, "{locale} {path}");
+            let page = text(res).await;
+            assert_translated(&page, &format!("{locale} {path}"));
+            if !path.ends_with("chart.json") {
+                assert!(
+                    page.contains(&format!("lang=\"{locale}\"")),
+                    "{locale} {path}"
+                );
+                assert!(page.contains(nav), "{locale} {path}");
+            }
+        }
+        let res = c.get("/meters/00000000-0000-7000-8000-000000000000").await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_translated(&text(res).await, &format!("{locale} 404"));
+    }
+
+    // ohne Anmeldung: Sprache aus `Accept-Language`
+    for (accept, locale) in [("de-DE,de;q=0.9", "de"), ("en-GB,en;q=0.8", "en")] {
+        let mut anon = Client::new(&app);
+        let req = Request::get("/auth/login")
+            .header(header::ACCEPT_LANGUAGE, accept)
+            .body(Body::empty())
+            .unwrap();
+        let page = text(anon.send(req).await).await;
+        assert_translated(&page, &format!("{locale} /auth/login"));
+        assert!(page.contains(&format!("lang=\"{locale}\"")));
+    }
+}
+
+// @test SPEC_UI_PWA
+#[tokio::test]
+async fn manifest_icons_and_service_worker_are_served() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    let req = Request::get("/manifest.webmanifest")
+        .header(header::ACCEPT_LANGUAGE, "en")
+        .body(Body::empty())
+        .unwrap();
+    let res = c.send(req).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()[header::CONTENT_TYPE],
+        "application/manifest+json"
+    );
+    let manifest: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(manifest["display"], "standalone");
+    assert_eq!(manifest["start_url"], "/");
+    assert_eq!(manifest["lang"], "en");
+    let icons = manifest["icons"].as_array().unwrap();
+    for icon in icons {
+        let src = icon["src"].as_str().unwrap();
+        let res = c.get(src).await;
+        assert_eq!(res.status(), StatusCode::OK, "{src}");
+        assert_eq!(res.headers()[header::CONTENT_TYPE], "image/png");
+        let png = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        // Breite und Höhe aus dem IHDR-Block
+        let width = u32::from_be_bytes(png[16..20].try_into().unwrap());
+        let height = u32::from_be_bytes(png[20..24].try_into().unwrap());
+        assert_eq!(
+            format!("{width}x{height}"),
+            icon["sizes"].as_str().unwrap(),
+            "{src}"
+        );
+    }
+    assert!(icons.iter().any(|i| i["purpose"] == "maskable"));
+    assert!(icons.iter().any(|i| i["sizes"] == "192x192"));
+    assert!(icons.iter().any(|i| i["sizes"] == "512x512"));
+
+    let res = c.get("/sw.js").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        res.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("text/javascript")
+    );
+    let sw = text(res).await;
+    assert!(
+        !sw.contains("addEventListener(\"fetch\""),
+        "kein Offline-Cache"
+    );
+
+    c.login("anna").await;
+    let page = text(c.get("/").await).await;
+    assert!(page.contains("<link rel=\"manifest\" href=\"/manifest.webmanifest\">"));
+    assert!(page.contains("rel=\"apple-touch-icon\""));
+    let capture = text(c.get("/capture").await).await;
+    assert!(capture.contains("accept=\"image/jpeg,image/png,image/webp\" multiple"));
+}
+
+// @test SPEC_OPS_OTEL
+#[tokio::test]
+async fn responses_carry_a_request_id() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    let res = c.get("/healthz").await;
+    let id = res.headers()["x-request-id"].to_str().unwrap().to_owned();
+    assert_eq!(id.len(), 36, "UUID");
+    let res = c.get("/healthz").await;
+    assert_ne!(res.headers()["x-request-id"], id.as_str());
+    // ID eines vorgelagerten Proxys bleibt erhalten
+    let req = Request::get("/healthz")
+        .header("x-request-id", "proxy-123")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(c.send(req).await.headers()["x-request-id"], "proxy-123");
+    // zu lange oder mit Leerzeichen: neue ID
+    for invalid in ["a b".to_owned(), "x".repeat(65)] {
+        let req = Request::get("/healthz")
+            .header("x-request-id", invalid.as_str())
+            .body(Body::empty())
+            .unwrap();
+        let res = c.send(req).await;
+        assert_eq!(res.headers()["x-request-id"].len(), 36, "{invalid}");
+    }
 }

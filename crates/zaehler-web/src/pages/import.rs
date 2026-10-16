@@ -5,7 +5,7 @@ use askama::Template;
 use axum::{
     extract::{Multipart, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use serde::Deserialize;
 use zaehler_app::{
@@ -151,7 +151,7 @@ pub async fn upload(
         }
     }
     if !token.is_some_and(|t| constant_time_eq(&t, &ctx.page.csrf)) {
-        return Err((StatusCode::FORBIDDEN, "CSRF-Prüfung fehlgeschlagen").into_response());
+        return Err(crate::security::csrf_failed(ctx.page.lang));
     }
     let Some(file) = file.filter(|f| !f.is_empty()) else {
         let page = upload_page(&ctx, &state, vec![lang.t("err-import-empty")]);
