@@ -480,7 +480,7 @@ MVP-Anforderungen ohne Arbeitspaket:
 Arbeitspakete:
 
 ```{needtable}
-:types: wp
+:filter: type == 'wp' and 'WP_MVP' in id
 :columns: id, title, milestone, status, depends, covers
 :style: table
 :sort: id
