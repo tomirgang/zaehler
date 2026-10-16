@@ -52,6 +52,11 @@ a { color: var(--accent); }
 .topbar nav { display: flex; gap: 1rem; flex-wrap: wrap; }
 .topbar a { color: var(--fg); text-decoration: none; }
 .topbar-right { display: flex; gap: 0.75rem; align-items: center; margin-left: auto; flex-wrap: wrap; }
+/* aktiver Haushalt, klar vom Nutzer getrennt (SPEC_UI_TOPBAR) */
+.household { display: inline-flex; gap: 0.5rem; align-items: center; padding: 0.25rem 0.75rem; border: 1px solid var(--accent); border-radius: 999px; background: var(--card); }
+.household-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.household-name { font-weight: 700; }
+.topbar .household-edit { color: var(--accent); text-decoration: underline; font-size: 0.9rem; }
 .brand { font-weight: 700; color: var(--accent) !important; }
 
 .container { max-width: 960px; margin: 0 auto; padding: 1.5rem 1rem; }

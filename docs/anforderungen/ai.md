@@ -87,3 +87,23 @@ editierbar ({need}`REQ_AI_003`). Das Foto wird Belegfoto des Startstands.
 Ohne AI-Konfiguration bleibt der Ablauf mit leerem Formular und Foto nutzbar
 ({need}`REQ_AI_006`).
 ```
+
+```{req} Mehrere Fotos auf einmal erfassen
+:id: REQ_AI_008
+:status: accepted
+:priority: should
+:release: MVP
+
+Das System soll das Hochladen mehrerer Fotos in einem Schritt ermöglichen. Die
+Fotos werden nacheinander analysiert und anschließend vom Nutzer nacheinander
+geprüft und bestätigt oder verworfen ({need}`REQ_AI_003`).
+
+**Akzeptanzkriterien**
+- Ein Upload nimmt bis zu 20 Fotos an; nicht lesbare Fotos werden gemeldet,
+  die übrigen weiterverarbeitet.
+- Die Analyse läuft im Hintergrund, ein Foto nach dem anderen.
+- Die Prüfseite zeigt die Position („Foto 2 von 5“); nach dem Speichern oder
+  Verwerfen folgt das nächste offene Foto.
+- Noch nicht analysierte Fotos zeigen einen Wartehinweis, der sich selbst
+  aktualisiert.
+```

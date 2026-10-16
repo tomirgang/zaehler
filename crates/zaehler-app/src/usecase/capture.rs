@@ -12,11 +12,15 @@ use zaehler_domain::{
 };
 
 use crate::{
-    AppError, Role, Tenant,
+    AppError, FieldError, FieldErrors, PortError, Role, Tenant,
     ids::{BlobKey, DraftId, MeterId, ReadingId, RegisterId},
-    model::{Draft, DraftOutcome, DraftStatus, MeterAggregate, MeterSummary, Reading, Recognition},
-    port::{PhotoTime, UnitOfWork},
+    model::{
+        Draft, DraftAnalysis, DraftOutcome, DraftStatus, MeterAggregate, MeterSummary, Reading,
+        Recognition,
+    },
+    port::{NormalizedJpeg, PhotoTime, UnitOfWork},
     usecase::{
+        Ports,
         meter::{MeterDetail, last_of, to_domain},
         reading::{ReadingExtras, ReadingsInput, RecordOutcome, check_all, record_in},
         use_case,
@@ -24,8 +28,12 @@ use crate::{
 };
 
 use_case!(
-    /// Foto analysieren und Entwurf anlegen.
+    /// Ein Foto analysieren und Entwurf anlegen.
     AnalysePhoto,
+    /// Mehrere Fotos als wartende Entwürfe anlegen.
+    QueuePhotos,
+    /// Wartende Entwürfe nacheinander analysieren.
+    AnalyseQueued,
     /// Entwurf mit Zuordnung und Plausibilität für das Bestätigungsformular.
     GetDraft,
     /// Entwurf als Ablesung speichern.
@@ -155,56 +163,207 @@ fn photo_time(
         .filter(|at| *at <= now + Duration::minutes(5))
 }
 
-impl AnalysePhoto {
-    /// Erkennung ist konfiguriert.
-    #[must_use]
-    pub fn ai_enabled(&self) -> bool {
-        self.p.recognizer.is_some()
+/// Höchstzahl Fotos je Upload (SPEC_AI_MULTI).
+pub const MAX_PHOTOS: usize = 20;
+/// Nach dieser Zeit gilt eine laufende Analyse als abgebrochen und wird neu
+/// aufgenommen (Instanz beendet während der Analyse).
+pub const ANALYSIS_TIMEOUT: Duration = Duration::minutes(5);
+
+/// Ergebnis eines Uploads mehrerer Fotos.
+#[derive(Debug, Clone, Default)]
+pub struct QueuedPhotos {
+    /// Entwürfe in Upload-Reihenfolge
+    pub drafts: Vec<DraftId>,
+    /// Abgelehnte Fotos mit Position im Upload (ab 0) und Fehler
+    pub rejected: Vec<(usize, FieldError)>,
+}
+
+impl QueuePhotos {
+    /// Normalisiert und speichert die Fotos und legt je Foto einen Entwurf
+    /// im Status `queued` an. Nicht lesbare Fotos werden mit Grund
+    /// zurückgemeldet, die übrigen trotzdem angelegt.
+    // @impl SPEC_AI_MULTI, SPEC_IMG_PROCESSING, SPEC_IMG_CAPTURE_TIME
+    pub async fn execute(&self, t: &Tenant, photos: Vec<Bytes>) -> Result<QueuedPhotos, AppError> {
+        t.require(Role::Member)?;
+        if photos.is_empty() {
+            return Err(AppError::field("photo", "photo.required"));
+        }
+        if photos.len() > MAX_PHOTOS {
+            return Err(AppError::Validation(FieldErrors(vec![FieldError {
+                field: "photo".into(),
+                code: "photo.too_many",
+                args: vec![("max", MAX_PHOTOS.to_string())],
+            }])));
+        }
+        let now = self.p.clock.now();
+        let cal = Calendar::new(
+            self.p
+                .uow
+                .begin()
+                .await?
+                .households()
+                .get(t)
+                .await?
+                .data
+                .timezone,
+        );
+        let mut out = QueuedPhotos::default();
+        let mut drafts = Vec::new();
+        for (index, photo) in photos.into_iter().enumerate() {
+            let jpeg = match self.p.images.normalize(photo).await {
+                Ok(j) => j,
+                Err(PortError::Invalid(code)) => {
+                    out.rejected.push((
+                        index,
+                        FieldError {
+                            field: "file".into(),
+                            code,
+                            args: Vec::new(),
+                        },
+                    ));
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let id = DraftId(self.p.ids.new_uuid());
+            let key = BlobKey::draft_photo(t.household_id(), id);
+            self.p
+                .blobs
+                .put(&key, jpeg.bytes.clone())
+                .await
+                .map_err(AppError::from_storage)?;
+            drafts.push(Draft {
+                id,
+                created_by: t.user_id(),
+                photo_key: key,
+                model: None,
+                duration_ms: None,
+                suggestion: None,
+                matched_meter_id: None,
+                status: DraftStatus::Queued,
+                created_at: now,
+                taken_at: photo_time(jpeg.taken_at, cal, now),
+                analysis_started_at: None,
+            });
+        }
+        let mut uow = self.p.uow.begin().await?;
+        for d in &drafts {
+            uow.drafts().create(t, d).await?;
+        }
+        uow.commit().await?;
+        out.drafts = drafts.into_iter().map(|d| d.id).collect();
+        Ok(out)
+    }
+}
+
+/// Wartet auf Analyse: in der Warteschlange oder Analyse abgebrochen.
+fn waiting(d: &Draft, now: DateTime<Utc>) -> bool {
+    d.status == DraftStatus::Queued
+        || (d.status == DraftStatus::Analysing
+            && d.analysis_started_at
+                .is_none_or(|s| s < now - ANALYSIS_TIMEOUT))
+}
+
+/// Ruft die Erkennung auf (ohne Konfiguration nicht) und zählt die Metriken.
+async fn recognize(
+    p: &Ports,
+    jpeg: &NormalizedJpeg,
+) -> (Option<String>, Option<i64>, Option<Recognition>) {
+    let Some(r) = &p.recognizer else {
+        return (None, None, None);
+    };
+    let start = Instant::now();
+    let result = r.recognize(jpeg).await;
+    let elapsed = start.elapsed();
+    let outcome = match &result {
+        Ok(_) => "ok",
+        Err(e) => {
+            tracing::warn!(error = %e, model = r.model(), "recognition failed");
+            e.outcome()
+        }
+    };
+    metrics::counter!("zaehler_ai_requests_total", "outcome" => outcome).increment(1);
+    metrics::histogram!("zaehler_ai_request_duration_seconds").record(elapsed.as_secs_f64());
+    (
+        Some(r.model().to_owned()),
+        Some(i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)),
+        result.ok(),
+    )
+}
+
+impl AnalyseQueued {
+    /// Analysiert den ältesten wartenden Entwurf des Haushalts; `None`, wenn
+    /// keiner wartet. Die Hintergrundaufgabe ruft dies wiederholt auf, sodass
+    /// die Fotos nacheinander analysiert werden.
+    // @impl SPEC_AI_MULTI
+    pub async fn next(&self, t: &Tenant) -> Result<Option<DraftId>, AppError> {
+        t.require(Role::Member)?;
+        let now = self.p.clock.now();
+        let open = self.p.uow.begin().await?.drafts().list_open(t).await?;
+        for d in open.iter().filter(|d| waiting(d, now)) {
+            if self.claim(t, d.id, now).await? {
+                return match self.analyse(t, d).await {
+                    // während der Analyse verworfen
+                    Ok(()) | Err(AppError::NotFound) => Ok(Some(d.id)),
+                    Err(e) => Err(e),
+                };
+            }
+        }
+        Ok(None)
     }
 
-    /// Normalisiert das Foto, speichert es, ruft die Erkennung auf und legt
-    /// den Entwurf an. Ohne AI-Konfiguration oder bei Fehlern der Erkennung
-    /// entsteht ein Entwurf mit Status `failed` zur manuellen Eingabe.
-    // @impl SPEC_AI_FLOW, SPEC_AI_DRAFTS, SPEC_IMG_PROCESSING
-    pub async fn execute(&self, t: &Tenant, photo: Bytes) -> Result<DraftId, AppError> {
+    /// Analysiert diesen Entwurf, falls er wartet; `false`, wenn er bereits
+    /// analysiert ist oder ein anderer Lauf ihn hat.
+    // @impl SPEC_AI_MULTI
+    pub async fn draft(&self, t: &Tenant, id: DraftId) -> Result<bool, AppError> {
         t.require(Role::Member)?;
-        let jpeg = self.p.images.normalize(photo).await?;
-        let id = DraftId(self.p.ids.new_uuid());
-        let key = BlobKey::draft_photo(t.household_id(), id);
-        self.p
+        let now = self.p.clock.now();
+        let draft = self
+            .p
+            .uow
+            .begin()
+            .await?
+            .drafts()
+            .get_open(t, id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if !waiting(&draft, now) || !self.claim(t, id, now).await? {
+            return Ok(false);
+        }
+        self.analyse(t, &draft).await?;
+        Ok(true)
+    }
+
+    async fn claim(&self, t: &Tenant, id: DraftId, now: DateTime<Utc>) -> Result<bool, AppError> {
+        let mut uow = self.p.uow.begin().await?;
+        let claimed = uow
+            .drafts()
+            .claim(t, id, now, now - ANALYSIS_TIMEOUT)
+            .await?;
+        uow.commit().await?;
+        Ok(claimed)
+    }
+
+    /// Erkennung auf dem gespeicherten (bereits normalisierten) Foto,
+    /// Zuordnung und Speicherung des Ergebnisses.
+    // @impl SPEC_AI_FLOW, SPEC_AI_DRAFTS, SPEC_AI_MULTI
+    async fn analyse(&self, t: &Tenant, draft: &Draft) -> Result<(), AppError> {
+        let bytes = self
+            .p
             .blobs
-            .put(&key, jpeg.bytes.clone())
+            .get(&draft.photo_key)
             .await
             .map_err(AppError::from_storage)?;
-
-        let (model, duration_ms, suggestion) = match &self.p.recognizer {
-            None => (None, None, None),
-            Some(r) => {
-                let start = Instant::now();
-                let result = r.recognize(&jpeg).await;
-                let elapsed = start.elapsed();
-                let outcome = match &result {
-                    Ok(_) => "ok",
-                    Err(e) => {
-                        tracing::warn!(error = %e, model = r.model(), "recognition failed");
-                        e.outcome()
-                    }
-                };
-                metrics::counter!("zaehler_ai_requests_total", "outcome" => outcome).increment(1);
-                metrics::histogram!("zaehler_ai_request_duration_seconds")
-                    .record(elapsed.as_secs_f64());
-                (
-                    Some(r.model().to_owned()),
-                    Some(i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)),
-                    result.ok(),
-                )
-            }
+        // Maße werden für die Erkennung nicht benötigt
+        let jpeg = NormalizedJpeg {
+            bytes,
+            width: 0,
+            height: 0,
+            taken_at: None,
         };
-
+        let (model, duration_ms, suggestion) = recognize(&self.p, &jpeg).await;
         let now = self.p.clock.now();
         let mut uow = self.p.uow.begin().await?;
-        let cal = Calendar::new(uow.households().get(t).await?.data.timezone);
-        let taken_at = photo_time(jpeg.taken_at, cal, now);
         let matched = match &suggestion {
             Some(rec) => {
                 let meters = uow.meters().list(t).await?;
@@ -212,11 +371,7 @@ impl AnalysePhoto {
             }
             None => None,
         };
-        let draft = Draft {
-            taken_at,
-            id,
-            created_by: t.user_id(),
-            photo_key: key,
+        let analysis = DraftAnalysis {
             model,
             duration_ms,
             status: if suggestion.is_some() {
@@ -226,10 +381,34 @@ impl AnalysePhoto {
             },
             suggestion,
             matched_meter_id: matched,
-            created_at: now,
         };
-        uow.drafts().create(t, &draft).await?;
+        uow.drafts().record_analysis(t, draft.id, &analysis).await?;
         uow.commit().await?;
+        Ok(())
+    }
+}
+
+impl AnalysePhoto {
+    /// Erkennung ist konfiguriert.
+    #[must_use]
+    pub fn ai_enabled(&self) -> bool {
+        self.p.recognizer.is_some()
+    }
+
+    /// Ein Foto: Entwurf anlegen und sofort analysieren. Ohne
+    /// AI-Konfiguration oder bei Fehlern der Erkennung entsteht ein Entwurf
+    /// mit Status `failed` zur manuellen Eingabe.
+    // @impl SPEC_AI_FLOW, SPEC_AI_DRAFTS, SPEC_IMG_PROCESSING
+    pub async fn execute(&self, t: &Tenant, photo: Bytes) -> Result<DraftId, AppError> {
+        let queued = QueuePhotos::new(self.p.clone())
+            .execute(t, vec![photo])
+            .await?;
+        let Some(&id) = queued.drafts.first() else {
+            return Err(AppError::Validation(FieldErrors(
+                queued.rejected.into_iter().map(|(_, e)| e).collect(),
+            )));
+        };
+        AnalyseQueued::new(self.p.clone()).draft(t, id).await?;
         Ok(id)
     }
 }
@@ -245,6 +424,31 @@ pub struct DraftView {
     pub register: Option<RegisterId>,
     /// Plausibilität des Vorschlags für Messstelle und Register
     pub plausibility: Option<Plausibility>,
+    /// Offene Entwürfe des Haushalts in Prüfreihenfolge (SPEC_AI_MULTI)
+    pub queue: Vec<DraftId>,
+}
+
+impl DraftView {
+    /// Position dieses Entwurfs in der Warteschlange (ab 1) und Anzahl.
+    #[must_use]
+    pub fn position(&self) -> (usize, usize) {
+        let pos = self
+            .queue
+            .iter()
+            .position(|d| *d == self.draft.id)
+            .map_or(1, |p| p + 1);
+        (pos, self.queue.len())
+    }
+}
+
+impl GetDraft {
+    /// Nächster offener Entwurf nach dem Abschluss von `done` (SPEC_AI_MULTI).
+    // @impl SPEC_AI_MULTI
+    pub async fn next_open(&self, t: &Tenant, done: DraftId) -> Result<Option<DraftId>, AppError> {
+        t.require(Role::Member)?;
+        let open = self.p.uow.begin().await?.drafts().list_open(t).await?;
+        Ok(open.into_iter().map(|d| d.id).find(|d| *d != done))
+    }
 }
 
 impl GetDraft {
@@ -272,12 +476,20 @@ impl GetDraft {
         let chosen = meter
             .or(draft.matched_meter_id)
             .filter(|m| meters.iter().any(|s| s.meter.id == *m));
+        let queue = uow
+            .drafts()
+            .list_open(t)
+            .await?
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
         let mut view = DraftView {
             draft,
             meters,
             meter: None,
             register: None,
             plausibility: None,
+            queue,
         };
         let Some(meter_id) = chosen else {
             return Ok(view);
@@ -332,6 +544,9 @@ impl ConfirmDraft {
             .get_open(t, id)
             .await?
             .ok_or(AppError::NotFound)?;
+        if !draft.status.is_ready() {
+            return Err(AppError::Conflict("capture.not_ready"));
+        }
         let reading_id = ReadingId(self.p.ids.new_uuid());
         let photo = BlobKey::reading_photo(t.household_id(), reading_id);
         let suggestion = draft.suggestion.as_ref();

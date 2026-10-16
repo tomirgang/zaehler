@@ -29,6 +29,8 @@ pub struct Config {
     pub housekeeping: HousekeepingConfig,
     #[serde(default)]
     pub upload: UploadConfig,
+    #[serde(default)]
+    pub backup: BackupConfig,
     /// Ohne Abschnitt `ai` ist die Erkennung abgeschaltet (REQ_AI_006).
     #[serde(skip_serializing)]
     pub ai: Option<zaehler_ai::OpenRouterConfig>,
@@ -130,11 +132,19 @@ impl Default for HousekeepingConfig {
 
 /// Upload-Grenzen (SPEC_SEC_UPLOADS).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_field_names)] // Namen entsprechen den Konfigurationsschlüsseln
 pub struct UploadConfig {
     #[serde(default = "default_max_photo_bytes")]
     pub max_photo_bytes: usize,
     #[serde(default = "default_max_csv_bytes")]
     pub max_csv_bytes: usize,
+    /// Haushaltsarchive inklusive Fotos (SPEC_BACKUP_HOUSEHOLD)
+    #[serde(default = "default_max_backup_bytes")]
+    pub max_backup_bytes: usize,
+}
+
+const fn default_max_backup_bytes() -> usize {
+    zaehler_web::state::DEFAULT_MAX_BACKUP_BYTES
 }
 
 const fn default_max_photo_bytes() -> usize {
@@ -150,6 +160,43 @@ impl Default for UploadConfig {
         Self {
             max_photo_bytes: default_max_photo_bytes(),
             max_csv_bytes: default_max_csv_bytes(),
+            max_backup_bytes: default_max_backup_bytes(),
+        }
+    }
+}
+
+/// Sicherung vor Migrationen (SPEC_OPS_UPGRADE).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupConfig {
+    /// Vor ausstehenden Migrationen ein vollständiges Archiv schreiben.
+    #[serde(default = "default_true")]
+    pub before_migrate: bool,
+    /// Verzeichnis der Archive vor Migrationen.
+    #[serde(default = "default_backup_dir")]
+    pub dir: String,
+    /// Anzahl aufbewahrter Archive vor Migrationen.
+    #[serde(default = "default_backup_keep")]
+    pub keep: usize,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+fn default_backup_dir() -> String {
+    "data/backups".into()
+}
+
+const fn default_backup_keep() -> usize {
+    3
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        Self {
+            before_migrate: true,
+            dir: default_backup_dir(),
+            keep: default_backup_keep(),
         }
     }
 }
@@ -224,6 +271,7 @@ impl Default for Config {
             image: ImageConfig::default(),
             housekeeping: HousekeepingConfig::default(),
             upload: UploadConfig::default(),
+            backup: BackupConfig::default(),
             ai: None,
             notify: NotifyConfig::default(),
         }
@@ -308,6 +356,12 @@ impl Config {
         }
         if self.upload.max_csv_bytes == 0 {
             return Err("upload.max_csv_bytes muss größer 0 sein".into());
+        }
+        if self.upload.max_backup_bytes == 0 {
+            return Err("upload.max_backup_bytes muss größer 0 sein".into());
+        }
+        if self.backup.keep == 0 {
+            return Err("backup.keep muss mindestens 1 sein".into());
         }
         Ok(())
     }

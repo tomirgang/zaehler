@@ -20,6 +20,8 @@ struct SettingsPage {
     timezone: String,
     new_name: String,
     new_timezone: String,
+    /// Hinweis zum Haushaltsarchiv mit Größengrenze
+    backup_hint: String,
     errors: FieldErrors,
 }
 
@@ -53,6 +55,13 @@ async fn page(
         timezone: pick("timezone", household.data.timezone.name().to_owned()),
         new_name: pick("new_name", String::new()),
         new_timezone: pick("new_timezone", household.data.timezone.name().to_owned()),
+        backup_hint: ctx.page.lang.ta(
+            "settings-import-hint",
+            &[(
+                "max",
+                state.cfg.max_backup_bytes.div_ceil(1024 * 1024).to_string(),
+            )],
+        ),
         errors,
         ctx: ctx.page.clone(),
     };

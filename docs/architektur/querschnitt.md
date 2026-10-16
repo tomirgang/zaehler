@@ -36,6 +36,32 @@ Migration in einer Transaktion unter `pg_advisory_xact_lock`, damit parallel
 startende Replicas nicht kollidieren.
 ```
 
+```{spec} Upgrade ohne Datenverlust
+:id: SPEC_OPS_UPGRADE
+:status: implemented
+:satisfies: REQ_OPS_012, REQ_OPS_009
+:links: SPEC_OPS_MIGRATIONS, SPEC_BACKUP_DATA
+
+Vor jeder Migration vergleicht `zaehler_db::schema_status` die angewendeten
+Migrationen (`seaql_migrations`) mit denen der Programmversion. Unbekannte
+angewendete Migrationen bedeuten eine Datenbank einer neueren Version: Start
+und `zaehler migrate` brechen ohne Änderung ab. Liegen ausstehende
+Migrationen vor und ist die Datenbank nicht leer, schreibt der Server mit
+`backup.before_migrate` (Standard an) ein vollständiges Archiv
+({need}`SPEC_BACKUP_INSTALLATION`) nach `backup.dir`, behält die neuesten
+`backup.keep` und migriert erst danach; ohne `database.auto_migrate` verweigert
+der Webserver den Start bei ausstehenden Migrationen. Der Export liest dafür
+das noch nicht migrierte Schema ({need}`SPEC_BACKUP_DATA`).
+
+Regeln für Migrationen: nur anhängen; freigegebene Migrationen sind mit
+SHA-256 ihres Quelltexts in `zaehler-db/src/upgrade_tests.rs` festgehalten und
+dürfen nicht geändert werden; Spalten werden nur ergänzt (mit Vorgabe oder
+`NULL`), Umbenennen oder Entfernen erfordert eine Migration, die die Daten
+überführt, und eine Anpassung des Exports. Ein Test spielt Daten im Schema
+der ersten Migration ein, wendet jede weitere Migration einzeln an und
+vergleicht nach jedem Schritt den Export mit den Ausgangsdaten.
+```
+
 ## Sicherheit
 
 ```{spec} Nur parametrisierte Datenbankabfragen

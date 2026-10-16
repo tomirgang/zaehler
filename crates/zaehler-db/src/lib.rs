@@ -2,6 +2,7 @@
 //! Entities und Migrationen (ADR_003). Dezimalwerte werden als Festkomma-
 //! Integer gespeichert (ADR_009, siehe [`fixed`]).
 
+mod backup;
 pub mod entity;
 pub mod fixed;
 pub mod migration;
@@ -57,10 +58,62 @@ fn sqlite_parent_dir(url: &str) -> Option<&std::path::Path> {
         .filter(|p| !p.as_os_str().is_empty())
 }
 
-/// Führt alle ausstehenden Migrationen aus.
-// @impl SPEC_OPS_MIGRATIONS
+/// Stand des Schemas gegenüber den Migrationen dieser Programmversion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaStatus {
+    /// Angewendete Migrationen, aufsteigend
+    pub applied: Vec<String>,
+    /// Ausstehende Migrationen dieser Version, in Ausführungsreihenfolge
+    pub pending: Vec<String>,
+}
+
+/// Namen aller Migrationen dieser Version in Ausführungsreihenfolge.
+#[must_use]
+pub fn migration_names() -> Vec<String> {
+    migration::Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_owned())
+        .collect()
+}
+
+/// Vergleicht die angewendeten mit den bekannten Migrationen. Enthält die
+/// Datenbank Migrationen, die diese Version nicht kennt, stammt sie von einer
+/// neueren Version; dann wird nichts ausgeführt.
+// @impl SPEC_OPS_UPGRADE
+pub async fn schema_status(db: &DatabaseConnection) -> Result<SchemaStatus, DbErr> {
+    use zaehler_app::port::BackupRepository;
+    let applied = SeaOrmStore::new(db.clone())
+        .schema()
+        .await
+        .map_err(|e| DbErr::Custom(e.to_string()))?;
+    let known = migration_names();
+    let unknown: Vec<&str> = applied
+        .iter()
+        .filter(|a| !known.contains(a))
+        .map(String::as_str)
+        .collect();
+    if !unknown.is_empty() {
+        return Err(DbErr::Custom(format!(
+            "Die Datenbank enthält Migrationen einer neueren Programmversion ({}); \
+             ein Downgrade ist nicht möglich",
+            unknown.join(", ")
+        )));
+    }
+    Ok(SchemaStatus {
+        pending: known.into_iter().filter(|k| !applied.contains(k)).collect(),
+        applied,
+    })
+}
+
+/// Führt alle ausstehenden Migrationen aus; verweigert eine Datenbank einer
+/// neueren Programmversion.
+// @impl SPEC_OPS_MIGRATIONS, SPEC_OPS_UPGRADE
 pub async fn migrate(db: &DatabaseConnection) -> Result<(), DbErr> {
-    tracing::info!("running database migrations");
+    let status = schema_status(db).await?;
+    if status.pending.is_empty() {
+        return Ok(());
+    }
+    tracing::info!(pending = ?status.pending, "running database migrations");
     if db.get_database_backend() != DbBackend::Postgres {
         return migration::Migrator::up(db, None).await;
     }
@@ -84,6 +137,9 @@ const MIGRATION_LOCK_KEY: i64 = 0x007A_6165_686C_6572; // ASCII "zaehler"
 pub async fn ping(db: &DatabaseConnection) -> Result<(), DbErr> {
     db.ping().await
 }
+
+#[cfg(test)]
+mod upgrade_tests;
 
 #[cfg(test)]
 mod tests {
@@ -114,9 +170,10 @@ mod tests {
     }
 
     /// Läuft nur, wenn `ZAEHLER_TEST_DATABASE_URL` gesetzt ist (CI-Service-Container).
-    // @test SPEC_OPS_MIGRATIONS, SPEC_OPS_DB_BACKENDS
+    // @test SPEC_OPS_MIGRATIONS, SPEC_OPS_DB_BACKENDS, SPEC_BACKUP_DATA
     #[tokio::test]
     async fn migrations_run_on_postgres() {
+        use zaehler_app::port::BackupRepository;
         let Ok(url) = std::env::var("ZAEHLER_TEST_DATABASE_URL") else {
             eprintln!("ZAEHLER_TEST_DATABASE_URL nicht gesetzt, Test übersprungen");
             return;
@@ -128,6 +185,15 @@ mod tests {
         let store = super::SeaOrmStore::new(db);
         zaehler_app::testing::suite::run(&store).await;
         zaehler_app::testing::suite::drafts(&store, &store).await;
+
+        // Export und Import verlustfrei auch auf PostgreSQL (SPEC_BACKUP_DATA)
+        let fixture = crate::upgrade_tests::fixture();
+        let household = uuid::Uuid::from_u128(2);
+        store.import(&fixture).await.unwrap();
+        assert_eq!(
+            store.export().await.unwrap().household(household),
+            fixture.household(household)
+        );
     }
 
     // @test SPEC_ARCH_UOW, SPEC_SEC_TENANT_SCOPE, SPEC_OPS_DB_BACKENDS, SPEC_DM_CORE

@@ -14,7 +14,7 @@ use zaehler_app::{
     ids::{DraftId, MeterId, RegisterId},
     model::DraftStatus,
     usecase::{
-        capture::DraftView,
+        capture::{DraftView, MAX_PHOTOS},
         reading::{ReadingsInput, RecordOutcome},
     },
 };
@@ -34,6 +34,8 @@ struct UploadPage {
     ctx: PageCtx,
     ai_enabled: bool,
     photo_hint: String,
+    /// Ältester offener Entwurf (SPEC_AI_MULTI)
+    open_draft: Option<String>,
     errors: Vec<String>,
 }
 
@@ -74,6 +76,8 @@ struct ConfirmPage {
     note: String,
     hint: Option<String>,
     needs_confirm: bool,
+    /// Position in der Warteschlange
+    progress: Option<String>,
     errors: FieldErrors,
 }
 
@@ -93,27 +97,53 @@ fn upload_page(ctx: &Ctx, state: &WebState, errors: Vec<String>) -> UploadPage {
         ai_enabled: state.uc.analyse_photo.ai_enabled(),
         photo_hint: ctx.page.lang.ta(
             "capture-photo-hint",
-            &[(
-                "max",
-                state.cfg.max_photo_bytes.div_ceil(1024 * 1024).to_string(),
-            )],
+            &[
+                (
+                    "max",
+                    state.cfg.max_photo_bytes.div_ceil(1024 * 1024).to_string(),
+                ),
+                ("count", MAX_PHOTOS.to_string()),
+            ],
         ),
+        open_draft: None,
         errors,
     }
 }
 
-/// Upload-Seite.
-// @impl SPEC_AI_FLOW
+/// Upload-Seite mit Hinweis auf noch offene Fotos.
+// @impl SPEC_AI_FLOW, SPEC_AI_MULTI
 pub async fn upload_form(State(state): State<WebState>, ctx: Ctx) -> Result<Response, Response> {
     if !ctx.page.can_write {
         return Err(ctx.fail(AppError::Forbidden));
     }
-    Ok(render(&upload_page(&ctx, &state, Vec::new())))
+    let mut page = upload_page(&ctx, &state, Vec::new());
+    page.open_draft = state
+        .uc
+        .get_draft
+        .next_open(&ctx.tenant, DraftId(uuid::Uuid::nil()))
+        .await
+        .map_err(|e| ctx.fail(e))?
+        .map(|d| d.to_string());
+    Ok(render(&page))
 }
 
-/// Foto hochladen und analysieren; danach 303 zur Bestätigung. Das CSRF-Token
-/// steht im Feld `_csrf` des Multipart-Formulars (SPEC_SEC_SESSION_CSRF).
-// @impl SPEC_AI_FLOW, SPEC_SEC_UPLOADS, SPEC_SEC_SESSION_CSRF
+/// Fehlertext zu einem Foto mit Position und Dateiname.
+fn photo_error(lang: Lang, index: usize, name: &str, message: &str) -> String {
+    lang.ta(
+        "capture-photo-error",
+        &[
+            ("n", (index + 1).to_string()),
+            ("name", name.to_owned()),
+            ("error", message.to_owned()),
+        ],
+    )
+}
+
+/// Ein oder mehrere Fotos hochladen; sie werden als wartende Entwürfe
+/// gespeichert und im Hintergrund nacheinander analysiert. Danach 303 zum
+/// ersten Foto. Das CSRF-Token steht im Feld `_csrf` des Multipart-Formulars
+/// (SPEC_SEC_SESSION_CSRF).
+// @impl SPEC_AI_FLOW, SPEC_AI_MULTI, SPEC_SEC_UPLOADS, SPEC_SEC_SESSION_CSRF
 pub async fn analyse(
     State(state): State<WebState>,
     ctx: Ctx,
@@ -121,7 +151,11 @@ pub async fn analyse(
 ) -> Result<Response, Response> {
     let lang = ctx.page.lang;
     let mut token = None;
-    let mut photo = None;
+    let mut photos = Vec::new();
+    // Position im Upload und Dateiname je angenommenem Foto
+    let mut origin: Vec<(usize, String)> = Vec::new();
+    let mut errors = Vec::new();
+    let mut position = 0;
     loop {
         let field = match multipart.next_field().await {
             Ok(Some(f)) => f,
@@ -130,29 +164,66 @@ pub async fn analyse(
         };
         match field.name() {
             Some("_csrf") => token = field.text().await.ok(),
-            Some("photo") => match field.bytes().await {
-                Ok(b) => photo = Some(b),
-                Err(e) => return Err(upload_error(&ctx, &state, e.status())),
-            },
+            Some("photo") => {
+                let name = field.file_name().unwrap_or_default().to_owned();
+                match field.bytes().await {
+                    Ok(b) if b.is_empty() => {}
+                    // einzelnes Foto über der Grenze: nur dieses ablehnen
+                    Ok(b) if b.len() > state.cfg.max_photo_bytes => {
+                        errors.push(photo_error(
+                            lang,
+                            position,
+                            &name,
+                            &lang.t("err-photo-too_large"),
+                        ));
+                        position += 1;
+                    }
+                    Ok(b) => {
+                        photos.push(b);
+                        origin.push((position, name));
+                        position += 1;
+                    }
+                    Err(e) => return Err(upload_error(&ctx, &state, e.status())),
+                }
+            }
             _ => {}
         }
     }
     if !token.is_some_and(|t| constant_time_eq(&t, &ctx.page.csrf)) {
         return Err((StatusCode::FORBIDDEN, "CSRF-Prüfung fehlgeschlagen").into_response());
     }
-    let Some(photo) = photo.filter(|p| !p.is_empty()) else {
-        let page = upload_page(&ctx, &state, vec![lang.t("err-photo-required")]);
+    if photos.is_empty() {
+        if errors.is_empty() {
+            errors.push(lang.t("err-photo-required"));
+        }
+        let page = upload_page(&ctx, &state, errors);
+        return Ok(render_status(StatusCode::UNPROCESSABLE_ENTITY, &page));
+    }
+    let queued = match state.uc.queue_photos.execute(&ctx.tenant, photos).await {
+        Ok(q) => q,
+        Err(AppError::Validation(e)) => {
+            let messages = e.0.iter().map(|e| lang.err(e)).collect();
+            let page = upload_page(&ctx, &state, messages);
+            return Ok(render_status(StatusCode::UNPROCESSABLE_ENTITY, &page));
+        }
+        Err(e) => return Err(ctx.fail(e)),
+    };
+    for (index, e) in &queued.rejected {
+        let (pos, name) = origin
+            .get(*index)
+            .map_or((*index, ""), |(p, n)| (*p, n.as_str()));
+        errors.push(photo_error(lang, pos, name, &lang.err(e)));
+    }
+    let Some(first) = queued.drafts.first() else {
+        let page = upload_page(&ctx, &state, errors);
         return Ok(render_status(StatusCode::UNPROCESSABLE_ENTITY, &page));
     };
-    match state.uc.analyse_photo.execute(&ctx.tenant, photo).await {
-        Ok(id) => Ok(see_other(&format!("/capture/{id}"))),
-        Err(AppError::Validation(errors)) => {
-            let messages = errors.0.iter().map(|e| lang.err(e)).collect();
-            let page = upload_page(&ctx, &state, messages);
-            Ok(render_status(StatusCode::UNPROCESSABLE_ENTITY, &page))
-        }
-        Err(e) => Err(ctx.fail(e)),
+    state.analysis.start(state.uc.clone(), ctx.tenant.clone());
+    if !errors.is_empty() {
+        ctx.flash("flash-photos-rejected").await;
+        tracing::info!(rejected = errors.len(), "photos rejected");
     }
+    Ok(see_other(&format!("/capture/{first}")))
 }
 
 /// Body zu groß (413) oder fehlerhaftes Multipart (400).
@@ -253,13 +324,34 @@ fn confirm_page(
             .or(view.plausibility.as_ref())
             .and_then(|p| hint(lang, p)),
         needs_confirm,
+        progress: progress(lang, view),
         errors,
         ctx: ctx.page.clone(),
     }
 }
 
-/// Bestätigungsformular; `?meter=` wählt eine andere Messstelle.
-// @impl SPEC_AI_DRAFTS
+/// „Foto 2 von 5“, falls mehrere Fotos offen sind (SPEC_AI_MULTI).
+fn progress(lang: Lang, view: &DraftView) -> Option<String> {
+    let (pos, total) = view.position();
+    (total > 1).then(|| {
+        lang.ta(
+            "capture-progress",
+            &[("n", pos.to_string()), ("total", total.to_string())],
+        )
+    })
+}
+
+#[derive(Template)]
+#[template(path = "pages/capture/waiting.html")]
+struct WaitingPage {
+    ctx: PageCtx,
+    draft_id: String,
+    progress: Option<String>,
+}
+
+/// Bestätigungsformular; `?meter=` wählt eine andere Messstelle. Ist das
+/// Foto noch nicht analysiert, eine Warteseite, die sich selbst aktualisiert.
+// @impl SPEC_AI_DRAFTS, SPEC_AI_MULTI
 pub async fn show(
     State(state): State<WebState>,
     ctx: Ctx,
@@ -274,6 +366,15 @@ pub async fn show(
         .execute(&ctx.tenant, id, meter)
         .await
         .map_err(|e| ctx.fail(e))?;
+    if !view.draft.status.is_ready() {
+        // nimmt eine unterbrochene Warteschlange wieder auf
+        state.analysis.start(state.uc.clone(), ctx.tenant.clone());
+        return Ok(render(&WaitingPage {
+            draft_id: id.to_string(),
+            progress: progress(ctx.page.lang, &view),
+            ctx: ctx.page.clone(),
+        }));
+    }
     Ok(render(&confirm_page(
         &ctx,
         &view,
@@ -380,7 +481,12 @@ pub async fn confirm(
     {
         Ok(RecordOutcome::Saved(_)) => {
             ctx.flash("flash-readings-saved").await;
-            Ok(see_other(&format!("/meters/{}", input.meter_id)))
+            // weiter mit dem nächsten offenen Foto (SPEC_AI_MULTI)
+            match state.uc.get_draft.next_open(&ctx.tenant, id).await {
+                Ok(Some(next)) => Ok(see_other(&format!("/capture/{next}"))),
+                Ok(None) => Ok(see_other(&format!("/meters/{}", input.meter_id))),
+                Err(e) => Err(ctx.fail(e)),
+            }
         }
         Ok(RecordOutcome::NeedsConfirmation(checks)) => Ok(rerender(
             checks.first().map(|c| &c.plausibility),
@@ -392,7 +498,7 @@ pub async fn confirm(
     }
 }
 
-// @impl SPEC_AI_DRAFTS
+// @impl SPEC_AI_DRAFTS, SPEC_AI_MULTI
 pub async fn discard(
     State(state): State<WebState>,
     ctx: Ctx,
@@ -406,5 +512,9 @@ pub async fn discard(
         .await
         .map_err(|e| ctx.fail(e))?;
     ctx.flash("flash-draft-discarded").await;
-    Ok(see_other("/capture"))
+    match state.uc.get_draft.next_open(&ctx.tenant, id).await {
+        Ok(Some(next)) => Ok(see_other(&format!("/capture/{next}"))),
+        Ok(None) => Ok(see_other("/capture")),
+        Err(e) => Err(ctx.fail(e)),
+    }
 }

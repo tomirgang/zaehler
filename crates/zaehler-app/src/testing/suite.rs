@@ -21,8 +21,8 @@ use crate::{
         BlobKey, BlobKind, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId,
     },
     model::{
-        DeviceData, Draft, DraftOutcome, DraftStatus, HouseholdData, Identity, MeterData, Reading,
-        Recognition, RegisterData,
+        DeviceData, Draft, DraftAnalysis, DraftOutcome, DraftStatus, HouseholdData, Identity,
+        MeterData, Reading, Recognition, RegisterData,
     },
     port::{BlobStore, MaintenanceRepository, UnitOfWorkFactory},
 };
@@ -473,6 +473,7 @@ fn draft(t: &Tenant, created_at: DateTime<Utc>, meter: Option<MeterId>) -> Draft
         status: DraftStatus::Pending,
         created_at,
         taken_at: Some(created_at - Duration::minutes(3)),
+        analysis_started_at: None,
     }
 }
 
@@ -553,7 +554,103 @@ pub async fn drafts(f: &dyn UnitOfWorkFactory, m: &dyn MaintenanceRepository) {
         None
     );
     uow.commit().await.expect("commit");
+    drafts_queue(f, &t, &other, meter_id).await;
     drafts_expire(f, m, &t, [&open, &failed, &confirmed]).await;
+}
+
+/// Warteschlange der Mehrfach-Foto-Erfassung: Reihenfolge, Beanspruchung,
+/// abgebrochene Analyse, Ergebnis.
+// @test SPEC_AI_MULTI
+async fn drafts_queue(f: &dyn UnitOfWorkFactory, t: &Tenant, other: &Tenant, meter: MeterId) {
+    let queued = |hours| {
+        let mut d = draft(t, t0() + Duration::hours(hours), None);
+        d.status = DraftStatus::Queued;
+        d.suggestion = None;
+        d.model = None;
+        d.duration_ms = None;
+        d
+    };
+    let (first, second) = (queued(1), queued(2));
+    {
+        let mut uow = f.begin().await.expect("begin");
+        uow.drafts().create(t, &second).await.expect("create");
+        uow.drafts().create(t, &first).await.expect("create");
+        uow.commit().await.expect("commit");
+    }
+    let mut uow = f.begin().await.expect("begin");
+    let open: Vec<DraftId> = uow
+        .drafts()
+        .list_open(t)
+        .await
+        .expect("list")
+        .iter()
+        .map(|d| d.id)
+        .collect();
+    let pos = |id| open.iter().position(|x| *x == id).expect("offen");
+    assert!(pos(first.id) < pos(second.id), "älteste zuerst");
+    assert!(
+        uow.drafts()
+            .list_open(other)
+            .await
+            .expect("list")
+            .is_empty()
+    );
+
+    let now = t0() + Duration::hours(3);
+    let stale = now - Duration::minutes(5);
+    let claim = |id, at: DateTime<Utc>| (id, at, at - Duration::minutes(5));
+    let (id, at, before) = claim(first.id, now);
+    assert!(uow.drafts().claim(t, id, at, before).await.expect("claim"));
+    assert!(
+        !uow.drafts()
+            .claim(t, first.id, now, stale)
+            .await
+            .expect("claim"),
+        "bereits in Analyse"
+    );
+    assert!(
+        !uow.drafts()
+            .claim(other, second.id, now, stale)
+            .await
+            .expect("claim"),
+        "fremder Haushalt"
+    );
+    // abgebrochene Analyse wird nach Ablauf erneut übernommen
+    let (id, at, before) = claim(first.id, now + Duration::minutes(10));
+    assert!(uow.drafts().claim(t, id, at, before).await.expect("claim"));
+
+    let analysis = DraftAnalysis {
+        model: Some("test/model".into()),
+        duration_ms: Some(1500),
+        suggestion: draft(t, t0(), None).suggestion,
+        matched_meter_id: Some(meter),
+        status: DraftStatus::Pending,
+    };
+    uow.drafts()
+        .record_analysis(t, first.id, &analysis)
+        .await
+        .expect("record");
+    let done = uow
+        .drafts()
+        .get_open(t, first.id)
+        .await
+        .expect("get")
+        .expect("offen");
+    assert_eq!(
+        (done.status, done.matched_meter_id, done.model.as_deref()),
+        (DraftStatus::Pending, Some(meter), Some("test/model"))
+    );
+    assert_eq!(done.suggestion, analysis.suggestion);
+    for id in [first.id, second.id] {
+        assert!(
+            matches!(
+                uow.drafts().record_analysis(t, id, &analysis).await,
+                Err(PortError::NotFound)
+            ),
+            "nur im Status analysing"
+        );
+    }
+    uow.commit().await.expect("commit");
 }
 
 /// Ablauf offener Entwürfe und Löschen mit dem Haushalt.

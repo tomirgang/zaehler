@@ -18,9 +18,9 @@ use crate::{
         BlobKey, BlobKind, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId,
     },
     model::{
-        Device, DeviceData, Draft, DraftOutcome, DraftStatus, Household, HouseholdData,
-        HouseholdSummary, Identity, Meter, MeterAggregate, MeterData, MeterSummary, Reading,
-        Recognition, Register, RegisterData, User,
+        Device, DeviceData, Draft, DraftAnalysis, DraftOutcome, DraftStatus, Household,
+        HouseholdData, HouseholdSummary, Identity, Meter, MeterAggregate, MeterData, MeterSummary,
+        Reading, Recognition, Register, RegisterData, User,
     },
     port::{
         BlobStore, Clock, DraftRepository, HouseholdRepository, ImageNormalizer,
@@ -260,6 +260,67 @@ impl DraftRepository for MemoryUow {
                 d.household == t.household_id() && d.draft.id == id && d.draft.status.is_open()
             })
             .map(|d| d.draft.clone()))
+    }
+
+    async fn list_open(&mut self, t: &Tenant) -> PortResult<Vec<Draft>> {
+        let mut open: Vec<Draft> = self
+            .state
+            .drafts
+            .iter()
+            .filter(|d| d.household == t.household_id() && d.draft.status.is_open())
+            .map(|d| d.draft.clone())
+            .collect();
+        open.sort_by_key(|d| (d.created_at, d.id));
+        Ok(open)
+    }
+
+    async fn claim(
+        &mut self,
+        t: &Tenant,
+        id: DraftId,
+        now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
+    ) -> PortResult<bool> {
+        let Some(d) = self
+            .state
+            .drafts
+            .iter_mut()
+            .find(|d| d.household == t.household_id() && d.draft.id == id)
+        else {
+            return Ok(false);
+        };
+        let claimable = d.draft.status == DraftStatus::Queued
+            || (d.draft.status == DraftStatus::Analysing
+                && d.draft.analysis_started_at.is_none_or(|s| s < stale_before));
+        if claimable {
+            d.draft.status = DraftStatus::Analysing;
+            d.draft.analysis_started_at = Some(now);
+        }
+        Ok(claimable)
+    }
+
+    async fn record_analysis(
+        &mut self,
+        t: &Tenant,
+        id: DraftId,
+        a: &DraftAnalysis,
+    ) -> PortResult<()> {
+        let d = self
+            .state
+            .drafts
+            .iter_mut()
+            .find(|d| {
+                d.household == t.household_id()
+                    && d.draft.id == id
+                    && d.draft.status == DraftStatus::Analysing
+            })
+            .ok_or(PortError::NotFound)?;
+        d.draft.model.clone_from(&a.model);
+        d.draft.duration_ms = a.duration_ms;
+        d.draft.suggestion.clone_from(&a.suggestion);
+        d.draft.matched_meter_id = a.matched_meter_id;
+        d.draft.status = a.status;
+        Ok(())
     }
 
     async fn finish(
@@ -786,3 +847,6 @@ impl ReadingRepository for MemoryUow {
         Ok(())
     }
 }
+
+#[path = "memory_backup.rs"]
+mod backup_impl;

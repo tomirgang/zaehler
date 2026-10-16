@@ -233,12 +233,7 @@ impl CreateMeter {
         e.into_result()?;
         let mut uow = self.p.uow.begin().await?;
         let draft = match draft_id {
-            Some(id) => Some(
-                uow.drafts()
-                    .get_open(t, id)
-                    .await?
-                    .ok_or(AppError::NotFound)?,
-            ),
+            Some(id) => Some(ready_draft(uow.as_mut(), t, id).await?),
             None => None,
         };
         check_unique(&mut *uow, t, &input, None).await?;
@@ -323,6 +318,24 @@ impl CreateMeter {
             }
         }
         Ok(meter_id)
+    }
+}
+
+/// Offener Entwurf mit abgeschlossener Analyse.
+async fn ready_draft(
+    uow: &mut dyn crate::port::UnitOfWork,
+    t: &Tenant,
+    id: DraftId,
+) -> Result<Draft, AppError> {
+    let d = uow
+        .drafts()
+        .get_open(t, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if d.status.is_ready() {
+        Ok(d)
+    } else {
+        Err(AppError::Conflict("capture.not_ready"))
     }
 }
 

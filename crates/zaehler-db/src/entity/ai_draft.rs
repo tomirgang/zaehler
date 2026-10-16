@@ -23,6 +23,8 @@ pub struct Model {
     pub finished_at: Option<DateTimeUtc>,
     /// Aufnahmezeit aus den Bildmetadaten (`m20261016_000004_draft_taken_at`)
     pub taken_at: Option<DateTimeUtc>,
+    /// Beginn der laufenden Analyse (`m20261016_000005_draft_analysis_started_at`)
+    pub analysis_started_at: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

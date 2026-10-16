@@ -27,10 +27,33 @@ exportieren.
 
 ```{req} Vollständige Sicherung und Wiederherstellung
 :id: REQ_IMP_003
-:status: accepted
+:status: superseded
 :priority: could
 :release: später
+:links: REQ_IMP_004
 
 Das System kann einen Haushalt inklusive Fotos als Archiv exportieren und in
-eine andere Instanz importieren (z.B. Wechsel SQLite → PostgreSQL).
+eine andere Instanz importieren (z.B. Wechsel SQLite → PostgreSQL). Ersetzt
+durch {need}`REQ_IMP_004`.
+```
+
+```{req} Vollständiger Export und Import ohne Datenverlust
+:id: REQ_IMP_004
+:status: accepted
+:priority: must
+:release: MVP
+
+Das System muss alle Daten vollständig, einschließlich der Fotos, exportieren
+und in eine neue Installation importieren können, ohne dass dabei Daten
+verloren gehen.
+
+**Akzeptanzkriterien**
+- Betrieb: Export der ganzen Installation (Nutzer, Haushalte, Messstellen,
+  Geräte, Register, Ablesungen, Entwürfe, Fotos) und Import in eine leere
+  Installation; unabhängig vom Datenbank-Backend (z.B. SQLite nach PostgreSQL).
+- Nutzer: Export eines Haushalts und Import als neuer Haushalt, auch in eine
+  andere Installation.
+- Export, Import und erneuter Export ergeben dieselben Daten.
+- Das Archiv ist versioniert; neuere Versionen lesen Archive älterer
+  Versionen. Beschädigte Archive werden abgelehnt, ohne Daten zu ändern.
 ```

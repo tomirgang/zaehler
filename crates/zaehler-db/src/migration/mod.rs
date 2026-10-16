@@ -7,6 +7,7 @@ mod m20261015_000001_core;
 mod m20261015_000002_mvp;
 mod m20261015_000003_ai_drafts;
 mod m20261016_000004_draft_taken_at;
+mod m20261016_000005_draft_analysis_started_at;
 
 pub struct Migrator;
 
@@ -18,6 +19,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261015_000002_mvp::Migration),
             Box::new(m20261015_000003_ai_drafts::Migration),
             Box::new(m20261016_000004_draft_taken_at::Migration),
+            Box::new(m20261016_000005_draft_analysis_started_at::Migration),
         ]
     }
 }

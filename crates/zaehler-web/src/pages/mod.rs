@@ -4,6 +4,7 @@
 #![allow(clippy::result_large_err)]
 
 pub mod analysis;
+pub mod backup;
 pub mod capture;
 pub mod dashboard;
 pub mod import;

@@ -8,6 +8,7 @@ pub mod auth;
 pub mod extract;
 pub mod i18n;
 pub mod pages;
+pub mod queue;
 pub mod security;
 pub mod state;
 
@@ -30,6 +31,7 @@ pub use state::{WebConfig, WebState};
 const FORM_LIMIT: usize = 64 * 1024;
 
 /// Vollständiger Router; `store` speichert die Sitzungen (SPEC_SEC_SESSION_CSRF).
+#[allow(clippy::too_many_lines)] // Routentabelle, eine Route je Zeile
 pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
     let sessions = SessionManagerLayer::new(store)
         .with_name("zaehler_session")
@@ -66,7 +68,13 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
             "/capture",
             get(pages::capture::upload_form)
                 .post(pages::capture::analyse)
-                .layer(DefaultBodyLimit::max(state.cfg.max_photo_bytes)),
+                // je Foto `max_photo_bytes`, im Handler geprüft (SPEC_AI_MULTI)
+                .layer(DefaultBodyLimit::max(
+                    state
+                        .cfg
+                        .max_photo_bytes
+                        .saturating_mul(zaehler_app::usecase::capture::MAX_PHOTOS),
+                )),
         )
         .route("/import", get(pages::import::upload_form))
         .route(
@@ -88,6 +96,11 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
             post(pages::settings::update_household),
         )
         .route("/settings/locale", post(pages::settings::update_locale))
+        .route("/settings/export", get(pages::backup::export))
+        .route(
+            "/settings/import",
+            post(pages::backup::import).layer(DefaultBodyLimit::max(state.cfg.max_backup_bytes)),
+        )
         .route("/households", post(pages::settings::create_household))
         .route(
             "/households/switch",

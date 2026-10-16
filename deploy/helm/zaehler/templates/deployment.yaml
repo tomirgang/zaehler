@@ -55,6 +55,17 @@ spec:
               value: {{ .Values.session.ttlHours | quote }}
             - name: ZAEHLER_DATABASE__AUTO_MIGRATE
               value: {{ .Values.autoMigrate | quote }}
+            {{- if and .Values.backup.beforeMigrate (include "zaehler.needsDataVolume" .) }}
+            - name: ZAEHLER_BACKUP__BEFORE_MIGRATE
+              value: "true"
+            - name: ZAEHLER_BACKUP__DIR
+              value: /var/lib/zaehler/data/backups
+            - name: ZAEHLER_BACKUP__KEEP
+              value: {{ .Values.backup.keep | quote }}
+            {{- else }}
+            - name: ZAEHLER_BACKUP__BEFORE_MIGRATE
+              value: "false"
+            {{- end }}
             - name: ZAEHLER_DATABASE__MAX_CONNECTIONS
               value: {{ .Values.database.maxConnections | quote }}
             {{- if eq .Values.database.type "cnpg" }}

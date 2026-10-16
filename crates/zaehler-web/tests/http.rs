@@ -26,6 +26,7 @@ fn test_app(dev_login: bool) -> Router {
             "test",
         )),
         oidc: None,
+        analysis: Arc::default(),
     };
     router(state, MemoryStore::default())
 }
@@ -151,6 +152,7 @@ async fn reading_photos_are_served_only_to_their_household() {
             "test",
         )),
         oidc: None,
+        analysis: Arc::default(),
     };
     let app = router(state, MemoryStore::default());
     let mut anna = Client::new(&app);
@@ -252,6 +254,7 @@ fn capture_app(max_photo_bytes: usize) -> Router {
                 .with_max_photo_bytes(max_photo_bytes),
         ),
         oidc: None,
+        analysis: Arc::default(),
     };
     router(state, MemoryStore::default())
 }
@@ -346,7 +349,7 @@ async fn photo_capture_workflow() {
     let draft_page = location(&res);
     assert!(draft_page.starts_with("/capture/"));
 
-    let html = text(c.get(&draft_page).await).await;
+    let html = reviewed(&mut c, &draft_page).await;
     assert!(html.contains("1025"), "Vorschlag sichtbar");
     assert!(html.contains("87 %"), "Konfidenz sichtbar");
     assert!(html.contains(&format!("value=\"{meter}\"")), "zugeordnet");
@@ -422,7 +425,7 @@ async fn new_meter_from_photo_is_prefilled_and_keeps_the_photo() {
     let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(64)).await;
     let draft_page = location(&res);
     let draft = draft_page.trim_start_matches("/capture/").to_owned();
-    let html = text(c.get(&draft_page).await).await;
+    let html = reviewed(&mut c, &draft_page).await;
     assert!(html.contains(&format!("href=\"/meters/new?draft={draft}\"")));
 
     let form = text(c.get(&format!("/meters/new?draft={draft}")).await).await;
@@ -480,6 +483,7 @@ fn import_app(max_csv_bytes: usize) -> Router {
                 .with_max_csv_bytes(max_csv_bytes),
         ),
         oidc: None,
+        analysis: Arc::default(),
     };
     router(state, MemoryStore::default())
 }
@@ -569,6 +573,104 @@ async fn csv_import_workflow() {
     let mut bob = Client::new(&app);
     bob.login("bob").await;
     assert_eq!(location(&bob.get("/import/preview").await), "/import");
+}
+
+// @test SPEC_UI_TOPBAR, SPEC_TEN_HOUSEHOLDS
+#[tokio::test]
+async fn topbar_marks_the_household_and_renaming_updates_it() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let page = text(c.get("/").await).await;
+    assert!(page.contains("id=\"household-label\" class=\"household-label\">Haushalt</span>"));
+    assert!(page.contains("<strong class=\"household-name\">anna</strong>"));
+    assert!(page.contains("href=\"/settings#household\">Umbenennen</a>"));
+    assert!(page.contains("Angemeldet als anna"));
+    assert!(
+        text(c.get("/settings").await)
+            .await
+            .contains("id=\"household\"")
+    );
+
+    let res = c
+        .post(
+            "/settings/household",
+            &[
+                ("_csrf", csrf.as_str()),
+                ("name", "Haus am See"),
+                ("timezone", "Europe/Berlin"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let page = text(c.get("/").await).await;
+    assert!(page.contains("<strong class=\"household-name\">Haus am See</strong>"));
+}
+
+async fn import_archive(c: &mut Client, csrf: Option<&str>, file: &[u8]) -> Response {
+    let (content_type, body) = multipart_file(csrf, "file", file);
+    let req = Request::post("/settings/import")
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap();
+    c.send(req).await
+}
+
+// @test SPEC_BACKUP_HOUSEHOLD, SPEC_SEC_SESSION_CSRF
+#[tokio::test]
+async fn household_archive_download_and_import_as_new_household() {
+    let app = test_app(true);
+    let mut anna = Client::new(&app);
+    anna.login("anna").await;
+    let csrf = anna.csrf().await;
+    create_meter(&mut anna, &csrf, "Strom").await;
+    let settings = text(anna.get("/settings").await).await;
+    assert!(settings.contains("href=\"/settings/export\" hx-boost=\"false\" download"));
+
+    let res = anna.get("/settings/export").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "application/zip");
+    let disposition = res.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        disposition.starts_with("attachment; filename=\"zaehler-anna-"),
+        "{disposition}"
+    );
+    let archive = to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .to_vec();
+    assert!(archive.starts_with(b"PK"));
+
+    let mut bob = Client::new(&app);
+    bob.login("bob").await;
+    let bob_csrf = bob.csrf().await;
+    assert_eq!(
+        import_archive(&mut bob, None, &archive).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let res = import_archive(&mut bob, Some(&bob_csrf), b"kein archiv").await;
+    assert_eq!(location(&res), "/settings");
+    assert!(
+        text(bob.get("/settings").await)
+            .await
+            .contains("kein gültiges Archiv")
+    );
+
+    let res = import_archive(&mut bob, Some(&bob_csrf), &archive).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&res), "/settings");
+    // aktiver Haushalt ist der importierte
+    let meters = text(bob.get("/meters").await).await;
+    assert!(meters.contains(">Strom<"), "Messstelle aus dem Archiv");
+    assert!(
+        text(bob.get("/settings").await)
+            .await
+            .contains("id=\"hh-name\" name=\"name\" value=\"anna\"")
+    );
 }
 
 // @test SPEC_UI_DASHBOARD
@@ -667,6 +769,7 @@ async fn capture_time_from_photo_prefills_the_forms() {
                 .with_max_photo_bytes(1024 * 1024),
         ),
         oidc: None,
+        analysis: Arc::default(),
     };
     let app = router(state, MemoryStore::default());
     let mut c = Client::new(&app);
@@ -677,7 +780,7 @@ async fn capture_time_from_photo_prefills_the_forms() {
     let draft = draft_page.trim_start_matches("/capture/").to_owned();
     let meter = create_meter(&mut c, &csrf, "Strom").await;
 
-    let confirm = text(c.get(&format!("{draft_page}?meter={meter}")).await).await;
+    let confirm = reviewed(&mut c, &format!("{draft_page}?meter={meter}")).await;
     assert!(
         confirm.contains("value=\"2026-01-10T08:15\""),
         "Zeitpunkt aus EXIF"
@@ -694,10 +797,108 @@ async fn photo_upload_limit_returns_413() {
     let mut c = Client::new(&app);
     c.login("anna").await;
     let csrf = c.csrf().await;
+    // einzelnes Foto über `max_photo_bytes`: Hinweis zu diesem Foto
     let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(8192)).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("zu groß"));
+    // Upload über `max_photo_bytes` mal Höchstzahl Fotos
+    let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(4096 * 20 + 1)).await;
     assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
     let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(1024)).await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
+}
+
+/// Wartet, bis die Hintergrundanalyse fertig ist, und liefert die Prüfseite.
+async fn reviewed(c: &mut Client, path: &str) -> String {
+    for _ in 0..500 {
+        let html = text(c.get(path).await).await;
+        if !html.contains("hx-trigger=\"load delay:2s\"") {
+            return html;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("Analyse nicht abgeschlossen: {path}");
+}
+
+/// Multipart-Body mit mehreren Fotos im Feld `photo`.
+fn multipart_photos(csrf: &str, photos: &[&[u8]]) -> (String, Vec<u8>) {
+    let boundary = "zaehler-test-boundary";
+    let mut body =
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"_csrf\"\r\n\r\n{csrf}\r\n")
+            .into_bytes();
+    for (i, photo) in photos.iter().enumerate() {
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"foto{i}.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(photo);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+// @test SPEC_AI_MULTI
+#[tokio::test]
+async fn several_photos_are_reviewed_one_after_another() {
+    let app = capture_app(1024 * 1024);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let meter = create_meter(&mut c, &csrf, "Strom").await;
+    let (content_type, body) =
+        multipart_photos(&csrf, &[&fake_jpeg(64), b"kein Bild", &fake_jpeg(64)]);
+    let req = Request::post("/capture")
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap();
+    let res = c.send(req).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let first = location(&res);
+    // die Meldung erscheint einmal, auf der ersten Seite nach dem Upload
+    let page = text(c.get(&first).await).await;
+    assert!(
+        page.contains("übersprungen"),
+        "Hinweis auf das abgelehnte Foto"
+    );
+
+    let html = reviewed(&mut c, &first).await;
+    assert!(
+        html.contains("Foto 1 von 2"),
+        "Position in der Warteschlange"
+    );
+    let register = {
+        let start = html.find("name=\"register_id\"").unwrap();
+        let rest = &html[start..];
+        let v = rest.find("value=\"").unwrap() + 7;
+        rest[v..v + rest[v..].find('"').unwrap()].to_owned()
+    };
+    let res = c
+        .post(
+            &format!("{first}/confirm"),
+            &[
+                ("_csrf", csrf.as_str()),
+                ("meter_id", meter.as_str()),
+                ("register_id", register.as_str()),
+                ("value", "1025"),
+                ("at", "2026-01-10T08:00"),
+                ("note", ""),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let second = location(&res);
+    assert!(
+        second.starts_with("/capture/") && second != first,
+        "weiter zum nächsten Foto"
+    );
+    let html = reviewed(&mut c, &second).await;
+    assert!(html.contains("Foto 1 von 1") || !html.contains("von 2"));
+    let res = c
+        .post(&format!("{second}/discard"), &[("_csrf", csrf.as_str())])
+        .await;
+    assert_eq!(location(&res), "/capture", "keine weiteren Fotos");
+    assert!(!text(c.get("/capture").await).await.contains("Jetzt prüfen"));
 }
 
 // @test SPEC_OPS_HEALTH, SPEC_SEC_HEADERS

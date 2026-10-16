@@ -3,7 +3,7 @@
 {% block content %}
 <h1>{{ ctx.lang.t("settings-title") }}</h1>
 
-<section class="card">
+<section class="card" id="household">
   <h2>{{ ctx.lang.t("settings-household") }}</h2>
   <form method="post" action="/settings/household" class="form" novalidate>
     <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
@@ -52,6 +52,23 @@
       {% for e in self.errs("new_timezone") %}<p class="field-error">{{ e }}</p>{% endfor %}
     </div>
     <button type="submit">{{ ctx.lang.t("action-create") }}</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>{{ ctx.lang.t("settings-backup") }}</h2>
+  <p>{{ ctx.lang.t("settings-backup-hint") }}</p>
+  {% if ctx.is_owner %}
+  <p><a class="button secondary" href="/settings/export" hx-boost="false" download>{{ ctx.lang.t("settings-export") }}</a></p>
+  {% endif %}
+  <form method="post" action="/settings/import" enctype="multipart/form-data" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="field">
+      <label for="backup-file">{{ ctx.lang.t("settings-import-file") }}</label>
+      <input id="backup-file" name="file" type="file" accept=".zip,application/zip" required>
+      <p class="hint">{{ backup_hint }}</p>
+    </div>
+    <button type="submit" class="secondary">{{ ctx.lang.t("settings-import") }}</button>
   </form>
 </section>
 

@@ -116,3 +116,23 @@ Die Dokumentation soll Backup und Restore für beide Datenbanken beschreiben
 (CNPG: Barman Cloud / Objektspeicher; SQLite: Litestream oder `VACUUM INTO`)
 und das Chart soll CNPG-Backups konfigurierbar machen.
 ```
+
+```{req} Upgrade ohne Datenverlust
+:id: REQ_OPS_012
+:status: accepted
+:priority: must
+:release: MVP
+
+Jede neuere Version muss die Datenbank jeder älteren Version automatisch
+aktualisieren, sodass ein Upgrade ohne Datenverlust immer möglich ist.
+
+**Akzeptanzkriterien**
+- Freigegebene Migrationen werden nicht geändert; Änderungen am Schema
+  erfolgen nur über neue Migrationen.
+- Daten aus dem ältesten Schema bleiben über alle Migrationen erhalten
+  (automatisierter Test).
+- Vor dem Anwenden ausstehender Migrationen entsteht ein vollständiges
+  Archiv ({need}`REQ_IMP_004`); schlägt es fehl, wird nicht migriert.
+- Eine Datenbank einer neueren Version wird nicht verändert; der Start wird
+  mit Hinweis verweigert.
+```

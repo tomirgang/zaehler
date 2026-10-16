@@ -97,7 +97,7 @@ Zeitumstellung für `Calendar`.
 :status: done
 :milestone: M1
 :depends: WP_MVP_01, WP_MVP_02
-:covers: REQ_TEN_001, REQ_TEN_002, REQ_NFR_004, SPEC_TEN_OIDC, SPEC_SEC_SESSION_CSRF, SPEC_TEN_HOUSEHOLDS, SPEC_TEN_DEV_LOGIN, SPEC_PRIV_HOUSEHOLD_DELETE
+:covers: REQ_TEN_001, REQ_TEN_002, REQ_TEN_005, REQ_NFR_004, SPEC_TEN_OIDC, SPEC_SEC_SESSION_CSRF, SPEC_TEN_HOUSEHOLDS, SPEC_TEN_DEV_LOGIN, SPEC_PRIV_HOUSEHOLD_DELETE, SPEC_UI_TOPBAR
 
 Sitzung und CSRF-Prüfung in `zaehler-web`, OIDC-Login und Logout, Dev-Login,
 Anwendungsfälle `SignIn`, `CreateHousehold`, `SwitchHousehold`,
@@ -106,6 +106,10 @@ Anwendungsfälle `SignIn`, `CreateHousehold`, `SwitchHousehold`,
 **Abnahme:** Login gegen Keycloak (lokal per compose-Override) und Dev-Login;
 CSRF-Tests (fehlend, falsch, korrekt); Löschen eines Haushalts entfernt DB-Zeilen
 und Objekte.
+
+**Stand:** Nachträglich aufgenommen: Kennzeichnung des aktiven Haushalts in
+der Titelleiste mit Link zum Umbenennen ({need}`REQ_TEN_005`,
+{need}`SPEC_UI_TOPBAR`), HTTP-Test für Anzeige und Umbenennen.
 ```
 
 ```{wp} Messstellen verwalten
@@ -169,7 +173,7 @@ Tabelle `ai_drafts` erst dort entsteht. {need}`SPEC_SEC_UPLOADS` bleibt
 :status: open
 :milestone: M2
 :depends: WP_MVP_05, WP_MVP_06
-:covers: REQ_AI_001, REQ_AI_002, REQ_AI_003, REQ_AI_006, REQ_AI_007, REQ_RDG_006, SPEC_AI_FLOW, SPEC_AI_DRAFTS, SPEC_AI_NEW_METER, SPEC_IMG_CAPTURE_TIME
+:covers: REQ_AI_001, REQ_AI_002, REQ_AI_003, REQ_AI_006, REQ_AI_007, REQ_AI_008, REQ_RDG_006, SPEC_AI_FLOW, SPEC_AI_DRAFTS, SPEC_AI_NEW_METER, SPEC_AI_MULTI, SPEC_IMG_CAPTURE_TIME
 
 Port `DraftRepository` und `MeterRecognizer` (Adapter `zaehler-ai`),
 Anwendungsfälle `AnalysePhoto`, `ConfirmDraft`, `DiscardDraft`, Seiten Upload
@@ -190,8 +194,10 @@ mit 303 auf die Bestätigungsseite statt mit einem HTMX-Fragment; damit
 funktioniert der Ablauf ohne JavaScript und ein Neuladen der Seite bleibt
 möglich. Nachträglich aufgenommen: Anlegen einer Messstelle aus einem Foto
 ({need}`REQ_AI_007`, {need}`SPEC_AI_NEW_METER`) und Ablesezeitpunkt aus den
-Fotometadaten ({need}`REQ_RDG_006`, {need}`SPEC_IMG_CAPTURE_TIME`), umgesetzt
-mit Medien-, Anwendungsfall- und HTTP-Tests.
+Fotometadaten ({need}`REQ_RDG_006`, {need}`SPEC_IMG_CAPTURE_TIME`) sowie
+Mehrfach-Foto-Erfassung mit Warteschlange ({need}`REQ_AI_008`,
+{need}`SPEC_AI_MULTI`, Migration `m20261016_000005_draft_analysis_started_at`),
+umgesetzt mit Medien-, Port-, Anwendungsfall- und HTTP-Tests.
 ```
 
 ### M3: Auswertung, Dashboard, Import
@@ -331,6 +337,34 @@ aktualisieren.
 **Abnahme:** {need}`SPEC_PERF_BUDGET` eingehalten; keine offenen Befunde der
 Schwere hoch; Lückenlisten unter {doc}`../nachverfolgung/index` ohne
 MVP-Einträge.
+```
+
+```{wp} Export, Import und Upgrade ohne Datenverlust
+:id: WP_MVP_16
+:status: done
+:milestone: M4
+:depends: WP_MVP_02, WP_MVP_06
+:covers: REQ_IMP_004, REQ_OPS_012, SPEC_BACKUP_FORMAT, SPEC_BACKUP_DATA, SPEC_BACKUP_INSTALLATION, SPEC_BACKUP_HOUSEHOLD, SPEC_OPS_UPGRADE
+
+Archivformat, Port `BackupRepository` mit tolerantem Export, Anwendungsfälle
+`ExportInstallation`, `ImportInstallation`, `ExportHousehold`,
+`ImportHousehold`, Befehle `zaehler export` und `zaehler import`,
+Einstellungsseite, Schemaprüfung und Archiv vor Migrationen, Konfiguration
+`backup.*`, Helm und compose.
+
+**Abnahme:** Export, Import und erneuter Export ergeben dieselben Daten
+(SQLite, PostgreSQL in der CI); Daten aus dem ältesten Schema überstehen jede
+Migration; Datenbank einer neueren Version wird abgelehnt; Archiv vor der
+Migration ist einspielbar.
+
+**Stand:** Nachträglich aufgenommen. Automatisierte Tests in `zaehler-app`,
+`zaehler-db`, `zaehler-web` und `zaehler-server`; zusätzlich mit dem
+Programm geprüft: Schemastand vor `m20261016_000004_draft_taken_at`
+nachgestellt, `zaehler migrate` schrieb das Archiv und migrierte;
+`zaehler export`, `zaehler import` in eine leere Installation und erneuter
+Export ergaben ein byte-gleiches `data.json`; das Archiv vor der Migration
+ergab nach dem Import dieselben Daten. `helm lint` stand lokal nicht zur
+Verfügung.
 ```
 
 ## Abhängigkeiten

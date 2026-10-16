@@ -2,6 +2,7 @@
 
 {% block content %}
 <h1>{{ ctx.lang.t("capture-confirm-title") }}</h1>
+{% if let Some(p) = progress %}<p class="muted">{{ p }}</p>{% endif %}
 <div class="capture">
   <img class="capture-photo" src="/capture/{{ draft_id }}/photo" alt="{{ ctx.lang.t("capture-photo-alt") }}">
   <div>

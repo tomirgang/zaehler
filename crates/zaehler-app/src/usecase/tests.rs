@@ -1372,6 +1372,150 @@ async fn import_reports_errors_and_saves_warnings_only_after_confirmation() {
     }
 }
 
+// @test SPEC_BACKUP_HOUSEHOLD, SPEC_BACKUP_INSTALLATION, SPEC_BACKUP_FORMAT
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // zusammenhängender Ablauf über zwei Installationen
+async fn household_and_installation_archives_keep_readings_and_photos() {
+    use std::io::Cursor;
+    let c = capture_setup(Some(Ok(recognition(dec!(1100), Some("1-EMH 001"))))).await;
+    let meter =
+        c.uc.create_meter
+            .execute(&c.tenant, meter_input("Strom"))
+            .await
+            .unwrap();
+    let draft =
+        c.uc.analyse_photo
+            .execute(&c.tenant, Bytes::from_static(JPEG))
+            .await
+            .unwrap();
+    let view =
+        c.uc.get_draft
+            .execute(&c.tenant, draft, None)
+            .await
+            .unwrap();
+    let input = confirm_input(&view, dec!(1100), c.clock.now());
+    c.uc.confirm_draft
+        .execute(&c.tenant, draft, &input, false)
+        .await
+        .unwrap();
+    // ein offener Entwurf mit Foto gehört ebenfalls dazu
+    c.uc.analyse_photo
+        .execute(&c.tenant, Bytes::from_static(JPEG))
+        .await
+        .unwrap();
+
+    let member = Tenant::new(c.tenant.user_id(), c.tenant.household_id(), Role::Member);
+    assert!(matches!(
+        c.uc.export_household
+            .execute(&member, Cursor::new(Vec::new()))
+            .await,
+        Err(AppError::Forbidden)
+    ));
+    let (archive, report) =
+        c.uc.export_household
+            .execute(&c.tenant, Cursor::new(Vec::new()))
+            .await
+            .unwrap();
+    assert_eq!((report.photos, report.counts.readings), (2, 3));
+    let archive = archive.into_inner();
+
+    // als neuer Haushalt in dieselbe Installation
+    let (copy, imported) =
+        c.uc.import_household
+            .execute(&c.tenant, Cursor::new(archive.clone()))
+            .await
+            .unwrap();
+    assert_ne!(copy, c.tenant.household_id());
+    assert_eq!(imported.photos, 2);
+    let resolved =
+        c.uc.resolve_tenant
+            .execute(c.tenant.user_id(), Some(copy))
+            .await
+            .unwrap();
+    assert_eq!(resolved.tenant.household_id(), copy);
+    assert_eq!(resolved.tenant.role(), Role::Owner);
+    let meters = c.uc.list_meters.execute(&resolved.tenant).await.unwrap();
+    assert_eq!(meters.len(), 1);
+    assert_ne!(meters[0].meter.id, meter, "neue IDs");
+    let detail =
+        c.uc.get_meter
+            .execute(&resolved.tenant, meters[0].meter.id)
+            .await
+            .unwrap();
+    let original = c.uc.get_meter.execute(&c.tenant, meter).await.unwrap();
+    let values = |d: &crate::usecase::meter::MeterDetail| {
+        let mut v: Vec<_> = d
+            .readings
+            .iter()
+            .map(|r| (r.read_at, r.value, r.source.as_str()))
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(values(&detail), values(&original));
+    let photo_reading = detail
+        .readings
+        .iter()
+        .find(|r| r.photo_key.is_some())
+        .unwrap();
+    assert_eq!(
+        c.uc.get_reading_photo
+            .execute(&resolved.tenant, photo_reading.id)
+            .await
+            .unwrap(),
+        JPEG
+    );
+
+    // ganze Installation: nur in eine leere Installation
+    let (whole, _) =
+        c.uc.export_installation
+            .execute(Cursor::new(Vec::new()))
+            .await
+            .unwrap();
+    let whole = whole.into_inner();
+    assert!(matches!(
+        c.uc.import_installation
+            .execute(Cursor::new(whole.clone()))
+            .await,
+        Err(AppError::Conflict("backup.not_empty"))
+    ));
+    let (ports, _, _, blobs) = memory_ports_with_blobs();
+    let fresh = UseCases::new(&ports);
+    let Err(AppError::Validation(e)) = fresh
+        .import_installation
+        .execute(Cursor::new(archive))
+        .await
+    else {
+        panic!("Haushaltsarchiv ist kein Installationsarchiv");
+    };
+    assert_eq!(e.0[0].code, "backup.scope");
+    let report = fresh
+        .import_installation
+        .execute(Cursor::new(whole))
+        .await
+        .unwrap();
+    assert_eq!(report.counts.households, 2);
+    assert_eq!(
+        blobs.keys().len(),
+        c.blobs.keys().len(),
+        "alle Fotos übertragen"
+    );
+    // derselbe Nutzer meldet sich in der neuen Installation an
+    let signed = fresh.sign_in.execute(&identity("anna")).await.unwrap();
+    assert_eq!(signed.user.id, c.tenant.user_id());
+    assert_eq!(signed.households.len(), 2);
+
+    // beschädigtes Archiv
+    let Err(AppError::Validation(e)) = fresh
+        .import_household
+        .execute(&c.tenant, Cursor::new(b"PK kaputt".to_vec()))
+        .await
+    else {
+        panic!("ungültiges Archiv");
+    };
+    assert_eq!(e.0[0].code, "backup.invalid");
+}
+
 // @test SPEC_IMG_CAPTURE_TIME
 #[tokio::test]
 async fn capture_time_from_photo_metadata_is_stored_with_the_draft() {
@@ -1430,6 +1574,110 @@ async fn capture_time_from_photo_metadata_is_stored_with_the_draft() {
         None
     );
     assert_eq!(analyse(None).await, None);
+}
+
+// @test SPEC_AI_MULTI
+#[tokio::test]
+async fn several_photos_are_analysed_in_order_and_reviewed_one_after_another() {
+    use crate::usecase::capture::MAX_PHOTOS;
+    let c = capture_setup(Some(Ok(recognition(dec!(1100), Some("1-EMH 001"))))).await;
+    let meter =
+        c.uc.create_meter
+            .execute(&c.tenant, meter_input("Strom"))
+            .await
+            .unwrap();
+    let photos = vec![
+        Bytes::from_static(JPEG),
+        Bytes::from_static(b"kein Bild"),
+        Bytes::from_static(JPEG),
+    ];
+    let queued = c.uc.queue_photos.execute(&c.tenant, photos).await.unwrap();
+    assert_eq!(queued.drafts.len(), 2);
+    assert_eq!(queued.rejected.len(), 1);
+    assert_eq!(queued.rejected[0].0, 1, "Position des abgelehnten Fotos");
+    let (first, second) = (queued.drafts[0], queued.drafts[1]);
+    assert_eq!(
+        c.store.draft_state(first),
+        Some((DraftStatus::Queued, None))
+    );
+
+    // vor der Analyse: anzeigen ja, bestätigen nein
+    let view =
+        c.uc.get_draft
+            .execute(&c.tenant, first, None)
+            .await
+            .unwrap();
+    assert_eq!(view.position(), (1, 2));
+    assert!(view.draft.suggestion.is_none());
+    let input = ReadingsInput {
+        meter_id: meter,
+        at: c.clock.now(),
+        values: vec![(
+            c.uc.get_meter
+                .execute(&c.tenant, meter)
+                .await
+                .unwrap()
+                .aggregate
+                .registers[0]
+                .id,
+            dec!(1100),
+        )],
+        note: None,
+    };
+    assert!(matches!(
+        c.uc.confirm_draft
+            .execute(&c.tenant, first, &input, false)
+            .await,
+        Err(AppError::Conflict("capture.not_ready"))
+    ));
+
+    // nacheinander, älteste zuerst
+    assert_eq!(
+        c.uc.analyse_queued.next(&c.tenant).await.unwrap(),
+        Some(first)
+    );
+    assert_eq!(
+        c.store.draft_state(first),
+        Some((DraftStatus::Pending, None))
+    );
+    assert_eq!(
+        c.store.draft_state(second),
+        Some((DraftStatus::Queued, None))
+    );
+    assert_eq!(
+        c.uc.analyse_queued.next(&c.tenant).await.unwrap(),
+        Some(second)
+    );
+    assert_eq!(c.uc.analyse_queued.next(&c.tenant).await.unwrap(), None);
+    assert!(
+        !c.uc.analyse_queued.draft(&c.tenant, first).await.unwrap(),
+        "bereits analysiert"
+    );
+
+    let view =
+        c.uc.get_draft
+            .execute(&c.tenant, first, None)
+            .await
+            .unwrap();
+    assert_eq!(
+        view.meter.as_ref().unwrap().aggregate.meter.id,
+        meter,
+        "zugeordnet"
+    );
+    c.uc.confirm_draft
+        .execute(&c.tenant, first, &input, true)
+        .await
+        .unwrap();
+    let next = |done| c.uc.get_draft.next_open(&c.tenant, done);
+    assert_eq!(next(first).await.unwrap(), Some(second));
+    c.uc.discard_draft.execute(&c.tenant, second).await.unwrap();
+    assert_eq!(next(second).await.unwrap(), None);
+
+    let too_many = vec![Bytes::from_static(JPEG); MAX_PHOTOS + 1];
+    assert!(matches!(
+        c.uc.queue_photos.execute(&c.tenant, too_many).await,
+        Err(AppError::Validation(_))
+    ));
 }
 
 // @test SPEC_AI_NEW_METER

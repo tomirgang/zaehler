@@ -8,6 +8,7 @@
 //!
 //! Dieses Crate kennt keine Frameworks, keine Datenbank und kein HTTP.
 
+pub mod backup;
 pub mod error;
 pub mod ids;
 pub mod model;

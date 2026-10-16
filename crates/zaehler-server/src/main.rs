@@ -1,5 +1,6 @@
 //! `zaehler`: Binary für Webserver und Verwaltungsbefehle.
 
+mod backup;
 mod config;
 mod scheduler;
 mod telemetry;
@@ -29,10 +30,21 @@ struct Cli {
 enum Command {
     /// Webserver starten (Standard).
     Serve,
-    /// Datenbankmigrationen ausführen und beenden (z.B. als Helm-Hook/Init-Container).
+    /// Datenbankmigrationen ausführen und beenden (z.B. als Helm-Hook/Init-Container);
+    /// vorher wird ein Archiv nach `backup.dir` geschrieben.
     Migrate,
     /// Wirksame Konfiguration (ohne Geheimnisse) ausgeben.
     Config,
+    /// Alle Daten der Installation inklusive Fotos als Archiv exportieren.
+    Export {
+        /// Zieldatei (`.zip`); eine vorhandene Datei wird nicht überschrieben.
+        file: std::path::PathBuf,
+    },
+    /// Archiv in eine leere Installation importieren; migriert vorher die Datenbank.
+    Import {
+        /// Archiv aus `zaehler export`.
+        file: std::path::PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -50,14 +62,69 @@ async fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve(config).await,
         Command::Migrate => {
-            let db = zaehler_db::connect(&config.database.url, 1).await?;
-            zaehler_db::migrate(&db).await?;
-            Ok(())
+            let a = wiring::adapters(&config, None).await?;
+            wiring::prepare_database(&config, &a).await
         }
         Command::Config => {
             println!("{}", config.redacted());
             Ok(())
         }
+        Command::Export { file } => {
+            let a = wiring::adapters(&config, None).await?;
+            let export = zaehler_app::usecase::backup::ExportInstallation::new(a.ports);
+            let report = backup::export_to(&export, &file).await?;
+            println!(
+                "{}: {} Haushalte, {} Messstellen, {} Ablesungen, {} Fotos",
+                file.display(),
+                report.counts.households,
+                report.counts.meters,
+                report.counts.readings,
+                report.photos
+            );
+            if !report.missing_photos.is_empty() {
+                eprintln!(
+                    "Hinweis: {} referenzierte Fotos fehlten im Objektspeicher und sind nicht enthalten",
+                    report.missing_photos.len()
+                );
+            }
+            Ok(())
+        }
+        Command::Import { file } => {
+            let a = wiring::adapters(&config, None).await?;
+            wiring::prepare_database(&config, &a).await?;
+            let import = zaehler_app::usecase::backup::ImportInstallation::new(a.ports);
+            let report = import
+                .execute(backup::open(&file)?)
+                .await
+                .map_err(|e| anyhow::anyhow!("Import fehlgeschlagen: {}", describe(&e)))?;
+            println!(
+                "importiert: {} Nutzer, {} Haushalte, {} Messstellen, {} Ablesungen, {} Fotos",
+                report.counts.users,
+                report.counts.households,
+                report.counts.meters,
+                report.counts.readings,
+                report.photos
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Fehler eines Anwendungsfalls für die Konsole; Feldfehler mit ihrem Code.
+fn describe(e: &zaehler_app::AppError) -> String {
+    match e {
+        zaehler_app::AppError::Validation(errors) => errors
+            .0
+            .iter()
+            .map(|f| f.code)
+            .collect::<Vec<_>>()
+            .join(", "),
+        zaehler_app::AppError::Conflict("backup.not_empty") => {
+            "die Installation enthält bereits Nutzer oder Haushalte; \
+             importiert wird nur in eine leere Installation"
+                .into()
+        }
+        other => other.to_string(),
     }
 }
 

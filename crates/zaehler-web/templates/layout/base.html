@@ -21,21 +21,25 @@
       <a href="/settings">{{ ctx.lang.t("nav-settings") }}</a>
     </nav>
     <div class="topbar-right">
-      {% if ctx.households.len() > 1 %}
-      <form method="post" action="/households/switch" class="inline">
-        <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
-        <label class="visually-hidden" for="household-switch">{{ ctx.lang.t("household-switch") }}</label>
-        <select id="household-switch" name="household">
-          {% for h in ctx.households %}
-          <option value="{{ h.id }}"{% if h.id == ctx.active %} selected{% endif %}>{{ h.name }}</option>
-          {% endfor %}
-        </select>
-        <button type="submit" class="secondary">{{ ctx.lang.t("household-switch") }}</button>
-      </form>
-      {% else %}
-      {% for h in ctx.households %}<span class="muted">{{ h.name }}</span>{% endfor %}
-      {% endif %}
-      <span class="muted">{{ ctx.user_name }}</span>
+      <div class="household" role="group" aria-labelledby="household-label">
+        <span id="household-label" class="household-label">{{ ctx.lang.t("household-active") }}</span>
+        {% if ctx.households.len() > 1 %}
+        <form method="post" action="/households/switch" class="inline">
+          <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+          <label class="visually-hidden" for="household-switch">{{ ctx.lang.t("household-switch") }}</label>
+          <select id="household-switch" name="household">
+            {% for h in ctx.households %}
+            <option value="{{ h.id }}"{% if h.id == ctx.active %} selected{% endif %}>{{ h.name }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="secondary">{{ ctx.lang.t("household-switch") }}</button>
+        </form>
+        {% else %}
+        <strong class="household-name">{{ ctx.active_name() }}</strong>
+        {% endif %}
+        {% if ctx.is_owner %}<a class="household-edit" href="/settings#household">{{ ctx.lang.t("household-rename") }}</a>{% endif %}
+      </div>
+      <span class="user muted">{{ ctx.signed_in() }}</span>
       <form method="post" action="/auth/logout" class="inline">
         <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
         <button type="submit" class="link">{{ ctx.lang.t("nav-logout") }}</button>

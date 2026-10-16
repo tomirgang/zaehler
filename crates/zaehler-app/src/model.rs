@@ -168,6 +168,10 @@ pub struct Recognition {
 /// Zustand eines Entwurfs der Foto-Erfassung.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DraftStatus {
+    /// Foto gespeichert, Analyse steht aus (SPEC_AI_MULTI)
+    Queued,
+    /// Analyse läuft
+    Analysing,
     /// Vorschlag liegt vor, Bestätigung offen
     Pending,
     /// Erkennung fehlgeschlagen oder nicht konfiguriert; manuelle Eingabe offen
@@ -177,7 +181,9 @@ pub enum DraftStatus {
 }
 
 impl DraftStatus {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
+        Self::Queued,
+        Self::Analysing,
         Self::Pending,
         Self::Failed,
         Self::Confirmed,
@@ -187,6 +193,8 @@ impl DraftStatus {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Queued => "queued",
+            Self::Analysing => "analysing",
             Self::Pending => "pending",
             Self::Failed => "failed",
             Self::Confirmed => "confirmed",
@@ -194,9 +202,16 @@ impl DraftStatus {
         }
     }
 
-    /// Entwurf wartet auf Bestätigung oder Verwerfen.
+    /// Entwurf ist nicht abgeschlossen (wartet auf Analyse, Bestätigung
+    /// oder Verwerfen).
     #[must_use]
     pub fn is_open(self) -> bool {
+        !matches!(self, Self::Confirmed | Self::Discarded)
+    }
+
+    /// Analyse abgeschlossen; der Nutzer kann bestätigen.
+    #[must_use]
+    pub fn is_ready(self) -> bool {
         matches!(self, Self::Pending | Self::Failed)
     }
 }
@@ -227,6 +242,19 @@ pub struct Draft {
     pub created_at: DateTime<Utc>,
     /// Aufnahmezeit aus den Bildmetadaten (SPEC_IMG_CAPTURE_TIME)
     pub taken_at: Option<DateTime<Utc>>,
+    /// Beginn der laufenden Analyse (SPEC_AI_MULTI)
+    pub analysis_started_at: Option<DateTime<Utc>>,
+}
+
+/// Ergebnis der Analyse eines Entwurfs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftAnalysis {
+    pub model: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub suggestion: Option<Recognition>,
+    pub matched_meter_id: Option<MeterId>,
+    /// `Pending` mit Vorschlag, sonst `Failed`
+    pub status: DraftStatus,
 }
 
 /// Abschluss eines Entwurfs.

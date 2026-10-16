@@ -62,3 +62,21 @@ Das System soll es `owner`n ermöglichen, weitere Personen per Einladungslink
 - Einladungslinks sind einmalig verwendbar und laufen nach 7 Tagen ab.
 - Die Rolle wird bei der Einladung festgelegt.
 ```
+
+```{req} Haushaltsname sichtbar und änderbar
+:id: REQ_TEN_005
+:status: accepted
+:priority: must
+:release: MVP
+
+Das System muss den aktiven Haushalt auf jeder Seite eindeutig als Haushalt
+gekennzeichnet anzeigen und `owner`n ermöglichen, den Namen des Haushalts zu
+ändern.
+
+**Akzeptanzkriterien**
+- Die Titelleiste zeigt den Namen des aktiven Haushalts mit der Bezeichnung
+  „Haushalt“, getrennt vom Namen des angemeldeten Nutzers.
+- Von der Titelleiste führt ein direkter Weg zum Umbenennen.
+- Nach dem Speichern erscheint der neue Name sofort in der Titelleiste und in
+  der Haushaltsauswahl.
+```

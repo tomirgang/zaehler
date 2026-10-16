@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use zaehler_app::{port::Readiness, usecase::UseCases};
 
-use crate::auth::OidcClient;
+use crate::{auth::OidcClient, queue::AnalysisRunner};
 
 /// Konfiguration des Web-Adapters.
 #[derive(Debug, Clone)]
@@ -21,7 +21,12 @@ pub struct WebConfig {
     pub max_photo_bytes: usize,
     /// Grenze für CSV-Uploads in Byte (SPEC_SEC_UPLOADS)
     pub max_csv_bytes: usize,
+    /// Grenze für Haushaltsarchive in Byte (SPEC_BACKUP_HOUSEHOLD)
+    pub max_backup_bytes: usize,
 }
+
+/// Standard für `upload.max_backup_bytes`: 1 GiB.
+pub const DEFAULT_MAX_BACKUP_BYTES: usize = 1024 * 1024 * 1024;
 
 /// Standard für `upload.max_photo_bytes`: 15 MiB.
 pub const DEFAULT_MAX_PHOTO_BYTES: usize = 15 * 1024 * 1024;
@@ -55,7 +60,14 @@ impl WebConfig {
             version,
             max_photo_bytes: DEFAULT_MAX_PHOTO_BYTES,
             max_csv_bytes: DEFAULT_MAX_CSV_BYTES,
+            max_backup_bytes: DEFAULT_MAX_BACKUP_BYTES,
         }
+    }
+
+    #[must_use]
+    pub fn with_max_backup_bytes(mut self, bytes: usize) -> Self {
+        self.max_backup_bytes = bytes;
+        self
     }
 
     #[must_use]
@@ -77,6 +89,8 @@ pub struct WebState {
     pub readiness: Arc<dyn Readiness>,
     pub cfg: Arc<WebConfig>,
     pub oidc: Option<Arc<OidcClient>>,
+    /// Hintergrundanalyse der Foto-Warteschlange (SPEC_AI_MULTI)
+    pub analysis: Arc<AnalysisRunner>,
 }
 
 #[cfg(test)]

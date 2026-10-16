@@ -1,0 +1,22 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("capture-confirm-title") }}</h1>
+{% if let Some(p) = progress %}<p class="muted">{{ p }}</p>{% endif %}
+<div class="capture">
+  <img class="capture-photo" src="/capture/{{ draft_id }}/photo" alt="{{ ctx.lang.t("capture-photo-alt") }}">
+  <div>
+    {# fragt alle 2 s erneut an; ist die Analyse fertig, ersetzt das Formular den Inhalt #}
+    <div class="callout" role="status" aria-busy="true"
+         hx-get="/capture/{{ draft_id }}" hx-trigger="load delay:2s"
+         hx-select="main" hx-target="main" hx-swap="outerHTML">
+      <p class="waiting">{{ ctx.lang.t("capture-analysing") }}</p>
+      <p><a href="/capture/{{ draft_id }}">{{ ctx.lang.t("capture-refresh") }}</a></p>
+    </div>
+    <form method="post" action="/capture/{{ draft_id }}/discard" class="inline">
+      <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+      <button type="submit" class="link danger">{{ ctx.lang.t("capture-discard") }}</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

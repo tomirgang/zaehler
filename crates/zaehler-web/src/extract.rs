@@ -33,6 +33,24 @@ pub struct PageCtx {
     pub version: &'static str,
 }
 
+impl PageCtx {
+    /// Name des aktiven Haushalts für die Titelleiste (SPEC_UI_TOPBAR).
+    #[must_use]
+    pub fn active_name(&self) -> &str {
+        self.households
+            .iter()
+            .find(|h| h.id == self.active)
+            .map_or("", |h| h.name.as_str())
+    }
+
+    /// „Angemeldet als …“ für die Titelleiste.
+    #[must_use]
+    pub fn signed_in(&self) -> String {
+        self.lang
+            .ta("nav-signed-in", &[("name", self.user_name.clone())])
+    }
+}
+
 /// Angemeldeter Nutzer mit geprüftem Tenant.
 pub struct Ctx {
     pub tenant: Tenant,

@@ -5242,6 +5242,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5848,11 +5854,14 @@ dependencies = [
  "rust_decimal",
  "rust_decimal_macros",
  "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
  "uuid",
  "zaehler-domain",
+ "zip",
 ]
 
 [[package]]
@@ -5867,6 +5876,7 @@ dependencies = [
  "sea-orm",
  "sea-orm-migration",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "time",
  "tokio",
@@ -5930,6 +5940,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "zaehler-ai",
  "zaehler-app",
  "zaehler-db",
@@ -5970,8 +5981,10 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
+ "tempfile",
  "time",
  "tokio",
+ "tokio-util",
  "tower",
  "tower-http 0.7.1",
  "tower-sessions",
@@ -6060,6 +6073,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "zip"
+version = "9.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2d98561b612a84ae525331a7a094429ef8a5772514ed507ff6db5f54badc971"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap 2.14.2",
+ "memchr",
+ "nix",
+ "typed-path",
 ]
 
 [[package]]

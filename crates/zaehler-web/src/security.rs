@@ -105,7 +105,7 @@ fn origin_allowed(origin: &str, public_origin: &str) -> bool {
 }
 
 /// Routen mit Multipart-Body; ihre Handler prüfen das Feld `_csrf` selbst.
-const MULTIPART_ROUTES: [&str; 2] = ["/capture", "/import/upload"];
+const MULTIPART_ROUTES: [&str; 3] = ["/capture", "/import/upload", "/settings/import"];
 
 fn forbidden() -> Response {
     (StatusCode::FORBIDDEN, "CSRF-Prüfung fehlgeschlagen").into_response()

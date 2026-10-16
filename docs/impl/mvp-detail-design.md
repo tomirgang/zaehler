@@ -128,11 +128,12 @@ impl RecordReadings {
 | `duration_ms` | INTEGER | Dauer des AI-Aufrufs |
 | `suggestion` | TEXT (JSON) | Vorschlag gemäß `zaehler_app::port::Recognition` |
 | `matched_meter_id` | UUID NULL | zugeordnete Messstelle |
-| `status` | TEXT | `pending`, `confirmed`, `discarded`, `failed` |
+| `status` | TEXT | `queued`, `analysing`, `pending`, `confirmed`, `discarded`, `failed` |
 | `confirmed_reading_id` | UUID NULL FK `readings` | gespeicherte Ablesung |
 | `corrected` | BOOLEAN NULL | bestätigter Wert weicht vom Vorschlag ab |
 | `created_at`, `finished_at` | TIMESTAMPTZ | Zeitstempel |
 | `taken_at` | TIMESTAMPTZ NULL | Aufnahmezeit aus den Bildmetadaten ({need}`SPEC_IMG_CAPTURE_TIME`, Migration `m20261016_000004_draft_taken_at`) |
+| `analysis_started_at` | TIMESTAMPTZ NULL | Beginn der laufenden Analyse ({need}`SPEC_AI_MULTI`, Migration `m20261016_000005_draft_analysis_started_at`) |
 
 Index `(household_id, status, created_at)`.
 
@@ -257,6 +258,22 @@ in der Sitzung (`hid`); bei jedem Request ruft der Extraktor `Ctx` in
 Haushalt nicht zugänglich (z.B. gelöscht), wählt `ResolveTenant` den ersten
 verbleibenden Haushalt; ohne Mitgliedschaft legt er einen neuen an. Der Haushaltswechsel ist ein `POST`
 mit CSRF-Token.
+```
+
+```{spec} Haushalt in der Titelleiste
+:id: SPEC_UI_TOPBAR
+:status: implemented
+:satisfies: REQ_TEN_005, REQ_TEN_001
+:links: SPEC_TEN_HOUSEHOLDS
+
+Rechts in der Titelleiste steht ein umrandeter Bereich mit der Bezeichnung
+„Haushalt“ und dem Namen des aktiven Haushalts (fett); bei mehreren
+Haushalten an seiner Stelle die Auswahl zum Wechseln. Ownern zeigt der Bereich
+den Link „Umbenennen“ zu `/settings#household`, wo `UpdateHousehold` Name und
+Zeitzone speichert (`POST /settings/household`). Der angemeldete Nutzer steht
+getrennt davon als „Angemeldet als {Name}“. Da `ResolveTenant` die Haushalte
+bei jedem Request lädt, zeigt die Titelleiste einen geänderten Namen ab der
+nächsten Seite.
 ```
 
 ```{spec} Entwicklungs-Login
@@ -433,6 +450,35 @@ mit `corrected` abgeschlossen. Nach dem `commit` wird das Entwurfsfoto
 gelöscht.
 ```
 
+```{spec} Mehrere Fotos: Warteschlange und Prüfung
+:id: SPEC_AI_MULTI
+:status: implemented
+:satisfies: REQ_AI_008
+:links: SPEC_AI_DRAFTS, SPEC_AI_FLOW
+
+`POST /capture` nimmt bis zu 20 Fotos im Feld `photo` an (je Foto
+`upload.max_photo_bytes`, Body-Limit das Zwanzigfache; ein einzelnes zu großes
+Foto wird nur gemeldet). `QueuePhotos` normalisiert jedes Foto, speichert es
+und legt je Foto einen Entwurf mit Status `queued` an; nicht lesbare Fotos
+werden mit Position und Dateiname gemeldet, die übrigen angelegt. Danach
+startet `AnalysisRunner` (Web-Adapter) je Haushalt höchstens eine
+Hintergrundaufgabe dieser Instanz, die über `AnalyseQueued::next` den ältesten
+wartenden Entwurf beansprucht, analysiert und das Ergebnis speichert, bis
+keiner mehr wartet. Beanspruchen ist ein bedingtes Update (`queued` oder
+`analysing` mit `analysis_started_at` älter als 5 Minuten wird `analysing`),
+sodass mehrere Instanzen nie dasselbe Foto analysieren und eine abgebrochene
+Analyse wieder aufgenommen wird. Die Prüfseite eines noch nicht analysierten
+Entwurfs zeigt einen Wartehinweis, fragt per HTMX alle 2 s erneut an (ohne
+JavaScript: Link „Aktualisieren“) und startet die Aufgabe bei Bedarf neu.
+Bestätigen ist erst nach der Analyse möglich (`capture.not_ready`). Die
+Prüfseite zeigt „Foto n von m“ über alle offenen Entwürfe des Haushalts
+(älteste zuerst); nach Speichern oder Verwerfen folgt der nächste offene
+Entwurf, sonst die Messstelle bzw. die Upload-Seite. Die Upload-Seite weist auf
+offene Entwürfe hin. Ein einzelnes Foto über `AnalysePhoto` durchläuft
+dieselben Schritte und wird sofort analysiert. Offene Entwürfe in jedem Status
+verfallen über das Housekeeping ({need}`SPEC_OPS_HOUSEKEEPING`).
+```
+
 ### Auswertung und Prognose
 
 ```{spec} Monatsserien
@@ -589,6 +635,80 @@ bereits in der Prüfung innerhalb der Transaktion erkannt werden. Metriken
 `zaehler_import_rows_total{result}`, `zaehler_readings_created_total{source}`.
 ```
 
+### Export und Import
+
+```{spec} Archivformat
+:id: SPEC_BACKUP_FORMAT
+:status: implemented
+:satisfies: REQ_IMP_004
+
+ZIP-Datei (`zaehler_app::backup`, Crate `zip` mit Deflate): `data.json` mit
+allen Datensätzen (`BackupData`, Werte wie gespeichert: Festkomma in
+Tausendsteln, Zeitpunkte in UTC, Vorschläge als JSON-Text), Fotos unter
+`blobs/<Objektschlüssel>` ohne erneute Kompression, zuletzt `manifest.json`
+mit `format = "zaehler-backup"`, `format_version` (1), Umfang (`installation`
+oder `household`), Programmversion, Schemastand, Zeitpunkt, Anzahlen, SHA-256
+von `data.json` sowie Größe und SHA-256 jedes Fotos und der Liste fehlender
+Fotos. Enthalten sind Belegfotos und Fotos offener Entwürfe; abgeschlossene
+Entwürfe verweisen auf ein planmäßig gelöschtes Foto. Beim Lesen werden
+geprüft: Format, Version (neuere werden abgelehnt), dass die Dateien genau
+`manifest.json`, `data.json` und die im Manifest genannten Fotos sind, nur
+Objektschlüssel für Belegfotos und Entwürfe, Größe je Datei höchstens
+512 MiB, Prüfsummen. Neue Felder kommen mit `#[serde(default)]` hinzu, damit
+Archive älterer Versionen lesbar bleiben.
+```
+
+```{spec} Datensätze exportieren und einspielen
+:id: SPEC_BACKUP_DATA
+:status: implemented
+:satisfies: REQ_IMP_004, REQ_OPS_012
+
+Port `BackupRepository` (ohne Tenant): `schema`, `export`, `is_empty`,
+`import`. Der Datenbank-Adapter exportiert alle Tabellen außer `sessions` in
+einer lesenden Transaktion (PostgreSQL: `REPEATABLE READ`), liest nur die im
+Schema vorhandenen Spalten (Spaltenliste über `pragma_table_info` bzw.
+`information_schema.columns`, Abfrage über den Query-Builder) und setzt für
+später ergänzte Spalten die Vorgabe; damit funktioniert der Export auch auf
+einem älteren, noch nicht migrierten Schema. `import` fügt alle Datensätze in
+Abhängigkeitsreihenfolge in einer Transaktion ein. Test: Import, Export,
+Import in eine zweite Datenbank und Export ergeben dieselben Datensätze
+(SQLite; PostgreSQL in der CI).
+```
+
+```{spec} Export und Import der Installation
+:id: SPEC_BACKUP_INSTALLATION
+:status: implemented
+:satisfies: REQ_IMP_004
+:links: SPEC_BACKUP_FORMAT
+
+`zaehler export <datei>` schreibt das Archiv der ganzen Installation (Datei
+`*.part`, nach Abschluss umbenannt; vorhandene Dateien werden nicht
+überschrieben). `zaehler import <datei>` migriert die Datenbank, prüft, dass
+weder Nutzer noch Haushalte vorhanden sind (`backup.not_empty`), legt die
+Fotos unter ihren Schlüsseln ab und spielt die Datensätze mit unveränderten
+IDs ein; schlägt der Datenbankteil fehl, werden die abgelegten Fotos wieder
+entfernt. Fehlende Fotos der Quelle werden beim Export gemeldet und im
+Manifest vermerkt.
+```
+
+```{spec} Export und Import eines Haushalts
+:id: SPEC_BACKUP_HOUSEHOLD
+:status: implemented
+:satisfies: REQ_IMP_004
+:links: SPEC_BACKUP_FORMAT
+
+Einstellungen, Abschnitt „Daten sichern und übertragen“:
+`GET /settings/export` (Owner) liefert das Archiv des aktiven Haushalts
+(`zaehler-<name>-<datum>.zip`, über eine temporäre Datei gestreamt);
+`POST /settings/import` (Multipart mit `_csrf`, Limit
+`upload.max_backup_bytes`) spielt ein Haushaltsarchiv als neuen Haushalt ein
+und wechselt zu ihm. Beim Import erhalten Haushalt, Messstellen, Geräte,
+Register, Ablesungen und Entwürfe neue IDs, Objektschlüssel werden
+entsprechend umgeschrieben, der importierende Nutzer wird Owner und
+Urheber; Nutzerkonten der Quelle sind nicht enthalten. Damit ist derselbe
+Haushalt mehrfach und in jede Installation importierbar.
+```
+
 ## HTTP-Schnittstelle
 
 Alle Routen außer `/auth/*`, `/healthz`, `/readyz`, `/static/*`,
@@ -612,12 +732,14 @@ Member, `O` = Owner. `F` = HTMX-Fragment.
 | POST | `/readings/{id}/delete` | M | 303 | {need}`SPEC_RDG_DELETE` |
 | GET | `/readings/{id}/photo` | Viewer | `image/jpeg` | {need}`SPEC_SEC_UPLOADS` |
 | GET | `/capture` | M | Upload-Seite | {need}`SPEC_AI_FLOW` |
-| POST | `/capture` | M | 303 zur Bestätigung (Multipart, Feld `_csrf`) | {need}`SPEC_AI_DRAFTS` |
+| POST | `/capture` | M | 303 zum ersten Foto (Multipart, Feld `_csrf`, Feld `photo` mehrfach) | {need}`SPEC_AI_DRAFTS`, {need}`SPEC_AI_MULTI` |
 | GET | `/capture/{draft}` | M | Bestätigungsformular, `?meter=` wählt die Messstelle | {need}`SPEC_AI_DRAFTS` |
 | GET | `/capture/{draft}/photo` | M | `image/jpeg` | {need}`SPEC_AI_DRAFTS` |
 | POST | `/capture/{draft}/confirm`, `/capture/{draft}/discard` | M | 303 | {need}`SPEC_AI_DRAFTS` |
 | GET, POST | `/import`, `/import/upload`, `/import/preview`, `/import/commit` | M | Seiten | {need}`SPEC_IMP_CSV_FORMAT` |
 | GET, POST | `/settings` | Viewer | Sprache des Nutzers, Haushaltsdaten (O) | {need}`SPEC_I18N` |
+| GET | `/settings/export` | O | `application/zip` | {need}`SPEC_BACKUP_HOUSEHOLD` |
+| POST | `/settings/import` | Viewer | 303 (Multipart, Feld `_csrf`) | {need}`SPEC_BACKUP_HOUSEHOLD` |
 | POST | `/households`, `/households/switch` | | 303 | {need}`SPEC_TEN_HOUSEHOLDS` |
 | POST | `/households/delete` | O | 303 | {need}`SPEC_PRIV_HOUSEHOLD_DELETE` |
 | GET | `/manifest.webmanifest`, `/sw.js` | | statisch | {need}`SPEC_UI_PWA` |

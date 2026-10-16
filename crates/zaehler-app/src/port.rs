@@ -10,11 +10,13 @@ use uuid::Uuid;
 use zaehler_domain::calendar::Calendar;
 
 use crate::{
+    backup::BackupData,
     error::PortError,
     ids::{BlobKey, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
     model::{
-        DeviceData, Draft, DraftOutcome, Household, HouseholdData, HouseholdSummary, Identity,
-        MeterAggregate, MeterData, MeterSummary, Reading, Recognition, RegisterData, User,
+        DeviceData, Draft, DraftAnalysis, DraftOutcome, Household, HouseholdData, HouseholdSummary,
+        Identity, MeterAggregate, MeterData, MeterSummary, Reading, Recognition, RegisterData,
+        User,
     },
     tenant::{Role, Tenant},
 };
@@ -144,8 +146,27 @@ pub trait ReadingRepository: Send {
 pub trait DraftRepository: Send {
     /// Legt den Entwurf im Haushalt des Tenants an.
     async fn create(&mut self, t: &Tenant, draft: &Draft) -> PortResult<()>;
-    /// Offener Entwurf (`pending` oder `failed`) des Haushalts.
+    /// Offener (nicht abgeschlossener) Entwurf des Haushalts.
     async fn get_open(&mut self, t: &Tenant, id: DraftId) -> PortResult<Option<Draft>>;
+    /// Offene Entwürfe des Haushalts, älteste zuerst (Warteschlange).
+    async fn list_open(&mut self, t: &Tenant) -> PortResult<Vec<Draft>>;
+    /// Übernimmt einen Entwurf zur Analyse: `queued` oder eine abgebrochene
+    /// Analyse (`analysing` mit Beginn vor `stale_before`) wird `analysing`
+    /// mit Beginn `now`. `false`, wenn ein anderer Lauf ihn bereits hat.
+    async fn claim(
+        &mut self,
+        t: &Tenant,
+        id: DraftId,
+        now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
+    ) -> PortResult<bool>;
+    /// Speichert das Ergebnis der Analyse eines Entwurfs im Status `analysing`.
+    async fn record_analysis(
+        &mut self,
+        t: &Tenant,
+        id: DraftId,
+        analysis: &DraftAnalysis,
+    ) -> PortResult<()>;
     /// Schließt einen offenen Entwurf ab; `PortError::NotFound`, wenn er nicht
     /// (mehr) offen ist.
     async fn finish(
@@ -171,6 +192,22 @@ pub trait MaintenanceRepository: Send + Sync {
     ) -> PortResult<Vec<BlobKey>>;
     /// Entfernt Sitzungen mit Ablauf vor `now`; liefert die Anzahl.
     async fn delete_expired_sessions(&self, now: DateTime<Utc>) -> PortResult<u64>;
+}
+
+/// Vollständiger Export und Import aller Datensätze (SPEC_BACKUP_DATA). Ohne
+/// Haushaltsbezug; Berechtigungen prüfen die Anwendungsfälle.
+// @impl SPEC_BACKUP_DATA
+#[async_trait]
+pub trait BackupRepository: Send + Sync {
+    /// Angewendete Migrationen (Schemastand), aufsteigend.
+    async fn schema(&self) -> PortResult<Vec<String>>;
+    /// Alle Datensätze außer Sitzungen. Liest auch ein älteres, noch nicht
+    /// migriertes Schema: später ergänzte Spalten erhalten ihre Vorgabe.
+    async fn export(&self) -> PortResult<BackupData>;
+    /// Weder Nutzer noch Haushalte vorhanden.
+    async fn is_empty(&self) -> PortResult<bool>;
+    /// Fügt alle Datensätze mit ihren IDs in einer Transaktion ein.
+    async fn import(&self, data: &BackupData) -> PortResult<()>;
 }
 
 /// Objektspeicher für Fotos und temporäre Dateien. Die Operationen sind

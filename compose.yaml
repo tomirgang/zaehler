@@ -26,6 +26,7 @@ services:
       ZAEHLER_DATABASE__URL: sqlite:///var/lib/zaehler/data/zaehler.db?mode=rwc
       ZAEHLER_STORAGE__KIND: fs
       ZAEHLER_STORAGE__PATH: /var/lib/zaehler/data/files
+      ZAEHLER_BACKUP__DIR: /var/lib/zaehler/data/backups
     volumes:
       - zaehler-data:/var/lib/zaehler/data
 

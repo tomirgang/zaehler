@@ -14,17 +14,17 @@ use rust_decimal::{
     prelude::{FromPrimitive, ToPrimitive},
 };
 use sea_orm::{
-    ActiveValue::Set, ColumnTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect, SqlErr, TransactionTrait, sea_query::Expr,
+    ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, DatabaseTransaction, DbErr,
+    EntityTrait, QueryFilter, QueryOrder, QuerySelect, SqlErr, TransactionTrait, sea_query::Expr,
 };
 use uuid::Uuid;
 use zaehler_app::{
     PortError, Role, Tenant,
     ids::{BlobKey, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
     model::{
-        Device, DeviceData, Draft, DraftOutcome, DraftStatus, Household, HouseholdData,
-        HouseholdSummary, Identity, Meter, MeterAggregate, MeterData, MeterSummary, MonthDay,
-        Reading, Register, RegisterData, User,
+        Device, DeviceData, Draft, DraftAnalysis, DraftOutcome, DraftStatus, Household,
+        HouseholdData, HouseholdSummary, Identity, Meter, MeterAggregate, MeterData, MeterSummary,
+        MonthDay, Reading, Register, RegisterData, User,
     },
     port::{
         DraftRepository, HouseholdRepository, MaintenanceRepository, MembershipRepository,
@@ -61,6 +61,10 @@ impl SeaOrmStore {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
+
+    pub(crate) fn conn(&self) -> &DatabaseConnection {
+        &self.db
+    }
 }
 
 #[async_trait]
@@ -80,8 +84,13 @@ impl Readiness for SeaOrmStore {
 }
 
 /// Offene Entwürfe (`pending`, `failed`).
-fn open_status() -> [&'static str; 2] {
-    [DraftStatus::Pending.as_str(), DraftStatus::Failed.as_str()]
+/// Nicht abgeschlossene Entwürfe (Warteschlange, Analyse, Bestätigung offen).
+fn open_status() -> Vec<&'static str> {
+    DraftStatus::ALL
+        .into_iter()
+        .filter(|s| s.is_open())
+        .map(DraftStatus::as_str)
+        .collect()
 }
 
 #[async_trait]
@@ -879,6 +888,7 @@ fn to_draft(m: ai_draft::Model) -> PortResult<Draft> {
         status: m.status.parse().map_err(data_err)?,
         created_at: m.created_at,
         taken_at: m.taken_at,
+        analysis_started_at: m.analysis_started_at,
     })
 }
 
@@ -913,6 +923,7 @@ impl DraftRepository for SeaOrmUow {
             created_at: Set(d.created_at),
             finished_at: Set(None),
             taken_at: Set(d.taken_at),
+            analysis_started_at: Set(d.analysis_started_at),
         })
         .exec_without_returning(&self.txn)
         .await
@@ -929,6 +940,91 @@ impl DraftRepository for SeaOrmUow {
             .map_err(db_err)?
             .map(to_draft)
             .transpose()
+    }
+
+    async fn list_open(&mut self, t: &Tenant) -> PortResult<Vec<Draft>> {
+        ai_draft::Entity::find()
+            .filter(ai_draft::Column::HouseholdId.eq(t.household_id().0))
+            .filter(ai_draft::Column::Status.is_in(open_status()))
+            .order_by_asc(ai_draft::Column::CreatedAt)
+            .order_by_asc(ai_draft::Column::Id)
+            .all(&self.txn)
+            .await
+            .map_err(db_err)?
+            .into_iter()
+            .map(to_draft)
+            .collect()
+    }
+
+    // @impl SPEC_AI_MULTI
+    async fn claim(
+        &mut self,
+        t: &Tenant,
+        id: DraftId,
+        now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
+    ) -> PortResult<bool> {
+        // Bedingtes Update: nur ein paralleler Lauf ändert die Zeile
+        let claimable = Condition::any()
+            .add(ai_draft::Column::Status.eq(DraftStatus::Queued.as_str()))
+            .add(
+                Condition::all()
+                    .add(ai_draft::Column::Status.eq(DraftStatus::Analysing.as_str()))
+                    .add(
+                        Condition::any()
+                            .add(ai_draft::Column::AnalysisStartedAt.is_null())
+                            .add(ai_draft::Column::AnalysisStartedAt.lt(stale_before)),
+                    ),
+            );
+        let res = ai_draft::Entity::update_many()
+            .col_expr(
+                ai_draft::Column::Status,
+                Expr::value(DraftStatus::Analysing.as_str()),
+            )
+            .col_expr(ai_draft::Column::AnalysisStartedAt, Expr::value(now))
+            .filter(ai_draft::Column::Id.eq(id.0))
+            .filter(ai_draft::Column::HouseholdId.eq(t.household_id().0))
+            .filter(claimable)
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        Ok(res.rows_affected == 1)
+    }
+
+    async fn record_analysis(
+        &mut self,
+        t: &Tenant,
+        id: DraftId,
+        a: &DraftAnalysis,
+    ) -> PortResult<()> {
+        if let Some(m) = a.matched_meter_id {
+            self.require_meter(t, m.0).await?;
+        }
+        let suggestion = a
+            .suggestion
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(data_err)?;
+        let res = ai_draft::Entity::update_many()
+            .col_expr(ai_draft::Column::Model, Expr::value(a.model.clone()))
+            .col_expr(ai_draft::Column::DurationMs, Expr::value(a.duration_ms))
+            .col_expr(ai_draft::Column::Suggestion, Expr::value(suggestion))
+            .col_expr(
+                ai_draft::Column::MatchedMeterId,
+                Expr::value(a.matched_meter_id.map(|m| m.0)),
+            )
+            .col_expr(ai_draft::Column::Status, Expr::value(a.status.as_str()))
+            .filter(ai_draft::Column::Id.eq(id.0))
+            .filter(ai_draft::Column::HouseholdId.eq(t.household_id().0))
+            .filter(ai_draft::Column::Status.eq(DraftStatus::Analysing.as_str()))
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        if res.rows_affected == 0 {
+            return Err(PortError::NotFound);
+        }
+        Ok(())
     }
 
     async fn finish(

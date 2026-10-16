@@ -4,11 +4,13 @@
 use std::sync::Arc;
 
 use crate::port::{
-    BlobStore, Clock, IdGenerator, ImageNormalizer, MeterRecognizer, UnitOfWorkFactory,
+    BackupRepository, BlobStore, Clock, IdGenerator, ImageNormalizer, MeterRecognizer,
+    UnitOfWorkFactory,
 };
 
 pub mod analysis;
 pub mod auth;
+pub mod backup;
 pub mod capture;
 pub mod household;
 pub mod housekeeping;
@@ -30,6 +32,7 @@ pub struct Ports {
     pub images: Arc<dyn ImageNormalizer>,
     /// `None` ohne AI-Konfiguration (REQ_AI_006)
     pub recognizer: Option<Arc<dyn MeterRecognizer>>,
+    pub backup: Arc<dyn BackupRepository>,
 }
 
 macro_rules! use_case {
@@ -71,6 +74,8 @@ pub struct UseCases {
     pub delete_reading: reading::DeleteReading,
     pub get_reading_photo: reading::GetReadingPhoto,
     pub analyse_photo: capture::AnalysePhoto,
+    pub queue_photos: capture::QueuePhotos,
+    pub analyse_queued: capture::AnalyseQueued,
     pub get_draft: capture::GetDraft,
     pub confirm_draft: capture::ConfirmDraft,
     pub discard_draft: capture::DiscardDraft,
@@ -81,6 +86,10 @@ pub struct UseCases {
     pub upload_csv: import::UploadCsv,
     pub preview_import: import::PreviewImport,
     pub commit_import: import::CommitImport,
+    pub export_installation: backup::ExportInstallation,
+    pub import_installation: backup::ImportInstallation,
+    pub export_household: backup::ExportHousehold,
+    pub import_household: backup::ImportHousehold,
 }
 
 impl UseCases {
@@ -104,6 +113,8 @@ impl UseCases {
             delete_reading: reading::DeleteReading::new(p.clone()),
             get_reading_photo: reading::GetReadingPhoto::new(p.clone()),
             analyse_photo: capture::AnalysePhoto::new(p.clone()),
+            queue_photos: capture::QueuePhotos::new(p.clone()),
+            analyse_queued: capture::AnalyseQueued::new(p.clone()),
             get_draft: capture::GetDraft::new(p.clone()),
             confirm_draft: capture::ConfirmDraft::new(p.clone()),
             discard_draft: capture::DiscardDraft::new(p.clone()),
@@ -114,6 +125,10 @@ impl UseCases {
             upload_csv: import::UploadCsv::new(p.clone()),
             preview_import: import::PreviewImport::new(p.clone()),
             commit_import: import::CommitImport::new(p.clone()),
+            export_installation: backup::ExportInstallation::new(p.clone()),
+            import_installation: backup::ImportInstallation::new(p.clone()),
+            export_household: backup::ExportHousehold::new(p.clone()),
+            import_household: backup::ImportHousehold::new(p.clone()),
         }
     }
 }

@@ -36,6 +36,15 @@ database:
 # Advisory-Lock parallele Starts mehrerer Replicas.
 autoMigrate: true
 
+# Vor ausstehenden Migrationen schreibt der Server ein vollständiges Archiv
+# (inklusive Fotos) nach /var/lib/zaehler/data/backups. Das setzt das
+# Daten-Volume voraus (database.type=sqlite oder storage.kind=fs); ohne
+# Volume ist die Sicherung abgeschaltet, dann CNPG-Backups und
+# `zaehler export` verwenden (docs/betrieb/backup.md).
+backup:
+  beforeMigrate: true
+  keep: 3
+
 storage:
   # s3: S3-kompatibler Objektspeicher (empfohlen in k8s)
   # fs: PersistentVolume (bei sqlite wird dasselbe Volume genutzt)

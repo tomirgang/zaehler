@@ -46,6 +46,9 @@ sea-orm = { version = "2", default-features = false, features = ["macros", "runt
 sea-orm-migration = { version = "2", default-features = false, features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-sqlite"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+zip = { version = "9.0.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
 time = "0.3"
