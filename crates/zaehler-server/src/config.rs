@@ -131,13 +131,25 @@ impl Default for HousekeepingConfig {
 /// Upload-Grenzen (SPEC_SEC_UPLOADS).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadConfig {
+    #[serde(default = "default_max_photo_bytes")]
     pub max_photo_bytes: usize,
+    #[serde(default = "default_max_csv_bytes")]
+    pub max_csv_bytes: usize,
+}
+
+const fn default_max_photo_bytes() -> usize {
+    zaehler_web::state::DEFAULT_MAX_PHOTO_BYTES
+}
+
+const fn default_max_csv_bytes() -> usize {
+    zaehler_web::state::DEFAULT_MAX_CSV_BYTES
 }
 
 impl Default for UploadConfig {
     fn default() -> Self {
         Self {
-            max_photo_bytes: zaehler_web::state::DEFAULT_MAX_PHOTO_BYTES,
+            max_photo_bytes: default_max_photo_bytes(),
+            max_csv_bytes: default_max_csv_bytes(),
         }
     }
 }
@@ -293,6 +305,9 @@ impl Config {
         }
         if self.upload.max_photo_bytes == 0 {
             return Err("upload.max_photo_bytes muss größer 0 sein".into());
+        }
+        if self.upload.max_csv_bytes == 0 {
+            return Err("upload.max_csv_bytes muss größer 0 sein".into());
         }
         Ok(())
     }

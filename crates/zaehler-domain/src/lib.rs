@@ -5,6 +5,7 @@
 //! `// @impl SPEC_…` bzw. `// @test SPEC_…` werden von der Doku-Toolchain
 //! (`docs/_ext/codetrace.py`) eingesammelt und als Trace-Links gerendert.
 
+pub mod analysis;
 pub mod calendar;
 pub mod car;
 pub mod comparison;
@@ -14,6 +15,7 @@ pub mod forecast;
 pub mod meter;
 pub mod period;
 pub mod reading;
+pub mod series;
 pub mod tariff;
 
 pub use rust_decimal::Decimal;

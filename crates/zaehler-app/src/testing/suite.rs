@@ -472,6 +472,7 @@ fn draft(t: &Tenant, created_at: DateTime<Utc>, meter: Option<MeterId>) -> Draft
         matched_meter_id: meter,
         status: DraftStatus::Pending,
         created_at,
+        taken_at: Some(created_at - Duration::minutes(3)),
     }
 }
 
@@ -492,6 +493,7 @@ pub async fn drafts(f: &dyn UnitOfWorkFactory, m: &dyn MaintenanceRepository) {
     failed.suggestion = None;
     failed.model = None;
     failed.duration_ms = None;
+    failed.taken_at = None;
     let confirmed = draft(&t, t0(), None);
     {
         let mut uow = f.begin().await.expect("begin");

@@ -95,6 +95,11 @@ async fn text(res: Response) -> String {
 }
 
 async fn create_meter(c: &mut Client, csrf: &str, name: &str) -> String {
+    create_meter_due(c, csrf, name, "30").await
+}
+
+/// Messstelle mit Startstand am 01.01.2026 und Ableseturnus in Tagen.
+async fn create_meter_due(c: &mut Client, csrf: &str, name: &str, interval: &str) -> String {
     let res = c
         .post(
             "/meters",
@@ -106,7 +111,7 @@ async fn create_meter(c: &mut Client, csrf: &str, name: &str) -> String {
                 ("serial_number", ""),
                 ("rollover_digits", ""),
                 ("decimal_places", "1"),
-                ("reading_interval_days", "30"),
+                ("reading_interval_days", interval),
                 ("max_daily_rate", "50"),
                 ("billing_month", ""),
                 ("billing_day", ""),
@@ -253,6 +258,11 @@ fn capture_app(max_photo_bytes: usize) -> Router {
 
 /// Multipart-Body mit optionalem CSRF-Feld und Datei `photo`.
 fn multipart(csrf: Option<&str>, photo: &[u8]) -> (String, Vec<u8>) {
+    multipart_file(csrf, "photo", photo)
+}
+
+/// Multipart-Body mit optionalem CSRF-Feld und einer Datei im Feld `name`.
+fn multipart_file(csrf: Option<&str>, name: &str, file: &[u8]) -> (String, Vec<u8>) {
     let boundary = "zaehler-test-boundary";
     let mut body = Vec::new();
     if let Some(t) = csrf {
@@ -264,10 +274,10 @@ fn multipart(csrf: Option<&str>, photo: &[u8]) -> (String, Vec<u8>) {
         );
     }
     body.extend_from_slice(
-        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"z.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n")
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"datei\"\r\nContent-Type: application/octet-stream\r\n\r\n")
             .as_bytes(),
     );
-    body.extend_from_slice(photo);
+    body.extend_from_slice(file);
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
     (format!("multipart/form-data; boundary={boundary}"), body)
 }
@@ -394,6 +404,287 @@ async fn photo_capture_workflow() {
         bob.get(&format!("{third}/photo")).await.status(),
         StatusCode::NOT_FOUND
     );
+}
+
+// @test SPEC_AI_NEW_METER
+#[tokio::test]
+async fn new_meter_from_photo_is_prefilled_and_keeps_the_photo() {
+    let app = capture_app(1024 * 1024);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    assert!(
+        text(c.get("/meters").await)
+            .await
+            .contains("href=\"/capture\"")
+    );
+
+    let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(64)).await;
+    let draft_page = location(&res);
+    let draft = draft_page.trim_start_matches("/capture/").to_owned();
+    let html = text(c.get(&draft_page).await).await;
+    assert!(html.contains(&format!("href=\"/meters/new?draft={draft}\"")));
+
+    let form = text(c.get(&format!("/meters/new?draft={draft}")).await).await;
+    assert!(form.contains(&format!("name=\"draft\" value=\"{draft}\"")));
+    assert!(form.contains(&format!("src=\"/capture/{draft}/photo\"")));
+    assert!(
+        form.contains("name=\"name\" value=\"Strom\""),
+        "Name aus der Art"
+    );
+    assert!(form.contains("name=\"decimal_places\" value=\"1\""));
+    assert!(form.contains("name=\"register_0_start\" value=\"1025\""));
+    assert_eq!(
+        c.get("/meters/new?draft=kein-entwurf").await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let res = c
+        .post(
+            "/meters",
+            &[
+                ("_csrf", csrf.as_str()),
+                ("draft", draft.as_str()),
+                ("name", "Strom"),
+                ("kind", "electricity"),
+                ("unit", ""),
+                ("serial_number", ""),
+                ("rollover_digits", ""),
+                ("decimal_places", "1"),
+                ("reading_interval_days", "30"),
+                ("max_daily_rate", ""),
+                ("billing_month", ""),
+                ("billing_day", ""),
+                ("start_at", "2026-01-10T08:00"),
+                ("register_count", "1"),
+                ("register_0_id", ""),
+                ("register_0_code", "main"),
+                ("register_0_direction", "import"),
+                ("register_0_start", "1025"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let detail = text(c.get(&location(&res)).await).await;
+    assert!(detail.contains("/photo\""), "Belegfoto verlinkt");
+    assert_eq!(c.get(&draft_page).await.status(), StatusCode::NOT_FOUND);
+}
+
+fn import_app(max_csv_bytes: usize) -> Router {
+    let (ports, store, _clock) = memory_ports();
+    let state = WebState {
+        uc: Arc::new(UseCases::new(&ports)),
+        readiness: store,
+        cfg: Arc::new(
+            WebConfig::new("http://localhost:8080", true, false, 24, "test")
+                .with_max_csv_bytes(max_csv_bytes),
+        ),
+        oidc: None,
+    };
+    router(state, MemoryStore::default())
+}
+
+async fn upload_csv(c: &mut Client, csrf: Option<&str>, csv: &[u8]) -> Response {
+    let (content_type, body) = multipart_file(csrf, "file", csv);
+    let req = Request::post("/import/upload")
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap();
+    c.send(req).await
+}
+
+// @test SPEC_IMP_CSV, SPEC_IMP_CSV_FORMAT, SPEC_SEC_UPLOADS, SPEC_SEC_SESSION_CSRF
+#[tokio::test]
+async fn csv_import_workflow() {
+    let app = import_app(64 * 1024);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    // ohne hochgeladene Datei zurück zum Upload
+    assert_eq!(location(&c.get("/import/preview").await), "/import");
+    let meter = create_meter(&mut c, &csrf, "Strom").await;
+    assert!(text(c.get("/import").await).await.contains("name=\"file\""));
+
+    let csv = "Datum;Zählerstand\n01.10.2025;910,0\n01.11.2025;940,0\n01.12.2025;970,0\n";
+    assert_eq!(
+        upload_csv(&mut c, None, csv.as_bytes()).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let res = upload_csv(&mut c, Some(&csrf), b"\xFF\xD8\xFF\xE0").await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("UTF-8"));
+    let big = vec![b'1'; 70 * 1024];
+    assert_eq!(
+        upload_csv(&mut c, Some(&csrf), &big).await.status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+
+    let res = upload_csv(&mut c, Some(&csrf), csv.as_bytes()).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&res), "/import/preview");
+    let mapping = text(c.get("/import/preview").await).await;
+    assert!(mapping.contains("3 Datenzeilen"));
+    assert!(mapping.contains("name=\"has_header\" value=\"true\" checked"));
+    assert!(mapping.contains(&format!("name=\"meter\" value=\"{meter}\"")));
+
+    let fields = [
+        ("_csrf", csrf.as_str()),
+        ("meter", meter.as_str()),
+        ("has_header", "true"),
+        ("col_date", "0"),
+        ("col_time", ""),
+        ("col_value", "1"),
+        ("col_register", ""),
+        ("col_serial", ""),
+        ("col_note", ""),
+        ("date_format", "dmy"),
+        ("decimal", "comma"),
+        ("default_register", ""),
+    ];
+    let res = c.post("/import/preview", &fields).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let preview = text(res).await;
+    assert_eq!(preview.matches("class=\"row-ok\"").count(), 3);
+    assert!(preview.contains("action=\"/import/commit\""));
+
+    let res = c.post("/import/commit", &fields).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let result = text(res).await;
+    assert!(result.contains(&format!("href=\"/meters/{meter}\"")));
+    let detail = text(c.get(&format!("/meters/{meter}")).await).await;
+    assert_eq!(
+        detail.matches("CSV-Import").count(),
+        3 + 1,
+        "drei Zeilen und Navigation"
+    );
+    // Datei verbraucht
+    assert_eq!(
+        location(&c.post("/import/commit", &fields).await),
+        "/import"
+    );
+
+    // Datei eines anderen Haushalts ist nicht erreichbar
+    let res = upload_csv(&mut c, Some(&csrf), csv.as_bytes()).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let mut bob = Client::new(&app);
+    bob.login("bob").await;
+    assert_eq!(location(&bob.get("/import/preview").await), "/import");
+}
+
+// @test SPEC_UI_DASHBOARD
+#[tokio::test]
+async fn dashboard_renders_0_1_and_20_meters_with_overdue_first() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+
+    let empty = text(c.get("/").await).await;
+    assert!(empty.contains("href=\"/meters/new\"") && empty.contains("href=\"/import\""));
+
+    let first = create_meter_due(&mut c, &csrf, "Strom", "30").await;
+    let one = text(c.get("/").await).await;
+    assert!(one.contains(&format!("href=\"/meters/{first}/readings/new\"")));
+    assert!(one.contains("href=\"/capture\""));
+    assert!(one.contains("main 1000,0 kWh"), "letzter Stand");
+
+    for i in 2..=19 {
+        create_meter_due(&mut c, &csrf, &format!("Zähler {i:02}"), "30").await;
+    }
+    // Startstand am 01.01., Uhr am 15.01.: nach 7 Tagen überfällig
+    create_meter_due(&mut c, &csrf, "Wasser", "7").await;
+    let res = c.get("/").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = text(res).await;
+    assert_eq!(html.matches("<li class=\"card").count(), 20);
+    let water = html.find(">Wasser<").unwrap();
+    let power = html.find(">Strom<").unwrap();
+    assert!(water < power, "überfällige Messstelle zuerst");
+    assert!(html.contains("class=\"card overdue\""));
+}
+
+// @test SPEC_ANA_COMPARE_VIEW, SPEC_ANA_CHARTS
+#[tokio::test]
+async fn meter_detail_shows_analysis_and_chart_data() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let meter = create_meter(&mut c, &csrf, "Strom").await;
+
+    let html = text(c.get(&format!("/meters/{meter}?month=2026-01")).await).await;
+    assert!(html.contains("id=\"analysis-title\""));
+    assert!(html.contains(&format!("data-chart-url=\"/meters/{meter}/chart.json\"")));
+    assert!(html.contains("/static/test/echarts.min.js"));
+    assert!(html.contains("<details>"), "Tabellenalternative");
+    assert!(html.contains("Kalenderjahr 2026"));
+
+    let res = c.get(&format!("/meters/{meter}/chart.json")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "application/json");
+    let json: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(json["unit"], "kWh");
+    assert_eq!(json["labels"].as_array().unwrap().len(), 12);
+    assert_eq!(json["labels"][2], "Mär");
+    assert_eq!(json["series"]["current"]["name"], "2026");
+    assert_eq!(
+        json["series"]["forecast"]["data"].as_array().unwrap().len(),
+        12
+    );
+    let js = c.get("/static/test/echarts.min.js").await;
+    assert_eq!(js.status(), StatusCode::OK);
+
+    let mut bob = Client::new(&app);
+    bob.login("bob").await;
+    assert_eq!(
+        bob.get(&format!("/meters/{meter}/chart.json"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+// @test SPEC_IMG_CAPTURE_TIME
+#[tokio::test]
+async fn capture_time_from_photo_prefills_the_forms() {
+    use zaehler_app::{port::PhotoTime, testing::StubImageNormalizer};
+
+    let (mut ports, store, _clock) = memory_ports();
+    ports.images = Arc::new(StubImageNormalizer {
+        taken_at: Some(PhotoTime {
+            local: chrono::NaiveDate::from_ymd_opt(2026, 1, 10)
+                .unwrap()
+                .and_hms_opt(8, 15, 0)
+                .unwrap(),
+            offset: None,
+        }),
+    });
+    let state = WebState {
+        uc: Arc::new(UseCases::new(&ports)),
+        readiness: store,
+        cfg: Arc::new(
+            WebConfig::new("http://localhost:8080", true, false, 24, "test")
+                .with_max_photo_bytes(1024 * 1024),
+        ),
+        oidc: None,
+    };
+    let app = router(state, MemoryStore::default());
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let res = upload(&mut c, "/capture", Some(&csrf), &fake_jpeg(64)).await;
+    let draft_page = location(&res);
+    let draft = draft_page.trim_start_matches("/capture/").to_owned();
+    let meter = create_meter(&mut c, &csrf, "Strom").await;
+
+    let confirm = text(c.get(&format!("{draft_page}?meter={meter}")).await).await;
+    assert!(
+        confirm.contains("value=\"2026-01-10T08:15\""),
+        "Zeitpunkt aus EXIF"
+    );
+    assert!(confirm.contains("Aufnahmezeit aus den Fotodaten"));
+    let form = text(c.get(&format!("/meters/new?draft={draft}")).await).await;
+    assert!(form.contains("name=\"start_at\" type=\"datetime-local\" value=\"2026-01-10T08:15\""));
 }
 
 // @test SPEC_SEC_UPLOADS

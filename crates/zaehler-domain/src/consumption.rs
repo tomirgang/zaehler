@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::reading::Reading;
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ConsumptionError {
     #[error("Zählerstand sinkt ohne möglichen Überlauf ({prev} -> {next})")]
     Decreasing { prev: Decimal, next: Decimal },

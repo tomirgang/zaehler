@@ -22,6 +22,17 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
         "text/javascript; charset=utf-8",
         include_bytes!("../static/htmx.min.js"),
     ),
+    (
+        "charts.js",
+        "text/javascript; charset=utf-8",
+        include_bytes!("../static/charts.js"),
+    ),
+    // Apache ECharts 5.6.0 (Apache-2.0), nur auf Seiten mit Diagramm geladen
+    (
+        "echarts.min.js",
+        "text/javascript; charset=utf-8",
+        include_bytes!("../static/echarts.min.js"),
+    ),
 ];
 
 /// Die Version im Pfad macht Dateien unveränderlich cachebar; in

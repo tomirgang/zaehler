@@ -78,7 +78,7 @@ pub fn memory_ports_with_blobs() -> (
         clock: clock.clone(),
         ids: Arc::new(RandomIds),
         blobs: blobs.clone(),
-        images: Arc::new(StubImageNormalizer),
+        images: Arc::new(StubImageNormalizer::default()),
         recognizer: None,
     };
     (ports, store, clock, blobs)

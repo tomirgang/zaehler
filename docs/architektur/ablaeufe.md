@@ -78,7 +78,7 @@ Instanz. `job_runs` verhindert Doppelversand nach Neustarts.
 
 ```{spec} CSV-Import
 :id: SPEC_IMP_CSV
-:status: draft
+:status: implemented
 :satisfies: REQ_IMP_001
 
 Zweistufig: (1) Upload + Spaltenzuordnung + Vorschau (nicht persistiert, Ergebnis

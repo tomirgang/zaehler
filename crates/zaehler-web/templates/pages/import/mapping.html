@@ -1,0 +1,98 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("import-mapping-title") }}</h1>
+<p class="muted">{{ rows_label }}</p>
+
+<h2>{{ ctx.lang.t("import-sample") }}</h2>
+<table class="table">
+  {% if !header.is_empty() %}
+  <thead><tr>{% for h in header %}<th>{{ loop.index }}: {{ h }}</th>{% endfor %}</tr></thead>
+  {% endif %}
+  <tbody>
+    {% for row in sample %}
+    <tr>{% for c in row %}<td>{{ c }}</td>{% endfor %}</tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if meters.is_empty() %}
+<p class="callout warning">{{ ctx.lang.t("import-no-meter") }}</p>
+{% else %}
+<form method="get" action="/import/preview" class="form inline-form">
+  <div class="field">
+    <label for="meter-choice">{{ ctx.lang.t("capture-meter") }}</label>
+    <select id="meter-choice" name="meter">
+      {% if meter.is_none() %}<option value="">{{ ctx.lang.t("capture-meter-choose") }}</option>{% endif %}
+      {% for m in meters %}<option value="{{ m.value }}"{% if m.selected %} selected{% endif %}>{{ m.label }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="actions"><button type="submit" class="secondary">{{ ctx.lang.t("capture-meter-select") }}</button></div>
+</form>
+{% endif %}
+
+{% if let Some(m) = meter %}
+<form method="post" action="/import/preview" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <input type="hidden" name="meter" value="{{ m }}">
+  {% for e in self.errs("meter") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  <label><input type="checkbox" name="has_header" value="true"{% if has_header %} checked{% endif %}> {{ ctx.lang.t("import-has-header") }}</label>
+
+  <div class="grid">
+    <div class="field">
+      <label for="col_date">{{ ctx.lang.t("import-col-date") }}</label>
+      <select id="col_date" name="col_date">{% for c in date %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}</select>
+      {% for e in self.errs("col_date") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field">
+      <label for="col_time">{{ ctx.lang.t("import-col-time") }}</label>
+      <select id="col_time" name="col_time">{% for c in time %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}</select>
+      {% for e in self.errs("col_time") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field">
+      <label for="col_value">{{ ctx.lang.t("import-col-value") }}</label>
+      <select id="col_value" name="col_value">{% for c in value %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}</select>
+      {% for e in self.errs("col_value") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+  <div class="grid">
+    <div class="field">
+      <label for="col_register">{{ ctx.lang.t("import-col-register") }}</label>
+      <select id="col_register" name="col_register">{% for c in register %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}</select>
+      {% for e in self.errs("col_register") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field">
+      <label for="col_serial">{{ ctx.lang.t("import-col-serial") }}</label>
+      <select id="col_serial" name="col_serial">{% for c in serial %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}</select>
+      {% for e in self.errs("col_serial") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field">
+      <label for="col_note">{{ ctx.lang.t("import-col-note") }}</label>
+      <select id="col_note" name="col_note">{% for c in note %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}</select>
+      {% for e in self.errs("col_note") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+  <div class="grid">
+    <div class="field">
+      <label for="date_format">{{ ctx.lang.t("import-date-format") }}</label>
+      <select id="date_format" name="date_format">{% for c in date_formats %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}</select>
+      {% for e in self.errs("date_format") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field">
+      <label for="decimal">{{ ctx.lang.t("import-decimal") }}</label>
+      <select id="decimal" name="decimal">{% for c in decimals %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}</select>
+    </div>
+    <div class="field">
+      <label for="default_register">{{ ctx.lang.t("import-default-register") }}</label>
+      <select id="default_register" name="default_register">{% for c in registers %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}</select>
+      {% for e in self.errs("default_register") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+  <p class="hint">{{ ctx.lang.t("import-time-hint") }}</p>
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("import-check") }}</button>
+    <a href="/import">{{ ctx.lang.t("import-other-file") }}</a>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

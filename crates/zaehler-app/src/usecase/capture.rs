@@ -4,17 +4,18 @@
 use std::time::Instant;
 
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
-use zaehler_domain::reading::{
-    Plausibility, Reading as DomainReading, ReadingSource, check_plausibility,
+use zaehler_domain::{
+    calendar::Calendar,
+    reading::{Plausibility, Reading as DomainReading, ReadingSource, check_plausibility},
 };
 
 use crate::{
     AppError, Role, Tenant,
     ids::{BlobKey, DraftId, MeterId, ReadingId, RegisterId},
     model::{Draft, DraftOutcome, DraftStatus, MeterAggregate, MeterSummary, Reading, Recognition},
-    port::UnitOfWork,
+    port::{PhotoTime, UnitOfWork},
     usecase::{
         meter::{MeterDetail, last_of, to_domain},
         reading::{ReadingExtras, ReadingsInput, RecordOutcome, check_all, record_in},
@@ -140,6 +141,20 @@ async fn match_meter(
     })
 }
 
+/// Aufnahmezeit des Fotos als Vorschlag für den Ablesezeitpunkt: mit Offset
+/// exakt, sonst in der Zeitzone des Haushalts; Zeitpunkte mehr als 5 Minuten
+/// in der Zukunft (falsch gestellte Kamera-Uhr) werden verworfen.
+// @impl SPEC_IMG_CAPTURE_TIME
+fn photo_time(
+    taken: Option<PhotoTime>,
+    cal: Calendar,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    taken
+        .map(|p| p.to_utc(cal))
+        .filter(|at| *at <= now + Duration::minutes(5))
+}
+
 impl AnalysePhoto {
     /// Erkennung ist konfiguriert.
     #[must_use]
@@ -188,6 +203,8 @@ impl AnalysePhoto {
 
         let now = self.p.clock.now();
         let mut uow = self.p.uow.begin().await?;
+        let cal = Calendar::new(uow.households().get(t).await?.data.timezone);
+        let taken_at = photo_time(jpeg.taken_at, cal, now);
         let matched = match &suggestion {
             Some(rec) => {
                 let meters = uow.meters().list(t).await?;
@@ -196,6 +213,7 @@ impl AnalysePhoto {
             None => None,
         };
         let draft = Draft {
+            taken_at,
             id,
             created_by: t.user_id(),
             photo_key: key,

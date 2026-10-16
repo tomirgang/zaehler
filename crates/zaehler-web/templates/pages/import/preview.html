@@ -1,0 +1,50 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("import-preview-title") }}</h1>
+<dl class="facts">
+  <dt>{{ ctx.lang.t("import-row-ok") }}</dt><dd>{{ summary.ok }}</dd>
+  <dt>{{ ctx.lang.t("import-row-warning") }}</dt><dd>{{ summary.warnings }}</dd>
+  <dt>{{ ctx.lang.t("import-row-duplicate") }}</dt><dd>{{ summary.duplicates }}</dd>
+  <dt>{{ ctx.lang.t("import-row-error") }}</dt><dd>{{ summary.errors }}</dd>
+</dl>
+
+<table class="table import-rows">
+  <thead>
+    <tr>
+      <th class="num">{{ ctx.lang.t("import-line") }}</th>
+      <th>{{ ctx.lang.t("reading-at") }}</th>
+      <th>{{ ctx.lang.t("reading-register") }}</th>
+      <th class="num">{{ ctx.lang.t("reading-value") }}</th>
+      <th>{{ ctx.lang.t("import-result") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr class="row-{{ r.class }}">
+      <td class="num">{{ r.line }}</td>
+      <td>{{ r.at }}</td>
+      <td>{{ r.register }}</td>
+      <td class="num">{{ r.value }}</td>
+      <td>{{ r.result }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if truncated %}<p class="hint">{{ ctx.lang.t("import-truncated") }}</p>{% endif %}
+
+<form method="post" action="/import/commit" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  {% for (name, value) in hidden %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+  {% if summary.warnings > 0 %}
+  <div class="callout warning">
+    <p>{{ ctx.lang.t("import-warnings-hint") }}</p>
+    <label><input type="checkbox" name="confirm_warnings" value="true"> {{ ctx.lang.t("import-confirm-warnings") }}</label>
+  </div>
+  {% endif %}
+  <div class="actions">
+    <button type="submit"{% if summary.ok + summary.warnings == 0 %} disabled{% endif %}>{{ ctx.lang.t("import-commit") }}</button>
+    <a href="{{ back }}">{{ ctx.lang.t("import-change-mapping") }}</a>
+  </div>
+</form>
+{% endblock %}

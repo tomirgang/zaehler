@@ -38,6 +38,7 @@ draft_ttl_hours = 24
 
 [upload]
 max_photo_bytes = 15728640
+max_csv_bytes = 5242880
 
 [auth]
 # Entwicklungs-Login ohne Identity Provider; nur mit public_url auf localhost

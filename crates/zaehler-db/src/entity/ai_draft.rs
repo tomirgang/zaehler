@@ -21,6 +21,8 @@ pub struct Model {
     pub corrected: Option<bool>,
     pub created_at: DateTimeUtc,
     pub finished_at: Option<DateTimeUtc>,
+    /// Aufnahmezeit aus den Bildmetadaten (`m20261016_000004_draft_taken_at`)
+    pub taken_at: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

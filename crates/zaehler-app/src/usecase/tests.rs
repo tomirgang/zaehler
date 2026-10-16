@@ -1005,3 +1005,502 @@ async fn foreign_meter_is_not_found() {
         Err(AppError::NotFound)
     ));
 }
+
+fn berlin_day(y: i32, m: u32, d: u32) -> chrono::DateTime<Utc> {
+    zaehler_domain::calendar::Calendar::new(chrono_tz::Europe::Berlin)
+        .start_of(chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap())
+}
+
+/// Messstelle mit HT/NT ab 01.01.2026 (lokal), Zählerwechsel am 01.03.,
+/// Ablesungen zum Monatsbeginn bis 01.05.; Uhr am 10.05.2026.
+async fn analysis_setup() -> (UseCases, Tenant, MeterId) {
+    let (uc, tenant, clock) = setup().await;
+    clock.advance(Duration::days(115));
+    let mut input = meter_input("Strom");
+    input.start_at = berlin_day(2026, 1, 1);
+    let id = uc.create_meter.execute(&tenant, input).await.unwrap();
+    let agg = uc.get_meter.execute(&tenant, id).await.unwrap().aggregate;
+    let reg = |code: &str| {
+        agg.registers
+            .iter()
+            .find(|r| r.data.code == code)
+            .unwrap()
+            .id
+    };
+    let (ht, nt) = (reg("HT"), reg("NT"));
+    let record = |at, h: Decimal, n: Decimal| ReadingsInput {
+        meter_id: id,
+        at,
+        values: vec![(ht, h), (nt, n)],
+        note: None,
+    };
+    for input in [record(berlin_day(2026, 2, 1), dec!(1100), dec!(550))] {
+        uc.record_readings
+            .execute(&tenant, &input, false, ReadingSource::Manual)
+            .await
+            .unwrap();
+    }
+    uc.swap_device
+        .execute(
+            &tenant,
+            id,
+            SwapInput {
+                at: berlin_day(2026, 3, 1),
+                end_values: vec![(ht, dec!(1190)), (nt, dec!(600))],
+                serial_number: Some("NEU-1".into()),
+                rollover_digits: Some(5),
+                decimal_places: 1,
+                start_values: vec![(ht, dec!(0)), (nt, dec!(0))],
+            },
+        )
+        .await
+        .unwrap();
+    for input in [
+        record(berlin_day(2026, 4, 1), dec!(95), dec!(40)),
+        record(berlin_day(2026, 5, 1), dec!(200), dec!(90)),
+    ] {
+        uc.record_readings
+            .execute(&tenant, &input, false, ReadingSource::Manual)
+            .await
+            .unwrap();
+    }
+    (uc, tenant, id)
+}
+
+// @test SPEC_ANA_MONTHLY_SERIES, SPEC_ANA_REGISTER_AGG, SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR, SPEC_CONS_DEVICE_SWAP
+#[tokio::test]
+async fn meter_analysis_sums_registers_across_a_device_swap() {
+    use chrono::Datelike;
+    use zaehler_domain::analysis::PeriodForecast;
+    let (uc, tenant, id) = analysis_setup().await;
+    let a = uc.meter_analysis.execute(&tenant, id, None).await.unwrap();
+    assert_eq!(a.primary, Direction::Import);
+    assert!(a.export.is_empty());
+    let values: Vec<Option<Decimal>> = a.import.iter().map(|m| m.value).collect();
+    assert_eq!(
+        values,
+        [
+            Some(dec!(150)),
+            Some(dec!(140)),
+            Some(dec!(135)),
+            Some(dec!(155)),
+            None
+        ]
+    );
+    assert_eq!(a.registers.len(), 2);
+    assert_eq!(
+        a.registers[0].months[2].value,
+        Some(dec!(95)),
+        "HT März über den Wechsel"
+    );
+
+    let april = a.month.unwrap();
+    assert_eq!(
+        april.start,
+        chrono::NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()
+    );
+    assert_eq!(a.complete_months.len(), 4);
+    let prev = a.comparisons[0].comparison.as_ref().unwrap();
+    assert_eq!(prev.abs_diff, dec!(20));
+    assert!(a.comparisons[1].comparison.is_none(), "kein Vorjahr");
+    assert!(a.comparisons[2].comparison.is_some(), "3 Monate");
+    assert!(
+        a.comparisons[3].comparison.is_none(),
+        "6 Monate unvollständig"
+    );
+    let ytd = a.year_to_date.unwrap();
+    assert_eq!((ytd.current, ytd.previous), (Some(dec!(580)), None));
+
+    assert_eq!(a.forecasts.len(), 1, "kein Abrechnungsjahr hinterlegt");
+    let PeriodForecast::Projected(f) = &a.forecasts[0].forecast else {
+        panic!("Prognose erwartet");
+    };
+    assert_eq!((f.observed, f.projected_total), (dec!(580), dec!(1764.167)));
+
+    let chart = &a.chart;
+    assert_eq!(chart.year, 2026);
+    assert_eq!(chart.current[1], Some(dec!(140)));
+    assert!(chart.previous.iter().all(Option::is_none));
+    assert_eq!(chart.cumulative[3], Some(dec!(580)));
+    assert_eq!(chart.cumulative[4], None);
+    assert_eq!(chart.forecast[2], None);
+    assert_eq!(
+        chart.forecast[3],
+        Some(dec!(580)),
+        "Anschluss an den Messwert"
+    );
+    assert_eq!(chart.forecast[11], Some(dec!(1764.167)));
+    let json = uc.meter_chart_data.execute(&tenant, id).await.unwrap();
+    assert_eq!(json.cumulative, chart.cumulative);
+
+    // Bezugsmonat wählbar, nur vollständige Monate
+    let feb = chrono::NaiveDate::from_ymd_opt(2026, 2, 10);
+    let a = uc.meter_analysis.execute(&tenant, id, feb).await.unwrap();
+    assert_eq!(a.month.unwrap().start.month(), 2);
+    let may = chrono::NaiveDate::from_ymd_opt(2026, 5, 3);
+    let a = uc.meter_analysis.execute(&tenant, id, may).await.unwrap();
+    assert_eq!(a.month.unwrap().start.month(), 4);
+}
+
+// @test SPEC_UI_DASHBOARD
+#[tokio::test]
+async fn dashboard_lists_overdue_meters_first() {
+    use chrono::Datelike;
+    use zaehler_domain::analysis::PeriodForecast;
+    let (uc, tenant, _) = analysis_setup().await;
+    let mut water = meter_input("Wasser");
+    water.kind = MeterKind::Water;
+    water.serial_number = None;
+    water.reading_interval_days = Some(7);
+    water.registers.truncate(1);
+    water.start_at = berlin_day(2026, 5, 1);
+    uc.create_meter.execute(&tenant, water).await.unwrap();
+
+    let cards = uc.dashboard.execute(&tenant).await.unwrap();
+    let names: Vec<&str> = cards.iter().map(|c| c.meter.data.name.as_str()).collect();
+    assert_eq!(names, ["Wasser", "Strom"]);
+    assert!(cards[0].overdue && !cards[1].overdue);
+    let strom = &cards[1];
+    assert_eq!(strom.last_values.len(), 2);
+    assert_eq!(strom.last_values[0].value, dec!(200));
+    let last = strom.last_month.unwrap();
+    assert_eq!((last.month.start.month(), last.value), (4, Some(dec!(155))));
+    assert_eq!(strom.previous_month.as_ref().unwrap().reference, dec!(135));
+    assert!(matches!(strom.forecast, PeriodForecast::Projected(_)));
+    assert!(matches!(cards[0].forecast, PeriodForecast::NoReading));
+}
+
+fn import_mapping(meter: MeterId) -> crate::usecase::import::ImportMapping {
+    use crate::usecase::import::{DateFormat, DecimalSeparator, ImportMapping};
+    ImportMapping {
+        meter_id: meter,
+        has_header: true,
+        date: 0,
+        time: None,
+        value: 1,
+        register: None,
+        serial: None,
+        note: None,
+        date_format: DateFormat::DayMonthYear,
+        decimal: DecimalSeparator::Comma,
+        default_register: None,
+    }
+}
+
+/// Messstelle mit einem Register `HT`, Startstand 46 000 am 01.01.2026
+/// (setzt die importierte Reihe mit 300 je Monat fort).
+async fn import_setup() -> (UseCases, Tenant, MeterId) {
+    let (uc, tenant, _) = setup().await;
+    let mut input = meter_input("Strom");
+    input.registers.truncate(1);
+    input.registers[0].start_value = Some(dec!(46000));
+    input.start_at = berlin_day(2026, 1, 1);
+    let id = uc.create_meter.execute(&tenant, input).await.unwrap();
+    (uc, tenant, id)
+}
+
+// @test SPEC_IMP_CSV, SPEC_IMP_CSV_FORMAT
+#[tokio::test]
+async fn ten_years_of_monthly_values_import_once_then_only_duplicates() {
+    use std::fmt::Write as _;
+    let (uc, tenant, meter) = import_setup().await;
+    let mut csv = String::from("Datum;Zählerstand\n");
+    for i in 0..120 {
+        let (year, month) = (2016 + i / 12, i % 12 + 1);
+        writeln!(csv, "01.{month:02}.{year};{},0", 10_000 + i * 300).unwrap();
+    }
+    let key = uc
+        .upload_csv
+        .execute(&tenant, Bytes::from(csv.clone()))
+        .await
+        .unwrap();
+    let sheet = uc.preview_import.sheet(&tenant, &key).await.unwrap();
+    assert_eq!((sheet.rows, sheet.columns), (120, 2));
+    assert!(sheet.suggestion.has_header);
+    let mapping = import_mapping(meter);
+    let preview = uc
+        .preview_import
+        .execute(&tenant, &key, &mapping)
+        .await
+        .unwrap();
+    assert_eq!((preview.ok, preview.errors, preview.warnings), (120, 0, 0));
+
+    let report = uc
+        .commit_import
+        .execute(&tenant, &key, &mapping, false)
+        .await
+        .unwrap();
+    assert_eq!(report.inserted, 120);
+    let detail = uc.get_meter.execute(&tenant, meter).await.unwrap();
+    assert_eq!(detail.readings.len(), 121);
+    assert!(
+        detail
+            .readings
+            .iter()
+            .take(120)
+            .all(|r| r.source == ReadingSource::CsvImport)
+    );
+    assert_eq!(
+        detail.aggregate.devices[0].data.installed_at,
+        berlin_day(2016, 1, 1),
+        "Einbau vorverlegt"
+    );
+    // Datei nach dem Import gelöscht
+    assert!(matches!(
+        uc.preview_import.sheet(&tenant, &key).await,
+        Err(AppError::NotFound)
+    ));
+    let analysis = uc
+        .meter_analysis
+        .execute(&tenant, meter, None)
+        .await
+        .unwrap();
+    assert!(analysis.complete_months.len() >= 119);
+
+    // derselbe Inhalt erneut: nur Duplikate
+    let again = uc
+        .upload_csv
+        .execute(&tenant, Bytes::from(csv))
+        .await
+        .unwrap();
+    let preview = uc
+        .preview_import
+        .execute(&tenant, &again, &mapping)
+        .await
+        .unwrap();
+    assert_eq!((preview.ok, preview.duplicates), (0, 120));
+    let report = uc
+        .commit_import
+        .execute(&tenant, &again, &mapping, false)
+        .await
+        .unwrap();
+    assert_eq!((report.inserted, report.duplicates), (0, 120));
+}
+
+// @test SPEC_IMP_CSV, SPEC_IMP_CSV_FORMAT, SPEC_SEC_TENANT_SCOPE
+#[tokio::test]
+async fn import_reports_errors_and_saves_warnings_only_after_confirmation() {
+    use crate::usecase::import::RowStatus;
+    let (uc, tenant, meter) = import_setup().await;
+    let csv = "Datum;Stand;Register\n\
+               32.01.2026;1,0;HT\n\
+               01.01.2026;abc;HT\n\
+               01.12.2026;1,0;HT\n\
+               02.01.2026;1,0;XX\n\
+               03.01.2026;46000,25;HT\n\
+               05.01.2026;100,0;ht\n";
+    let mut mapping = import_mapping(meter);
+    mapping.register = Some(2);
+    let key = uc
+        .upload_csv
+        .execute(&tenant, Bytes::from_static(csv.as_bytes()))
+        .await
+        .unwrap();
+    let preview = uc
+        .preview_import
+        .execute(&tenant, &key, &mapping)
+        .await
+        .unwrap();
+    let codes: Vec<&str> = preview
+        .rows
+        .iter()
+        .map(|r| match &r.status {
+            RowStatus::Error(e) => e.code,
+            RowStatus::Warning(_) => "warning",
+            RowStatus::Ok => "ok",
+            RowStatus::Duplicate => "duplicate",
+        })
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "import.date_invalid",
+            "import.value_invalid",
+            "reading.in_future",
+            "import.register_unknown",
+            "reading.too_many_decimals",
+            "warning"
+        ]
+    );
+    assert_eq!(preview.rows[5].line, 7);
+    assert_eq!(
+        preview.rows[5].status,
+        RowStatus::Warning(Plausibility::Decreasing)
+    );
+
+    // fremder Haushalt sieht die Datei nicht
+    let bob = uc.sign_in.execute(&identity("bob")).await.unwrap();
+    let other = uc
+        .resolve_tenant
+        .execute(bob.user.id, None)
+        .await
+        .unwrap()
+        .tenant;
+    assert!(matches!(
+        uc.preview_import.sheet(&other, &key).await,
+        Err(AppError::NotFound)
+    ));
+
+    let report = uc
+        .commit_import
+        .execute(&tenant, &key, &mapping, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        (report.inserted, report.warnings_skipped, report.errors),
+        (0, 1, 5)
+    );
+    let key = uc
+        .upload_csv
+        .execute(&tenant, Bytes::from_static(csv.as_bytes()))
+        .await
+        .unwrap();
+    let report = uc
+        .commit_import
+        .execute(&tenant, &key, &mapping, true)
+        .await
+        .unwrap();
+    assert_eq!(report.inserted, 1, "Hinweis bestätigt");
+
+    for bad in [&b"\xFF\xD8\xFFjpeg"[..], b"Datum;Stand\n"] {
+        assert!(matches!(
+            uc.upload_csv
+                .execute(&tenant, Bytes::copy_from_slice(bad))
+                .await,
+            Err(AppError::Validation(_))
+        ));
+    }
+}
+
+// @test SPEC_IMG_CAPTURE_TIME
+#[tokio::test]
+async fn capture_time_from_photo_metadata_is_stored_with_the_draft() {
+    use crate::{port::PhotoTime, testing::StubImageNormalizer};
+    use chrono::FixedOffset;
+
+    let local = chrono::NaiveDate::from_ymd_opt(2026, 1, 10)
+        .unwrap()
+        .and_hms_opt(8, 15, 0)
+        .unwrap();
+    let analyse = |taken_at: Option<PhotoTime>| async move {
+        let (mut ports, _store, _clock, _blobs) = memory_ports_with_blobs();
+        ports.images = Arc::new(StubImageNormalizer { taken_at });
+        let uc = UseCases::new(&ports);
+        let signed = uc.sign_in.execute(&identity("anna")).await.unwrap();
+        let tenant = uc
+            .resolve_tenant
+            .execute(signed.user.id, None)
+            .await
+            .unwrap()
+            .tenant;
+        let id = uc
+            .analyse_photo
+            .execute(&tenant, Bytes::from_static(JPEG))
+            .await
+            .unwrap();
+        uc.get_draft
+            .execute(&tenant, id, None)
+            .await
+            .unwrap()
+            .draft
+            .taken_at
+    };
+    // ohne Offset: Zeitzone des Haushalts (Europe/Berlin, UTC+1)
+    let berlin = analyse(Some(PhotoTime {
+        local,
+        offset: None,
+    }))
+    .await;
+    assert_eq!(berlin.unwrap().to_rfc3339(), "2026-01-10T07:15:00+00:00");
+    // mit Offset exakt
+    let tokyo = analyse(Some(PhotoTime {
+        local,
+        offset: FixedOffset::east_opt(9 * 3600),
+    }))
+    .await;
+    assert_eq!(tokyo.unwrap().to_rfc3339(), "2026-01-09T23:15:00+00:00");
+    // Kamera-Uhr in der Zukunft (Uhr der Tests: 15.01.2026 12:00 UTC)
+    let future = local + Duration::days(30);
+    assert_eq!(
+        analyse(Some(PhotoTime {
+            local: future,
+            offset: None
+        }))
+        .await,
+        None
+    );
+    assert_eq!(analyse(None).await, None);
+}
+
+// @test SPEC_AI_NEW_METER
+#[tokio::test]
+async fn new_meter_from_photo_uses_the_draft_as_start_reading() {
+    let c = capture_setup(Some(Ok(recognition(dec!(1100), Some("9 ABC 1"))))).await;
+    let draft =
+        c.uc.analyse_photo
+            .execute(&c.tenant, Bytes::from_static(JPEG))
+            .await
+            .unwrap();
+    let view =
+        c.uc.get_draft
+            .execute(&c.tenant, draft, None)
+            .await
+            .unwrap();
+    assert!(view.meter.is_none(), "keine Messstelle vorhanden");
+
+    let mut input = meter_input("Strom");
+    input.serial_number = Some("9 ABC 1".into());
+    input.registers.truncate(1);
+    input.registers[0].start_value = None;
+    let Err(AppError::Validation(errors)) =
+        c.uc.create_meter
+            .execute_from_draft(&c.tenant, input.clone(), draft)
+            .await
+    else {
+        panic!("Startstand erforderlich");
+    };
+    assert_eq!(errors.0[0].code, "meter.photo_start_required");
+
+    input.registers[0].start_value = Some(dec!(1100.5));
+    let member = Tenant::new(c.tenant.user_id(), c.tenant.household_id(), Role::Member);
+    assert!(matches!(
+        c.uc.create_meter
+            .execute_from_draft(&member, input.clone(), draft)
+            .await,
+        Err(AppError::Forbidden)
+    ));
+
+    let meter =
+        c.uc.create_meter
+            .execute_from_draft(&c.tenant, input.clone(), draft)
+            .await
+            .unwrap();
+    let detail = c.uc.get_meter.execute(&c.tenant, meter).await.unwrap();
+    assert_eq!(detail.readings.len(), 1);
+    let start = &detail.readings[0];
+    assert_eq!(start.source, ReadingSource::Photo);
+    assert_eq!(start.value, dec!(1100.5));
+    assert_eq!(start.ai_confidence, Some(dec!(0.9)));
+    let photo = BlobKey::reading_photo(c.tenant.household_id(), start.id);
+    assert_eq!(start.photo_key, Some(photo.clone()));
+    assert_eq!(
+        c.blobs.keys(),
+        vec![photo.to_string()],
+        "Entwurfsfoto verschoben"
+    );
+    assert_eq!(
+        c.store.draft_state(draft),
+        Some((DraftStatus::Confirmed, Some(true))),
+        "Wert korrigiert"
+    );
+
+    // der Entwurf ist verbraucht
+    input.name = "Strom 2".into();
+    input.serial_number = None;
+    assert!(matches!(
+        c.uc.create_meter
+            .execute_from_draft(&c.tenant, input, draft)
+            .await,
+        Err(AppError::NotFound)
+    ));
+}

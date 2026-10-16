@@ -3,16 +3,20 @@
 
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Response,
 };
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use zaehler_app::{
     AppError, FieldErrors,
-    ids::{MeterId, RegisterId},
+    ids::{DraftId, MeterId, RegisterId},
     model::{MeterAggregate, MonthDay, Reading},
-    usecase::meter::{MeterInput, RegisterInput, SwapInput},
+    usecase::{
+        capture::DraftView,
+        meter::{MeterInput, RegisterInput, SwapInput},
+    },
 };
 use zaehler_domain::{
     calendar::Calendar,
@@ -22,7 +26,11 @@ use zaehler_domain::{
 use crate::{
     extract::{Ctx, PageCtx},
     i18n::{Lang, format, parse},
-    pages::{FormData, field_errors, render, render_status, see_other},
+    pages::{
+        FormData,
+        analysis::{self, AnalysisView},
+        field_errors, render, render_status, see_other,
+    },
     state::WebState,
 };
 
@@ -53,6 +61,8 @@ pub struct MeterFormView {
     pub billing_month: String,
     pub billing_day: String,
     pub start_at: String,
+    /// Entwurf der Foto-Erfassung, aus dem die Messstelle entsteht (SPEC_AI_NEW_METER)
+    pub draft: String,
     pub registers: Vec<RegisterRow>,
 }
 
@@ -140,6 +150,7 @@ struct DetailPage {
     registers: Vec<(String, String)>,
     devices: Vec<DeviceRow>,
     readings: Vec<ReadingRow>,
+    analysis: AnalysisView,
 }
 
 pub struct SwapRow {
@@ -224,6 +235,7 @@ fn view_from_form(form: &FormData, action: String, is_new: bool, locked: bool) -
         billing_month: form.get("billing_month").to_owned(),
         billing_day: form.get("billing_day").to_owned(),
         start_at: form.get("start_at").to_owned(),
+        draft: form.get("draft").to_owned(),
         registers,
     }
 }
@@ -355,8 +367,8 @@ pub async fn list(State(state): State<WebState>, ctx: Ctx) -> Result<Response, R
     }))
 }
 
-pub async fn new_form(ctx: Ctx) -> Response {
-    let form = MeterFormView {
+fn empty_form(tz: chrono_tz::Tz) -> MeterFormView {
+    MeterFormView {
         action: "/meters".into(),
         is_new: true,
         locked: false,
@@ -370,7 +382,8 @@ pub async fn new_form(ctx: Ctx) -> Response {
         max_rate: String::new(),
         billing_month: String::new(),
         billing_day: String::new(),
-        start_at: now_input(ctx.page.tz),
+        start_at: now_input(tz),
+        draft: String::new(),
         registers: vec![RegisterRow {
             idx: 0,
             id: String::new(),
@@ -378,8 +391,73 @@ pub async fn new_form(ctx: Ctx) -> Response {
             direction: "import".into(),
             start: String::new(),
         }],
+    }
+}
+
+/// Vorbelegung aus dem Vorschlag eines Foto-Entwurfs; ohne Vorschlag bleibt
+/// das Formular leer, das Foto wird trotzdem übernommen.
+// @impl SPEC_AI_NEW_METER
+fn view_from_draft(lang: Lang, tz: chrono_tz::Tz, view: &DraftView) -> MeterFormView {
+    let mut form = empty_form(tz);
+    form.draft = view.draft.id.to_string();
+    // Aufnahmezeit des Fotos als Zeitpunkt der Startstände (SPEC_IMG_CAPTURE_TIME)
+    if let Some(at) = view.draft.taken_at {
+        form.start_at = format::datetime_input(at.with_timezone(&tz).naive_local());
+    }
+    let Some(s) = view.draft.suggestion.as_ref() else {
+        return form;
     };
-    form_page(&ctx, form, FieldErrors::default(), StatusCode::OK)
+    let kind = s.meter_kind.unwrap_or(MeterKind::Electricity);
+    form.kind = kind.as_str().into();
+    form.name = lang.t(&format!("kind-{}", kind.as_str()));
+    form.unit = s
+        .unit
+        .clone()
+        .filter(|u| u.trim() != kind.default_unit())
+        .unwrap_or_default();
+    form.serial = s.serial_number.clone().unwrap_or_default();
+    if let Some(code) = s.register.as_ref().filter(|c| !c.trim().is_empty()) {
+        code.trim().clone_into(&mut form.registers[0].code);
+    }
+    if let Some(v) = s.value {
+        form.decimals = v.scale().min(3).to_string();
+        form.registers[0].start = format::decimal_plain(lang, v);
+    }
+    form
+}
+
+#[derive(Deserialize)]
+pub struct DraftQuery {
+    draft: Option<String>,
+}
+
+// @impl SPEC_MTR_MANAGE, SPEC_AI_NEW_METER
+pub async fn new_form(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Query(q): Query<DraftQuery>,
+) -> Result<Response, Response> {
+    let form = match q.draft.as_deref().filter(|d| !d.is_empty()) {
+        None => empty_form(ctx.page.tz),
+        Some(d) => {
+            let id = d
+                .parse::<DraftId>()
+                .map_err(|_| ctx.fail(AppError::NotFound))?;
+            let view = state
+                .uc
+                .get_draft
+                .execute(&ctx.tenant, id, None)
+                .await
+                .map_err(|e| ctx.fail(e))?;
+            view_from_draft(ctx.page.lang, ctx.page.tz, &view)
+        }
+    };
+    Ok(form_page(
+        &ctx,
+        form,
+        FieldErrors::default(),
+        StatusCode::OK,
+    ))
 }
 
 fn add_register_row(view: &mut MeterFormView) {
@@ -409,7 +487,21 @@ pub async fn create(
         Ok(i) => i,
         Err(errors) => return form_page(&ctx, view, errors, StatusCode::UNPROCESSABLE_ENTITY),
     };
-    match state.uc.create_meter.execute(&ctx.tenant, input).await {
+    let result = if view.draft.is_empty() {
+        state.uc.create_meter.execute(&ctx.tenant, input).await
+    } else {
+        match view.draft.parse::<DraftId>() {
+            Ok(draft) => {
+                state
+                    .uc
+                    .create_meter
+                    .execute_from_draft(&ctx.tenant, input, draft)
+                    .await
+            }
+            Err(_) => Err(AppError::NotFound),
+        }
+    };
+    match result {
         Ok(id) => {
             ctx.flash("flash-meter-created").await;
             see_other(&format!("/meters/{id}"))
@@ -425,18 +517,29 @@ fn source_label(lang: Lang, r: &Reading) -> String {
     lang.t(&format!("source-{}", r.source.as_str()))
 }
 
+#[derive(Deserialize)]
+pub struct MonthQuery {
+    month: Option<String>,
+}
+
+/// Detailseite mit Auswertung; `?month=2026-03` wählt den Bezugsmonat.
+// @impl SPEC_ANA_COMPARE_VIEW
 pub async fn detail(
     State(state): State<WebState>,
     ctx: Ctx,
     Path(id): Path<String>,
+    Query(q): Query<MonthQuery>,
 ) -> Result<Response, Response> {
     let id = parse_meter_id(&id).map_err(|e| ctx.fail(e))?;
-    let detail = state
+    let month = q.month.as_deref().and_then(analysis::parse_month);
+    let result = state
         .uc
-        .get_meter
-        .execute(&ctx.tenant, id)
+        .meter_analysis
+        .execute(&ctx.tenant, id, month)
         .await
         .map_err(|e| ctx.fail(e))?;
+    let analysis = analysis::view(ctx.page.lang, &result);
+    let detail = result.detail;
     let lang = ctx.page.lang;
     let tz = ctx.page.tz;
     let agg = &detail.aggregate;
@@ -501,6 +604,7 @@ pub async fn detail(
         registers,
         devices,
         readings,
+        analysis,
         ctx: ctx.page,
     };
     Ok(render(&page))
@@ -541,6 +645,7 @@ fn view_from_aggregate(agg: &MeterAggregate, lang: Lang, locked: bool) -> MeterF
             .map(|md| md.day.to_string())
             .unwrap_or_default(),
         start_at: String::new(),
+        draft: String::new(),
         registers: agg
             .registers
             .iter()

@@ -256,7 +256,7 @@ Ingress.
 
 ```{spec} Upload-Verarbeitung
 :id: SPEC_SEC_UPLOADS
-:status: draft
+:status: implemented
 :satisfies: REQ_NFR_003, REQ_RDG_004, REQ_IMP_001
 
 Body-Limits je Route in `zaehler-web`: Fotos `upload.max_photo_bytes`

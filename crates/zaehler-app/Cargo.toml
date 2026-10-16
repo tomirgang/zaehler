@@ -18,6 +18,7 @@ async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
+csv.workspace = true
 metrics.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true

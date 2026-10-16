@@ -4,7 +4,10 @@
 <h1>{{ ctx.lang.t("dashboard-title") }}</h1>
 {% if cards.is_empty() %}
 <p>{{ ctx.lang.t("dashboard-empty") }}</p>
-{% if ctx.is_owner %}<p><a class="button" href="/meters/new">{{ ctx.lang.t("dashboard-create-meter") }}</a></p>{% endif %}
+<div class="actions">
+  {% if ctx.is_owner %}<a class="button" href="/meters/new">{{ ctx.lang.t("dashboard-create-meter") }}</a>{% endif %}
+  {% if ctx.can_write %}<a class="button secondary" href="/import">{{ ctx.lang.t("dashboard-import") }}</a>{% endif %}
+</div>
 {% else %}
 <ul class="cards">
   {% for c in cards %}
@@ -13,8 +16,16 @@
     <p class="muted">{{ c.kind }}</p>
     <p>{{ ctx.lang.t("dashboard-last-reading") }}:
       {% if let Some(l) = c.last %}{{ l }}{% else %}{{ ctx.lang.t("dashboard-no-reading") }}{% endif %}</p>
+    {% if !c.values.is_empty() %}<p>{% for v in c.values %}<span class="tag">{{ v }}</span> {% endfor %}</p>{% endif %}
+    {% if let Some(m) = c.last_month %}<p>{{ m }}{% if let Some(v) = c.vs_previous %} <span class="muted">({{ v }})</span>{% endif %}</p>{% endif %}
+    {% if let Some(f) = c.forecast %}<p>{{ f }}</p>{% endif %}
     {% if let Some(d) = c.due %}<p class="{% if c.overdue %}warning{% else %}muted{% endif %}">{{ d }}</p>{% endif %}
-    {% if ctx.can_write %}<p><a class="button" href="/meters/{{ c.id }}/readings/new">{{ ctx.lang.t("dashboard-record") }}</a></p>{% endif %}
+    {% if ctx.can_write %}
+    <div class="actions">
+      <a class="button" href="/meters/{{ c.id }}/readings/new">{{ ctx.lang.t("dashboard-record") }}</a>
+      <a class="button secondary" href="/capture">{{ ctx.lang.t("dashboard-photo") }}</a>
+    </div>
+    {% endif %}
   </li>
   {% endfor %}
 </ul>

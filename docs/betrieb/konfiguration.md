@@ -35,6 +35,7 @@ zugleich ist unzulässig.
 | `housekeeping.interval_minutes` | `ZAEHLER_HOUSEKEEPING__INTERVAL_MINUTES` | `60` |
 | `housekeeping.draft_ttl_hours` | `ZAEHLER_HOUSEKEEPING__DRAFT_TTL_HOURS` | `24` |
 | `upload.max_photo_bytes` | `ZAEHLER_UPLOAD__MAX_PHOTO_BYTES` | `15728640` (15 MiB) |
+| `upload.max_csv_bytes` | `ZAEHLER_UPLOAD__MAX_CSV_BYTES` | `5242880` (5 MiB) |
 | `oidc.issuer_url`, `client_id`, `client_secret` | `ZAEHLER_OIDC__…` | kein Default |
 | `auth.dev_login` | `ZAEHLER_AUTH__DEV_LOGIN` | `false`; nur mit `public_url` auf localhost zulässig |
 | `session.ttl_hours` | `ZAEHLER_SESSION__TTL_HOURS` | `720` (gleitend) |

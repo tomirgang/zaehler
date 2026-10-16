@@ -58,3 +58,16 @@ und in der Detailansicht anzeigen. Fotos werden mit dem Stand gelöscht.
 Das System soll je Zähler einen Ableseturnus (z.B. monatlich am 1.) verwalten
 und fällige bzw. überfällige Ablesungen im Dashboard hervorheben.
 ```
+
+```{req} Ablesezeitpunkt aus Fotometadaten
+:id: REQ_RDG_006
+:status: accepted
+:priority: should
+:release: MVP
+
+Das System soll bei der Erfassung per Foto den Ablesezeitpunkt aus den
+Bildmetadaten (Aufnahmezeit) vorschlagen statt des Zeitpunkts des Hochladens.
+Der Vorschlag bleibt editierbar. Fehlt die Aufnahmezeit oder liegt sie in der
+Zukunft, gilt der aktuelle Zeitpunkt. Die übrigen Metadaten werden weiterhin
+entfernt ({need}`REQ_NFR_004`).
+```

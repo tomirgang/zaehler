@@ -1,0 +1,19 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("import-title") }}</h1>
+<p>{{ ctx.lang.t("import-intro") }}</p>
+<form method="post" action="/import/upload" enctype="multipart/form-data" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <div class="field{% if !errors.is_empty() %} has-error{% endif %}">
+    <label for="file">{{ ctx.lang.t("import-file") }}</label>
+    <input id="file" name="file" type="file" accept=".csv,.txt,text/csv,text/plain" required>
+    <p class="hint">{{ hint }}</p>
+    {% for e in errors %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("import-upload") }}</button>
+    <a href="/">{{ ctx.lang.t("action-cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

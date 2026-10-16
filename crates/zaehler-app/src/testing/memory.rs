@@ -25,8 +25,8 @@ use crate::{
     port::{
         BlobStore, Clock, DraftRepository, HouseholdRepository, ImageNormalizer,
         MaintenanceRepository, MembershipRepository, MeterRecognizer, MeterRepository,
-        NormalizedJpeg, PortResult, Readiness, ReadingRepository, RecognitionError, UnitOfWork,
-        UnitOfWorkFactory, UserRepository,
+        NormalizedJpeg, PhotoTime, PortResult, Readiness, ReadingRepository, RecognitionError,
+        UnitOfWork, UnitOfWorkFactory, UserRepository,
     },
 };
 
@@ -303,8 +303,12 @@ impl MeterRecognizer for StubRecognizer {
 }
 
 /// Ersatz für den Bild-Adapter: akzeptiert Daten mit JPEG-Signatur
-/// unverändert (1 × 1 Pixel), alles andere mit `photo.unsupported`.
-pub struct StubImageNormalizer;
+/// unverändert (1 × 1 Pixel) mit der festgelegten Aufnahmezeit, alles andere
+/// mit `photo.unsupported`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StubImageNormalizer {
+    pub taken_at: Option<PhotoTime>,
+}
 
 #[async_trait]
 impl ImageNormalizer for StubImageNormalizer {
@@ -314,6 +318,7 @@ impl ImageNormalizer for StubImageNormalizer {
                 bytes,
                 width: 1,
                 height: 1,
+                taken_at: self.taken_at,
             })
         } else {
             Err(PortError::Invalid("photo.unsupported"))

@@ -1,18 +1,20 @@
 //! Driven-Adapter für den Port `ImageNormalizer` (SPEC_IMG_PROCESSING,
-//! ADR_017): Format über Magic Bytes prüfen, dekodieren, EXIF-Ausrichtung
-//! anwenden, verkleinern und als JPEG ohne Metadaten kodieren.
+//! ADR_017): Format über Magic Bytes prüfen, Aufnahmezeit auslesen,
+//! dekodieren, EXIF-Ausrichtung anwenden, verkleinern und als JPEG ohne
+//! Metadaten kodieren.
 
 use std::io::Cursor;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use chrono::{FixedOffset, NaiveDate};
 use image::{
     DynamicImage, ImageDecoder, ImageError, ImageFormat, ImageReader, Limits,
     codecs::jpeg::JpegEncoder, imageops::FilterType, metadata::Orientation,
 };
 use zaehler_app::{
     PortError,
-    port::{ImageNormalizer, NormalizedJpeg, PortResult},
+    port::{ImageNormalizer, NormalizedJpeg, PhotoTime, PortResult},
 };
 
 /// Fehlercode für nicht unterstützte oder nicht dekodierbare Dateien
@@ -93,6 +95,7 @@ pub fn normalize(bytes: &[u8], opts: ImageOptions) -> PortResult<NormalizedJpeg>
     limits.max_alloc = Some(MAX_ALLOC);
     reader.limits(limits);
     let mut decoder = reader.into_decoder().map_err(image_err)?;
+    let taken_at = decoder.exif_metadata().ok().flatten().and_then(photo_time);
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let mut img = DynamicImage::from_decoder(decoder).map_err(image_err)?;
     img.apply_orientation(orientation);
@@ -111,6 +114,40 @@ pub fn normalize(bytes: &[u8], opts: ImageOptions) -> PortResult<NormalizedJpeg>
         bytes: Bytes::from(out),
         width: w,
         height: h,
+        taken_at,
+    })
+}
+
+/// Aufnahmezeit aus rohen EXIF-Daten (TIFF-Struktur): `DateTimeOriginal` mit
+/// `OffsetTimeOriginal`, sonst `DateTime` mit `OffsetTime`. Fehlende oder
+/// ungültige Angaben ergeben `None`.
+// @impl SPEC_IMG_CAPTURE_TIME
+fn photo_time(raw: Vec<u8>) -> Option<PhotoTime> {
+    let data = exif::Reader::new().read_raw(raw).ok()?;
+    let ascii = |tag| match data.get_field(tag, exif::In::PRIMARY).map(|f| &f.value) {
+        Some(exif::Value::Ascii(v)) => v.first().cloned(),
+        _ => None,
+    };
+    let (text, offset_tag) = ascii(exif::Tag::DateTimeOriginal)
+        .map(|t| (t, exif::Tag::OffsetTimeOriginal))
+        .or_else(|| ascii(exif::Tag::DateTime).map(|t| (t, exif::Tag::OffsetTime)))?;
+    let mut dt = exif::DateTime::from_ascii(&text).ok()?;
+    if let Some(offset) = ascii(offset_tag) {
+        // ein ungültiger Offset lässt die lokale Zeit bestehen
+        let _ = dt.parse_offset(&offset);
+    }
+    let local =
+        NaiveDate::from_ymd_opt(i32::from(dt.year), u32::from(dt.month), u32::from(dt.day))?
+            .and_hms_opt(
+                u32::from(dt.hour),
+                u32::from(dt.minute),
+                u32::from(dt.second),
+            )?;
+    Some(PhotoTime {
+        local,
+        offset: dt
+            .offset
+            .and_then(|minutes| FixedOffset::east_opt(i32::from(minutes) * 60)),
     })
 }
 
@@ -220,6 +257,92 @@ mod tests {
         assert!(!contains(&out.bytes, b"Exif"));
         assert!(!contains(&out.bytes, &[0xFF, 0xE1]));
         assert!(!contains(&out.bytes, b"N\0\0\0"));
+    }
+
+    /// EXIF mit Exif-IFD: `DateTimeOriginal` und optional `OffsetTimeOriginal`.
+    fn exif_with_time(time: &str, offset: Option<&str>) -> Vec<u8> {
+        let entries = 1 + u16::from(offset.is_some());
+        // IFD0 bei 8 mit einem Eintrag; Exif-IFD bei 26; Daten dahinter
+        let exif_ifd = 26u32;
+        let data = exif_ifd + 2 + 12 * u32::from(entries) + 4;
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II*\0");
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x8769u16.to_le_bytes()); // ExifIFDPointer
+        tiff.extend_from_slice(&4u16.to_le_bytes()); // LONG
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&exif_ifd.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        let time = format!("{time}\0");
+        tiff.extend_from_slice(&entries.to_le_bytes());
+        tiff.extend_from_slice(&0x9003u16.to_le_bytes()); // DateTimeOriginal
+        tiff.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+        tiff.extend_from_slice(&u32::try_from(time.len()).unwrap().to_le_bytes());
+        tiff.extend_from_slice(&data.to_le_bytes());
+        let offset = offset.map(|o| format!("{o}\0"));
+        if let Some(o) = &offset {
+            let at = data + u32::try_from(time.len()).unwrap();
+            tiff.extend_from_slice(&0x9011u16.to_le_bytes()); // OffsetTimeOriginal
+            tiff.extend_from_slice(&2u16.to_le_bytes());
+            tiff.extend_from_slice(&u32::try_from(o.len()).unwrap().to_le_bytes());
+            tiff.extend_from_slice(&at.to_le_bytes());
+        }
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(time.as_bytes());
+        if let Some(o) = &offset {
+            tiff.extend_from_slice(o.as_bytes());
+        }
+        tiff
+    }
+
+    fn with_tiff(jpeg: &[u8], tiff: &[u8]) -> Vec<u8> {
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(tiff);
+        let len = u16::try_from(payload.len() + 2).unwrap();
+        let mut out = jpeg[..2].to_vec();
+        out.extend_from_slice(&[0xFF, 0xE1]);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&payload);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    // @test SPEC_IMG_CAPTURE_TIME, SPEC_IMG_PROCESSING
+    #[test]
+    fn capture_time_is_read_before_metadata_is_removed() {
+        let base = jpeg(&two_colors(8, 8));
+        let at = NaiveDate::from_ymd_opt(2026, 1, 10)
+            .unwrap()
+            .and_hms_opt(8, 15, 30)
+            .unwrap();
+
+        let input = with_tiff(
+            &base,
+            &exif_with_time("2026:01:10 08:15:30", Some("+01:00")),
+        );
+        let out = normalize(&input, ImageOptions::default()).unwrap();
+        assert_eq!(
+            out.taken_at,
+            Some(PhotoTime {
+                local: at,
+                offset: FixedOffset::east_opt(3600),
+            })
+        );
+        assert!(!contains(&out.bytes, b"2026:01:10"), "Metadaten entfernt");
+
+        let input = with_tiff(&base, &exif_with_time("2026:01:10 08:15:30", None));
+        let out = normalize(&input, ImageOptions::default()).unwrap();
+        assert_eq!(out.taken_at.map(|t| (t.local, t.offset)), Some((at, None)));
+
+        for bad in ["0000:00:00 00:00:00", "    :  :     :  :  "] {
+            let input = with_tiff(&base, &exif_with_time(bad, None));
+            let out = normalize(&input, ImageOptions::default()).unwrap();
+            assert_eq!(out.taken_at, None, "{bad}");
+        }
+        // nur Ausrichtung, keine Zeit
+        let out = normalize(&with_exif(&base, 1), ImageOptions::default()).unwrap();
+        assert_eq!(out.taken_at, None);
     }
 
     // @test SPEC_IMG_PROCESSING

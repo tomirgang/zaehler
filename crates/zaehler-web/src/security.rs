@@ -61,7 +61,7 @@ pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
 const MAX_FORM_BYTES: usize = 1024 * 1024;
 
 /// Routen mit Multipart-Body; ihre Handler prüfen das Feld `_csrf` selbst.
-const MULTIPART_ROUTES: [&str; 1] = ["/capture"];
+const MULTIPART_ROUTES: [&str; 2] = ["/capture", "/import/upload"];
 
 fn forbidden() -> Response {
     (StatusCode::FORBIDDEN, "CSRF-Prüfung fehlgeschlagen").into_response()

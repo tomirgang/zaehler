@@ -169,7 +169,7 @@ Tabelle `ai_drafts` erst dort entsteht. {need}`SPEC_SEC_UPLOADS` bleibt
 :status: open
 :milestone: M2
 :depends: WP_MVP_05, WP_MVP_06
-:covers: REQ_AI_001, REQ_AI_002, REQ_AI_003, REQ_AI_006, SPEC_AI_FLOW, SPEC_AI_DRAFTS
+:covers: REQ_AI_001, REQ_AI_002, REQ_AI_003, REQ_AI_006, REQ_AI_007, REQ_RDG_006, SPEC_AI_FLOW, SPEC_AI_DRAFTS, SPEC_AI_NEW_METER, SPEC_IMG_CAPTURE_TIME
 
 Port `DraftRepository` und `MeterRecognizer` (Adapter `zaehler-ai`),
 Anwendungsfälle `AnalysePhoto`, `ConfirmDraft`, `DiscardDraft`, Seiten Upload
@@ -188,14 +188,17 @@ Probe mit 20 Zählerfotos und konfiguriertem Modell; bis dahin bleibt das
 Arbeitspaket `open`. Abweichend vom Detail-Design antwortet `POST /capture`
 mit 303 auf die Bestätigungsseite statt mit einem HTMX-Fragment; damit
 funktioniert der Ablauf ohne JavaScript und ein Neuladen der Seite bleibt
-möglich.
+möglich. Nachträglich aufgenommen: Anlegen einer Messstelle aus einem Foto
+({need}`REQ_AI_007`, {need}`SPEC_AI_NEW_METER`) und Ablesezeitpunkt aus den
+Fotometadaten ({need}`REQ_RDG_006`, {need}`SPEC_IMG_CAPTURE_TIME`), umgesetzt
+mit Medien-, Anwendungsfall- und HTTP-Tests.
 ```
 
 ### M3: Auswertung, Dashboard, Import
 
 ```{wp} Auswertung und Prognose
 :id: WP_MVP_08
-:status: open
+:status: done
 :milestone: M3
 :depends: WP_MVP_05
 :covers: REQ_ANA_001, REQ_ANA_003, REQ_ANA_004, REQ_ANA_005, REQ_ANA_007, REQ_FC_001, SPEC_ANA_MONTHLY_SERIES, SPEC_ANA_REGISTER_AGG, SPEC_ANA_COMPARE_VIEW, SPEC_FC_CURRENT_YEAR, SPEC_ANA_CHARTS
@@ -207,11 +210,18 @@ der Detailseite, `chart.json`, `charts.js`, ECharts einbinden.
 **Abnahme:** Property-Tests der Monatsserien; Vergleiche mit unvollständigen
 Referenzmonaten zeigen Hinweis; Prognose für Kalender- und Abrechnungsjahr;
 Diagramme mit Tabellenalternative.
+
+**Stand:** Abnahme mit Domain-Tests (`proptest` für Monatsserien, Vergleiche,
+Schaltjahr, Prognose), Anwendungsfall-Test über zwei Register und
+Zählerwechsel sowie HTTP-Test für Detailseite und `chart.json`. Diagramme in
+Chromium mit der bestehenden Content-Security-Policy geprüft. ECharts wird
+abweichend vom Entwurf nur auf der Detailseite geladen, das Dashboard enthält
+im MVP keine Diagramme.
 ```
 
 ```{wp} Dashboard
 :id: WP_MVP_09
-:status: open
+:status: done
 :milestone: M3
 :depends: WP_MVP_08
 :covers: REQ_ANA_008, SPEC_UI_DASHBOARD
@@ -220,11 +230,14 @@ Dashboard-Seite mit Karten, Fälligkeit, Sortierung, leerem Zustand.
 
 **Abnahme:** Rendering mit 0, 1 und 20 Messstellen; überfällige Messstellen
 zuerst.
+
+**Stand:** Anwendungsfall `Dashboard` mit Test der Sortierung; HTTP-Test mit
+0, 1 und 20 Messstellen.
 ```
 
 ```{wp} CSV-Import
 :id: WP_MVP_10
-:status: open
+:status: done
 :milestone: M3
 :depends: WP_MVP_05, WP_MVP_06
 :covers: REQ_IMP_001, SPEC_IMP_CSV, SPEC_IMP_CSV_FORMAT
@@ -235,6 +248,15 @@ des Trennzeichens, Datums- und Zahlenformate, Duplikate.
 
 **Abnahme:** CSV-Fixtures; 10 Jahre Monatswerte in einem Durchgang; erneuter
 Import derselben Datei meldet nur Duplikate.
+
+**Stand:** Unit-Tests der Formate (deutsch, ISO, Tab, Komma, BOM, ohne
+Überschrift, Binärdatei, zu viele Zeilen), Anwendungsfall-Tests für 10 Jahre
+Monatswerte, erneuten Import (nur Duplikate), Fehler- und Hinweiszeilen sowie
+HTTP-Test des Ablaufs mit CSRF und 413. Zusätzlich gegen SQLite über den
+laufenden Server geprüft. Abweichungen vom Entwurf stehen in
+{need}`SPEC_IMP_CSV_FORMAT` (kein `insert_skip_duplicates`, Einbau des ersten
+Geräts wird bei älteren Ablesungen vorverlegt). Mit dem CSV-Limit ist
+{need}`SPEC_SEC_UPLOADS` umgesetzt.
 ```
 
 ### M4: Release-Kandidat

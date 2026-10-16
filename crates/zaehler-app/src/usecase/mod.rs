@@ -7,10 +7,12 @@ use crate::port::{
     BlobStore, Clock, IdGenerator, ImageNormalizer, MeterRecognizer, UnitOfWorkFactory,
 };
 
+pub mod analysis;
 pub mod auth;
 pub mod capture;
 pub mod household;
 pub mod housekeeping;
+pub mod import;
 pub mod meter;
 pub mod reading;
 mod validate;
@@ -73,6 +75,12 @@ pub struct UseCases {
     pub confirm_draft: capture::ConfirmDraft,
     pub discard_draft: capture::DiscardDraft,
     pub get_draft_photo: capture::GetDraftPhoto,
+    pub meter_analysis: analysis::MeterAnalysis,
+    pub meter_chart_data: analysis::MeterChartData,
+    pub dashboard: analysis::Dashboard,
+    pub upload_csv: import::UploadCsv,
+    pub preview_import: import::PreviewImport,
+    pub commit_import: import::CommitImport,
 }
 
 impl UseCases {
@@ -100,6 +108,12 @@ impl UseCases {
             confirm_draft: capture::ConfirmDraft::new(p.clone()),
             discard_draft: capture::DiscardDraft::new(p.clone()),
             get_draft_photo: capture::GetDraftPhoto::new(p.clone()),
+            meter_analysis: analysis::MeterAnalysis::new(p.clone()),
+            meter_chart_data: analysis::MeterChartData::new(p.clone()),
+            dashboard: analysis::Dashboard::new(p.clone()),
+            upload_csv: import::UploadCsv::new(p.clone()),
+            preview_import: import::PreviewImport::new(p.clone()),
+            commit_import: import::CommitImport::new(p.clone()),
         }
     }
 }

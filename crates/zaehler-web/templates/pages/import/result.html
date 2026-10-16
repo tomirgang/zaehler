@@ -1,0 +1,15 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("import-result-title") }}</h1>
+<dl class="facts">
+  <dt>{{ ctx.lang.t("import-inserted") }}</dt><dd>{{ report.inserted }}</dd>
+  <dt>{{ ctx.lang.t("import-row-duplicate") }}</dt><dd>{{ report.duplicates }}</dd>
+  <dt>{{ ctx.lang.t("import-warnings-skipped") }}</dt><dd>{{ report.warnings_skipped }}</dd>
+  <dt>{{ ctx.lang.t("import-row-error") }}</dt><dd>{{ report.errors }}</dd>
+</dl>
+<div class="actions">
+  <a class="button" href="/meters/{{ meter }}">{{ ctx.lang.t("import-to-meter") }}</a>
+  <a class="button secondary" href="/import">{{ ctx.lang.t("import-another") }}</a>
+</div>
+{% endblock %}

@@ -69,6 +69,8 @@ struct ConfirmPage {
     meter: Option<MeterView>,
     value: String,
     at: String,
+    /// Zeitpunkt stammt aus den Bildmetadaten
+    at_from_photo: bool,
     note: String,
     hint: Option<String>,
     needs_confirm: bool,
@@ -237,10 +239,15 @@ fn confirm_page(
                 .collect(),
         }),
         value: form.map_or(suggested_value, |f| f.get("value").to_owned()),
+        // Vorgabe: Aufnahmezeit des Fotos, sonst jetzt (SPEC_IMG_CAPTURE_TIME)
         at: form.map_or_else(
-            || format::datetime_input(Utc::now().with_timezone(&ctx.page.tz).naive_local()),
+            || {
+                let at = view.draft.taken_at.unwrap_or_else(Utc::now);
+                format::datetime_input(at.with_timezone(&ctx.page.tz).naive_local())
+            },
             |f| f.get("at").to_owned(),
         ),
+        at_from_photo: form.is_none() && view.draft.taken_at.is_some(),
         note: form.map(|f| f.get("note").to_owned()).unwrap_or_default(),
         hint: plausibility
             .or(view.plausibility.as_ref())

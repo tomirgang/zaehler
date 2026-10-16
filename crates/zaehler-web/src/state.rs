@@ -19,10 +19,14 @@ pub struct WebConfig {
     pub version: &'static str,
     /// Grenze für Foto-Uploads in Byte (SPEC_SEC_UPLOADS)
     pub max_photo_bytes: usize,
+    /// Grenze für CSV-Uploads in Byte (SPEC_SEC_UPLOADS)
+    pub max_csv_bytes: usize,
 }
 
 /// Standard für `upload.max_photo_bytes`: 15 MiB.
 pub const DEFAULT_MAX_PHOTO_BYTES: usize = 15 * 1024 * 1024;
+/// Standard für `upload.max_csv_bytes`: 5 MiB.
+pub const DEFAULT_MAX_CSV_BYTES: usize = 5 * 1024 * 1024;
 
 impl WebConfig {
     #[must_use]
@@ -50,12 +54,19 @@ impl WebConfig {
             session_ttl_hours,
             version,
             max_photo_bytes: DEFAULT_MAX_PHOTO_BYTES,
+            max_csv_bytes: DEFAULT_MAX_CSV_BYTES,
         }
     }
 
     #[must_use]
     pub fn with_max_photo_bytes(mut self, bytes: usize) -> Self {
         self.max_photo_bytes = bytes;
+        self
+    }
+
+    #[must_use]
+    pub fn with_max_csv_bytes(mut self, bytes: usize) -> Self {
+        self.max_csv_bytes = bytes;
         self
     }
 }

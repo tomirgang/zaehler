@@ -22,6 +22,149 @@
   <dd>{% for (code, direction) in registers %}<span class="tag">{{ code }} ({{ direction }})</span> {% endfor %}</dd>
 </dl>
 
+{% let a = analysis %}
+<section class="analysis" aria-labelledby="analysis-title">
+  <h2 id="analysis-title">{{ ctx.lang.t("analysis-title") }}</h2>
+  {% for msg in a.invalid %}<p class="callout warning">{{ msg }}</p>{% endfor %}
+
+  {% if a.months.is_empty() %}
+  <p class="muted">{{ ctx.lang.t("analysis-no-data") }}</p>
+  {% else %}
+  <form method="get" class="form inline-form">
+    <div class="field">
+      <label for="month">{{ ctx.lang.t("analysis-reference-month") }}</label>
+      <select id="month" name="month">
+        {% for m in a.months %}<option value="{{ m.value }}"{% if m.selected %} selected{% endif %}>{{ m.label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="actions"><button type="submit" class="secondary">{{ ctx.lang.t("capture-meter-select") }}</button></div>
+  </form>
+
+  {% if let Some(title) = a.compare_title %}
+  <h3>{{ title }}</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("analysis-reference") }}</th>
+        <th class="num">{{ ctx.lang.t("analysis-reference-value") }} ({{ a.unit }})</th>
+        <th class="num">{{ ctx.lang.t("analysis-diff") }}</th>
+        <th class="num">{{ ctx.lang.t("analysis-diff-rel") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in a.comparisons %}
+      <tr>
+        <td>{{ c.label }}</td>
+        {% if c.incomplete %}
+        <td colspan="3" class="muted">{{ ctx.lang.t("analysis-incomplete") }}</td>
+        {% else %}
+        <td class="num">{{ c.reference }}</td>
+        <td class="num">{{ c.abs }}</td>
+        <td class="num">{{ c.rel }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endif %}
+
+  {% if let Some(y) = a.ytd %}
+  <h3>{{ ctx.lang.t("analysis-ytd-title") }}</h3>
+  <p class="hint">{{ y.label }}</p>
+  <dl class="facts">
+    <dt>{{ ctx.lang.t("analysis-current") }}</dt><dd>{% if y.current.is_empty() %}<span class="muted">{{ ctx.lang.t("analysis-incomplete") }}</span>{% else %}{{ y.current }} {{ a.unit }}{% endif %}</dd>
+    <dt>{{ ctx.lang.t("analysis-previous") }}</dt><dd>{% if y.previous.is_empty() %}<span class="muted">{{ ctx.lang.t("analysis-incomplete") }}</span>{% else %}{{ y.previous }} {{ a.unit }}{% endif %}</dd>
+    {% if !y.incomplete %}<dt>{{ ctx.lang.t("analysis-diff") }}</dt><dd>{{ y.abs }} {{ a.unit }} ({{ y.rel }})</dd>{% endif %}
+  </dl>
+  {% endif %}
+
+  <h3>{{ ctx.lang.t("analysis-forecast-title") }}</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("analysis-period") }}</th>
+        <th class="num">{{ ctx.lang.t("forecast-observed") }} ({{ a.unit }})</th>
+        <th class="num">{{ ctx.lang.t("forecast-projected") }} ({{ a.unit }})</th>
+        <th class="num">{{ ctx.lang.t("forecast-coverage") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in a.forecasts %}
+      <tr>
+        <td>{{ f.label }}</td>
+        {% if let Some(h) = f.hint %}
+        <td colspan="3" class="muted">{{ h }}</td>
+        {% else %}
+        <td class="num">{{ f.observed }}</td>
+        <td class="num">{{ f.projected }}</td>
+        <td class="num">{{ f.coverage }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint">{{ ctx.lang.t("forecast-hint") }}</p>
+
+  <div class="charts" data-chart-url="/meters/{{ id }}/chart.json" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
+    <h3 id="chart-monthly-title">{{ a.chart_title_monthly }}</h3>
+    <div class="chart" data-chart="monthly" role="img" aria-labelledby="chart-monthly-title"></div>
+    <h3 id="chart-cumulative-title">{{ a.chart_title_cumulative }}</h3>
+    <div class="chart" data-chart="cumulative" role="img" aria-labelledby="chart-cumulative-title"></div>
+    <details>
+      <summary>{{ ctx.lang.t("chart-table") }}</summary>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{ ctx.lang.t("analysis-month") }}</th>
+            <th class="num">{{ a.chart_year }} ({{ a.unit }})</th>
+            <th class="num">{{ a.chart_previous_year }} ({{ a.unit }})</th>
+            <th class="num">{{ ctx.lang.t("chart-cumulative-series") }}</th>
+            <th class="num">{{ ctx.lang.t("chart-forecast-series") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in a.chart_rows %}
+          <tr>
+            <td>{{ r.label }}</td>
+            <td class="num">{{ r.current }}</td>
+            <td class="num">{{ r.previous }}</td>
+            <td class="num">{{ r.cumulative }}</td>
+            <td class="num">{{ r.forecast }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  </div>
+
+  {% if !a.rows.is_empty() %}
+  <details>
+    <summary>{{ ctx.lang.t("analysis-monthly-table") }}</summary>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{ ctx.lang.t("analysis-month") }}</th>
+          <th class="num">{{ a.primary_label }} ({{ a.unit }})</th>
+          {% if a.has_export %}<th class="num">{{ ctx.lang.t("analysis-export") }} ({{ a.unit }})</th>{% endif %}
+          {% for code in a.register_codes %}<th class="num">{{ code }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in a.rows %}
+        <tr>
+          <td>{{ r.label }}</td>
+          <td class="num">{% if r.import.is_empty() %}<span class="muted">{{ ctx.lang.t("analysis-incomplete-short") }}</span>{% else %}{{ r.import }}{% endif %}</td>
+          {% if a.has_export %}<td class="num">{{ r.export }}</td>{% endif %}
+          {% for v in r.registers %}<td class="num">{{ v }}</td>{% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</section>
+
 <h2>{{ ctx.lang.t("meter-readings") }}</h2>
 {% if readings.is_empty() %}
 <p>{{ ctx.lang.t("readings-empty") }}</p>

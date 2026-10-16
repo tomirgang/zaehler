@@ -132,6 +132,7 @@ impl RecordReadings {
 | `confirmed_reading_id` | UUID NULL FK `readings` | gespeicherte Ablesung |
 | `corrected` | BOOLEAN NULL | bestätigter Wert weicht vom Vorschlag ab |
 | `created_at`, `finished_at` | TIMESTAMPTZ | Zeitstempel |
+| `taken_at` | TIMESTAMPTZ NULL | Aufnahmezeit aus den Bildmetadaten ({need}`SPEC_IMG_CAPTURE_TIME`, Migration `m20261016_000004_draft_taken_at`) |
 
 Index `(household_id, status, created_at)`.
 
@@ -181,7 +182,6 @@ trait ReadingRepository {
     async fn list_for_meter(&mut self, t: &Tenant, id: MeterId) -> Result<Vec<ReadingRow>, PortError>;
     async fn last_per_register(&mut self, t: &Tenant, id: MeterId) -> Result<Vec<ReadingRow>, PortError>;
     async fn insert(&mut self, t: &Tenant, r: &[NewReading]) -> Result<Vec<ReadingId>, PortError>; // Conflict bei Duplikat
-    async fn insert_skip_duplicates(&mut self, t: &Tenant, r: &[NewReading]) -> Result<InsertStats, PortError>;
     async fn delete(&mut self, t: &Tenant, id: ReadingId) -> Result<Option<DeletedReading>, PortError>;
     async fn photo_key(&mut self, t: &Tenant, id: ReadingId) -> Result<Option<BlobKey>, PortError>;
 }
@@ -365,7 +365,27 @@ auf höchstens `image.max_pixels` (Standard 2 000 000) verkleinern
 Nicht dekodierbare Dateien und HEIC ergeben einen Validierungsfehler mit
 Hinweis auf JPEG (`photo.unsupported`); Bilder mit mehr als 16 384 Pixeln
 Kantenlänge oder mehr als 512 MiB Dekodierspeicher ergeben `photo.too_large`.
-Gespeichert und an die AI gesendet wird nur das Ergebnis.
+Gespeichert und an die AI gesendet wird nur das Ergebnis; aus den Metadaten
+wird vorher nur die Aufnahmezeit übernommen ({need}`SPEC_IMG_CAPTURE_TIME`).
+```
+
+```{spec} Aufnahmezeit als Ablesezeitpunkt
+:id: SPEC_IMG_CAPTURE_TIME
+:status: implemented
+:satisfies: REQ_RDG_006
+:links: SPEC_IMG_PROCESSING, SPEC_TZ
+
+`zaehler-media` liest vor dem Dekodieren die EXIF-Daten des Originals
+(`kamadak-exif`): `DateTimeOriginal` mit `OffsetTimeOriginal`, sonst
+`DateTime` mit `OffsetTime`; ungültige Werte (z.B. `0000:00:00 00:00:00`)
+ergeben keine Zeit. Der Port liefert sie als `PhotoTime` (lokale Zeit,
+optionaler Offset) im `NormalizedJpeg`. `AnalysePhoto` rechnet mit Offset
+exakt, sonst in der Zeitzone des Haushalts nach UTC um, verwirft Zeitpunkte
+mehr als 5 Minuten in der Zukunft und speichert das Ergebnis im Entwurf
+(`ai_drafts.taken_at`, Migration `m20261016_000004_draft_taken_at`). Das
+Bestätigungsformular und das Formular „Neue Messstelle aus diesem Foto“
+({need}`SPEC_AI_NEW_METER`) verwenden diesen Zeitpunkt als Vorgabe mit dem
+Hinweis „Aufnahmezeit aus den Fotodaten“; ohne Aufnahmezeit gilt jetzt.
 ```
 
 ```{spec} AI-Entwürfe und Zuordnung
@@ -390,43 +410,75 @@ nur für den anlegenden Haushalt sichtbar. Metriken:
 `zaehler_ai_corrections_total{corrected}`.
 ```
 
+```{spec} Messstelle aus einem Foto anlegen
+:id: SPEC_AI_NEW_METER
+:status: implemented
+:satisfies: REQ_AI_007, REQ_MTR_001
+:links: SPEC_AI_DRAFTS, SPEC_MTR_MANAGE
+
+Einstieg über die Foto-Erfassung: Die Bestätigungsseite eines offenen
+Entwurfs bietet Ownern „Neue Messstelle aus diesem Foto“ an
+(`GET /meters/new?draft={id}`); Messstellenliste und leeres Formular
+verweisen auf `/capture`. Vorbelegung aus dem Vorschlag: Art (sonst Strom),
+Name = Bezeichnung der Art, Einheit nur bei Abweichung von der
+Standardeinheit, Zählernummer, Registercode (sonst `main`), Startstand,
+Nachkommastellen aus dem erkannten Wert (höchstens 3), Zeitpunkt = jetzt. Das
+Formular zeigt das Foto und überträgt die Entwurfs-ID im Feld `draft`.
+`POST /meters` mit `draft` ruft `CreateMeter::execute_from_draft` auf:
+Validierung wie {need}`SPEC_MTR_MANAGE`, zusätzlich ist mindestens ein
+Startstand Pflicht (`meter.photo_start_required`). In einer Transaktion
+entstehen Messstelle, Gerät, Register und Startstände; der erste Startstand
+erhält `source=photo`, `ai_confidence` und das kopierte Foto, der Entwurf wird
+mit `corrected` abgeschlossen. Nach dem `commit` wird das Entwurfsfoto
+gelöscht.
+```
+
 ### Auswertung und Prognose
 
 ```{spec} Monatsserien
 :id: SPEC_ANA_MONTHLY_SERIES
-:status: draft
+:status: implemented
 :satisfies: REQ_ANA_001
 :links: SPEC_CONS_INTERPOLATION, SPEC_TZ
 
-`series::monthly(intervals, months, calendar) -> Vec<MonthValue>` mit
-`MonthValue { month: Period, value: Option<Decimal> }`. Für jeden Monat werden
-Beginn und Ende über `Calendar` in UTC umgerechnet und
-`consumption_in` aufgerufen; `None`, wenn der Monat nicht vollständig durch
-Ablesungen abgedeckt ist. Werte werden erst bei der Anzeige gerundet. Die
+`series::monthly(registers, months, calendar) -> Vec<MonthValue>` mit
+`MonthValue { month: Period, value: Option<Decimal> }`; `registers` sind die
+Intervalle der beteiligten Register. Für jeden Monat werden Beginn und Ende
+über `Calendar` in UTC umgerechnet und `series::total_in` (Summe von
+`consumption_in` je Register) aufgerufen; `None`, wenn der Monat nicht
+vollständig durch Ablesungen abgedeckt ist. Die Monate reichen vom Monat der
+ersten Ablesung bis zum laufenden Monat. Werte werden erst bei der Anzeige gerundet. Die
 Summe der Monatswerte eines vollständig abgedeckten Zeitraums entspricht dem
 Verbrauch des Zeitraums (Property-Test).
 ```
 
 ```{spec} Aggregation über Register
 :id: SPEC_ANA_REGISTER_AGG
-:status: draft
+:status: implemented
 :satisfies: REQ_MTR_003, REQ_ANA_001
 
 Intervalle werden je Register gebildet ({need}`SPEC_CONS_DEVICE_SWAP`). Für
 die Messstelle gilt: Bezug = Summe aller Register mit Richtung `import`,
 Einspeisung = Summe aller Register mit Richtung `export`; ein Monatswert ist
-`None`, sobald ein beteiligtes Register `None` liefert. Die Auswertung zeigt
-Bezug, Einspeisung (falls vorhanden) und je Register eine Detailtabelle.
+`None`, sobald ein beteiligtes Register `None` liefert. Ablesungen zum selben
+Zeitpunkt werden nach der Einbaureihenfolge der Geräte sortiert (Endstand alt
+vor Startstand neu). Ein Register mit inkonsistenten Ablesungen (sinkender
+Stand ohne Überlauf) wird mit Hinweis angezeigt und liefert keine Werte.
+Hauptserie für Vergleiche, Prognose und Diagramme ist der Bezug, ohne
+Bezugsregister die Einspeisung. Die Auswertung zeigt Bezug, Einspeisung (falls
+vorhanden) und bei mehreren Registern je Register eine Spalte der
+Monatstabelle.
 ```
 
 ```{spec} Vergleichsansicht
 :id: SPEC_ANA_COMPARE_VIEW
-:status: draft
+:status: implemented
 :satisfies: REQ_ANA_003, REQ_ANA_004, REQ_ANA_005
 :links: SPEC_CMP_PERIODS, SPEC_CMP_DIFF
 
 Bezugsmonat ist der letzte vollständig abgedeckte Monat (wählbar über eine
-Monatsauswahl). Für ihn werden Vormonat, Vorjahresmonat und die
+Monatsauswahl, `GET /meters/{id}?month=JJJJ-MM`; nicht abgedeckte Monate
+fallen auf den letzten vollständigen zurück). Für ihn werden Vormonat, Vorjahresmonat und die
 Durchschnitte der letzten 3, 6 und 12 Monate mit absoluter und relativer
 Differenz ausgegeben. Ein Vergleich entfällt mit dem Hinweis
 „Daten unvollständig“, wenn einer der Referenzmonate `None` ist. Zusätzlich:
@@ -436,13 +488,15 @@ Vorjahres (Tag und Monat gleich, Schaltjahr: 28.02.).
 
 ```{spec} Prognose laufender Zeiträume
 :id: SPEC_FC_CURRENT_YEAR
-:status: draft
+:status: implemented
 :satisfies: REQ_FC_001
 :links: SPEC_FC_PERIOD_FORECAST
 
 Prognose für das laufende Kalenderjahr und, falls an der Messstelle ein
 Beginn des Abrechnungsjahres hinterlegt ist, für das laufende Abrechnungsjahr.
-Gemessen = `consumption_in(Beginn, letzte Ablesung)`; Prognose über
+Gemessen = Verbrauch vom Zeitraumbeginn bis zum Beginn des Tages der letzten
+gemeinsamen Ablesung aller Register (`analysis::forecast_period`), damit
+Messung und Gewichtung dieselben ganzen Tage umfassen; Prognose über
 `forecast::project` mit `SeasonProfile::uniform()` (das gelernte Profil folgt
 mit {need}`REQ_ANA_002`, v1). Ausgabe: gemessen, Prognose, Abdeckungsgrad.
 Ohne Ablesung nach dem Zeitraumbeginn bzw. ohne Ablesung vor dem
@@ -451,24 +505,31 @@ Zeitraumbeginn (Startwert fehlt) entfällt die Prognose mit Hinweis.
 
 ```{spec} Diagramme
 :id: SPEC_ANA_CHARTS
-:status: draft
+:status: implemented
 :satisfies: REQ_ANA_007
 :links: ADR_002
 
-Apache ECharts (eingebettet, nur auf Auswertungsseite und Dashboard geladen).
-`static/charts.js` liest `data-chart-url` eines Containers, lädt JSON von
-`GET /meters/{id}/chart.json` und rendert: (1) Monatsbalken laufendes Jahr
+Apache ECharts 5.6.0 (Apache-2.0, eingebettet als `static/echarts.min.js`).
+`static/charts.js` wird im Layout geladen; es lädt ECharts nur nach, wenn die
+Seite einen Container mit `data-chart-url` enthält (im MVP nur die
+Detailseite, das Dashboard enthält keine Diagramme), auch nach
+HTMX-Seitenwechseln und Wiederherstellung aus dem Verlauf. Es lädt JSON von
+`GET /meters/{id}/chart.json` (Monatsnamen in der Sprache des Nutzers, Werte
+auf 3 Stellen gerundet) und rendert: (1) Monatsbalken laufendes Jahr
 und Vorjahr nebeneinander, unvollständige Monate leer; (2) kumulierter
-Jahresverlauf als Linie, Prognose gestrichelt bis Jahresende. Kein
-Inline-Skript; Farben über CSS-Variablen ausgelesen. Unter jedem Diagramm
-steht dieselbe Information als Tabelle (`<details>`).
+Jahresverlauf als Linie, Prognose gestrichelt bis Jahresende
+(`analysis::projected_cumulative`, beginnend am letzten Monatsende mit
+Messwert). Kein Inline-Skript; Farben über CSS-Variablen ausgelesen; bei
+`prefers-reduced-motion` ohne Animation. Unter den Diagrammen steht dieselbe
+Information als Tabelle (`<details>`); schlägt das Laden fehl, bleiben nur
+die Tabellen.
 ```
 
 ### Dashboard, PWA, Import
 
 ```{spec} Dashboard
 :id: SPEC_UI_DASHBOARD
-:status: draft
+:status: implemented
 :satisfies: REQ_ANA_008, REQ_RDG_001
 
 Je aktive Messstelle eine Karte: Name, Art, letzter Stand mit Datum,
@@ -496,22 +557,36 @@ capture="environment">`.
 
 ```{spec} CSV-Format und Import-Ablauf
 :id: SPEC_IMP_CSV_FORMAT
-:status: draft
+:status: implemented
 :satisfies: REQ_IMP_001
 :links: SPEC_IMP_CSV
 
-Schritt 1 `POST /import/upload`: Datei (UTF-8, optional BOM; Trennzeichen
-`;`, `,` oder Tab, automatisch erkannt über die erste Zeile) wird unter
-`tmp/` abgelegt; der Schlüssel steht in der Sitzung. Schritt 2
-`POST /import/preview`: Zuordnung der Spalten (Datum, Uhrzeit optional, Wert,
-Register optional, Zählernummer optional, Notiz optional), Ziel-Messstelle,
-Datumsformat (`TT.MM.JJJJ`, `JJJJ-MM-TT`, ISO 8601 mit Zeit), Dezimaltrenner.
-Ohne Uhrzeit gilt 00:00 Uhr in der Zeitzone des Haushalts. Die Vorschau zeigt
-je Zeile Ergebnis (`ok`, `warnung`, `duplikat`, `fehler` mit Grund), maximal
-20 000 Zeilen. Schritt 3 `POST /import/commit`: Zeilen `ok` und bestätigte
-`warnung` werden mit `insert_skip_duplicates` in einer Transaktion
-gespeichert (`source=csv_import`), die Datei gelöscht. Metrik
-`zaehler_import_rows_total{result}`.
+Schritt 1 `POST /import/upload` (Multipart, Feld `_csrf`, Limit
+`upload.max_csv_bytes`): Datei (UTF-8, optional BOM, ohne NUL-Zeichen;
+Trennzeichen `;`, `,` oder Tab, das häufigste der ersten Zeile, bei Gleichstand
+in dieser Reihenfolge; höchstens 20 000 Datenzeilen) wird unter `tmp/`
+abgelegt; der Schlüssel steht in der Sitzung. Schritt 2 `GET /import/preview`:
+Zuordnung der Spalten (Datum, Uhrzeit optional, Wert, Register optional,
+Zählernummer optional, Notiz optional), Ziel-Messstelle (`?meter=`),
+Datumsformat (`TT.MM.JJJJ`, `JJJJ-MM-TT` jeweils optional mit Uhrzeit in
+derselben Spalte, ISO 8601 mit Zeit und optionalem Offset), Dezimaltrenner,
+Register für Zeilen ohne Angabe. Vorgeschlagen werden Überschrift (erste Zeile
+ohne Datum), Spalten über Schlüsselwörter (de/en) bzw. die erste Datenzeile,
+Datumsformat und Dezimaltrenner. Ohne Uhrzeit gilt 00:00 Uhr in der Zeitzone
+des Haushalts. `POST /import/preview` zeigt je Zeile Ergebnis (`ok`,
+`warnung`, `duplikat`, `fehler` mit Grund) und die Summen. Gerät: über die
+Zählernummer, sonst das zum Zeitpunkt eingebaute Gerät; Zeilen vor dem Einbau
+des ersten Geräts gehören zum ersten Gerät. Plausibilität je Register und
+Gerät gegen Vorgänger und Nachfolger aus vorhandenen und importierten
+Ablesungen. Duplikat = gleiches Register, Gerät, Zeitpunkt und Wert;
+abweichender Wert zum selben Zeitpunkt ist ein Fehler. Schritt 3
+`POST /import/commit`: Die Zeilen werden in der Transaktion erneut geprüft;
+Zeilen `ok` und mit `confirm_warnings` die Zeilen `warnung` werden mit
+`insert` gespeichert (`source=csv_import`), liegen sie vor dem Einbau des
+ersten Geräts, wird dessen Einbau vorverlegt. Danach wird die Datei gelöscht.
+Abweichend vom Port-Entwurf entfällt `insert_skip_duplicates`, da Duplikate
+bereits in der Prüfung innerhalb der Transaktion erkannt werden. Metriken
+`zaehler_import_rows_total{result}`, `zaehler_readings_created_total{source}`.
 ```
 
 ## HTTP-Schnittstelle
@@ -527,7 +602,7 @@ Member, `O` = Owner. `F` = HTMX-Fragment.
 | POST | `/auth/logout` | | Redirect | {need}`SPEC_TEN_OIDC` |
 | GET | `/auth/dev-login` | | Redirect | {need}`SPEC_TEN_DEV_LOGIN` |
 | GET | `/meters` | Viewer | Liste | {need}`SPEC_MTR_MANAGE` |
-| GET, POST | `/meters/new`, `/meters` | O | Formular, 303 | {need}`SPEC_MTR_MANAGE` |
+| GET, POST | `/meters/new`, `/meters` | O | Formular, 303; `?draft=` bzw. Feld `draft` übernimmt einen Foto-Entwurf | {need}`SPEC_MTR_MANAGE`, {need}`SPEC_AI_NEW_METER` |
 | GET | `/meters/{id}` | Viewer | Detail mit Ablesungen und Auswertung | {need}`SPEC_ANA_COMPARE_VIEW` |
 | GET | `/meters/{id}/chart.json` | Viewer | JSON | {need}`SPEC_ANA_CHARTS` |
 | GET, POST | `/meters/{id}/edit` | O | Formular, 303 | {need}`SPEC_MTR_MANAGE` |
@@ -622,7 +697,7 @@ Neue Abhängigkeiten je Crate:
 | `zaehler-web` | `openidconnect` 4, `tower-sessions` 0.15, `fluent-templates` 0.15 (dazu vorhandene `axum`, `askama`, `tower-http`) |
 | `zaehler-db` | `tower-sessions` 0.15 (nur Trait `SessionStore`) |
 | `zaehler-storage` | `object_store` 0.14 (Features `aws`) |
-| `zaehler-media` | `image` 0.25 (Features `jpeg`, `png`, `webp`) |
+| `zaehler-media` | `image` 0.25 (Features `jpeg`, `png`, `webp`), `kamadak-exif` 0.6 (Aufnahmezeit) |
 | `zaehler-ai` | Tests `wiremock` 0.6 |
 | `zaehler-server` | `opentelemetry` 0.33, `opentelemetry_sdk` 0.33, `opentelemetry-otlp` 0.33, `tracing-opentelemetry` 0.34 |
 

@@ -3,7 +3,12 @@
 {% block content %}
 <div class="page-head">
   <h1>{{ ctx.lang.t("meters-title") }}</h1>
-  {% if ctx.is_owner %}<a class="button" href="/meters/new">{{ ctx.lang.t("meters-new") }}</a>{% endif %}
+  {% if ctx.is_owner %}
+  <div class="actions">
+    <a class="button" href="/meters/new">{{ ctx.lang.t("meters-new") }}</a>
+    <a class="button secondary" href="/capture">{{ ctx.lang.t("meters-new-photo") }}</a>
+  </div>
+  {% endif %}
 </div>
 {% if meters.is_empty() %}
 <p>{{ ctx.lang.t("meters-empty") }}</p>

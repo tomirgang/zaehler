@@ -9,8 +9,11 @@ use zaehler_domain::{
 
 use crate::{
     AppError, FieldErrors, PortError, Role, Tenant,
-    ids::{DeviceId, MeterId, ReadingId, RegisterId},
-    model::{DeviceData, MeterAggregate, MeterData, MeterSummary, MonthDay, Reading, RegisterData},
+    ids::{BlobKey, DeviceId, DraftId, MeterId, ReadingId, RegisterId},
+    model::{
+        DeviceData, Draft, DraftOutcome, MeterAggregate, MeterData, MeterSummary, MonthDay,
+        Reading, RegisterData,
+    },
     usecase::{Ports, use_case, validate},
 };
 
@@ -199,9 +202,45 @@ async fn check_unique(
 impl CreateMeter {
     // @impl SPEC_MTR_MANAGE
     pub async fn execute(&self, t: &Tenant, input: MeterInput) -> Result<MeterId, AppError> {
+        self.create(t, input, None).await
+    }
+
+    /// Legt die Messstelle aus einem offenen Entwurf der Foto-Erfassung an:
+    /// Der erste Startstand erhält das Foto (`source = photo`), der Entwurf
+    /// wird als bestätigt abgeschlossen.
+    // @impl SPEC_AI_NEW_METER
+    pub async fn execute_from_draft(
+        &self,
+        t: &Tenant,
+        input: MeterInput,
+        draft: DraftId,
+    ) -> Result<MeterId, AppError> {
+        self.create(t, input, Some(draft)).await
+    }
+
+    // @impl SPEC_MTR_MANAGE, SPEC_AI_NEW_METER
+    async fn create(
+        &self,
+        t: &Tenant,
+        input: MeterInput,
+        draft_id: Option<DraftId>,
+    ) -> Result<MeterId, AppError> {
         t.require(Role::Owner)?;
-        validate_input(&input, true).into_result()?;
+        let mut e = validate_input(&input, true);
+        if draft_id.is_some() && input.registers.iter().all(|r| r.start_value.is_none()) {
+            e.add("register_0_start", "meter.photo_start_required");
+        }
+        e.into_result()?;
         let mut uow = self.p.uow.begin().await?;
+        let draft = match draft_id {
+            Some(id) => Some(
+                uow.drafts()
+                    .get_open(t, id)
+                    .await?
+                    .ok_or(AppError::NotFound)?,
+            ),
+            None => None,
+        };
         check_unique(&mut *uow, t, &input, None).await?;
 
         let now = self.p.clock.now();
@@ -241,12 +280,62 @@ impl CreateMeter {
                 ));
             }
         }
+        // Foto des Entwurfs wird Belegfoto des ersten Startstands
+        let photo = match (&draft, starts.first_mut()) {
+            (Some(d), Some(first)) => {
+                let (key, corrected) = take_draft_photo(t, d, first);
+                Some((d, first.id, key, corrected))
+            }
+            _ => None,
+        };
         if !starts.is_empty() {
             uow.readings().insert(t, &starts).await?;
         }
+        if let Some((d, reading, key, corrected)) = &photo {
+            self.p
+                .blobs
+                .copy(&d.photo_key, key)
+                .await
+                .map_err(AppError::from_storage)?;
+            uow.drafts()
+                .finish(
+                    t,
+                    d.id,
+                    DraftOutcome::Confirmed {
+                        reading: *reading,
+                        corrected: *corrected,
+                    },
+                    now,
+                )
+                .await?;
+        }
         uow.commit().await?;
+        if let Some((d, _, _, corrected)) = photo {
+            metrics::counter!("zaehler_readings_created_total", "source" => ReadingSource::Photo.as_str())
+                .increment(1);
+            if let Some(c) = corrected {
+                metrics::counter!("zaehler_ai_corrections_total", "corrected" => c.to_string())
+                    .increment(1);
+            }
+            // Entwurfsfoto erst nach dem commit (SPEC_ARCH_UOW)
+            if let Err(e) = self.p.blobs.delete(&d.photo_key).await {
+                tracing::warn!(error = %e, draft = %d.id, "draft photo not deleted");
+            }
+        }
         Ok(meter_id)
     }
+}
+
+/// Macht das Foto des Entwurfs zum Belegfoto der Ablesung; liefert den neuen
+/// Schlüssel und ob der Wert vom Vorschlag abweicht.
+// @impl SPEC_AI_NEW_METER
+fn take_draft_photo(t: &Tenant, d: &Draft, r: &mut Reading) -> (BlobKey, Option<bool>) {
+    let key = BlobKey::reading_photo(t.household_id(), r.id);
+    let suggestion = d.suggestion.as_ref();
+    r.source = ReadingSource::Photo;
+    r.photo_key = Some(key.clone());
+    r.ai_confidence = suggestion.map(|s| s.confidence);
+    (key, suggestion.map(|s| s.value != Some(r.value)))
 }
 
 fn new_reading(

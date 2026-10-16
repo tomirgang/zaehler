@@ -5,8 +5,9 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, Utc};
 use uuid::Uuid;
+use zaehler_domain::calendar::Calendar;
 
 use crate::{
     error::PortError,
@@ -196,6 +197,29 @@ pub struct NormalizedJpeg {
     pub bytes: Bytes,
     pub width: u32,
     pub height: u32,
+    /// Aufnahmezeit aus den Metadaten des Originals
+    pub taken_at: Option<PhotoTime>,
+}
+
+/// Aufnahmezeit aus den Bildmetadaten (EXIF `DateTimeOriginal`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhotoTime {
+    /// Uhrzeit der Kamera
+    pub local: NaiveDateTime,
+    /// Abweichung von UTC (`OffsetTimeOriginal`), falls angegeben
+    pub offset: Option<FixedOffset>,
+}
+
+impl PhotoTime {
+    /// Zeitpunkt in UTC; ohne Offset gilt die Zeitzone des Haushalts.
+    // @impl SPEC_IMG_CAPTURE_TIME
+    #[must_use]
+    pub fn to_utc(&self, cal: Calendar) -> DateTime<Utc> {
+        match self.offset {
+            Some(offset) => (self.local - offset).and_utc(),
+            None => cal.to_utc(self.local),
+        }
+    }
 }
 
 /// Prüft, richtet aus, verkleinert und kodiert ein hochgeladenes Foto.

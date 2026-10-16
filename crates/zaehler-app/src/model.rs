@@ -225,6 +225,8 @@ pub struct Draft {
     pub matched_meter_id: Option<MeterId>,
     pub status: DraftStatus,
     pub created_at: DateTime<Utc>,
+    /// Aufnahmezeit aus den Bildmetadaten (SPEC_IMG_CAPTURE_TIME)
+    pub taken_at: Option<DateTime<Utc>>,
 }
 
 /// Abschluss eines Entwurfs.

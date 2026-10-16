@@ -110,7 +110,8 @@ pub async fn build(config: &Config) -> anyhow::Result<App> {
                 config.session.ttl_hours,
                 env!("CARGO_PKG_VERSION"),
             )
-            .with_max_photo_bytes(config.upload.max_photo_bytes),
+            .with_max_photo_bytes(config.upload.max_photo_bytes)
+            .with_max_csv_bytes(config.upload.max_csv_bytes),
         ),
         oidc,
     };

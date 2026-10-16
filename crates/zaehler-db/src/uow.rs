@@ -878,6 +878,7 @@ fn to_draft(m: ai_draft::Model) -> PortResult<Draft> {
         matched_meter_id: m.matched_meter_id.map(MeterId),
         status: m.status.parse().map_err(data_err)?,
         created_at: m.created_at,
+        taken_at: m.taken_at,
     })
 }
 
@@ -911,6 +912,7 @@ impl DraftRepository for SeaOrmUow {
             corrected: Set(None),
             created_at: Set(d.created_at),
             finished_at: Set(None),
+            taken_at: Set(d.taken_at),
         })
         .exec_without_returning(&self.txn)
         .await

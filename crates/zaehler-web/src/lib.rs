@@ -48,6 +48,7 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
         )
         .route("/meters/new", get(pages::meters::new_form))
         .route("/meters/{id}", get(pages::meters::detail))
+        .route("/meters/{id}/chart.json", get(pages::analysis::chart))
         .route(
             "/meters/{id}/edit",
             get(pages::meters::edit_form).post(pages::meters::update),
@@ -67,6 +68,16 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
                 .post(pages::capture::analyse)
                 .layer(DefaultBodyLimit::max(state.cfg.max_photo_bytes)),
         )
+        .route("/import", get(pages::import::upload_form))
+        .route(
+            "/import/upload",
+            post(pages::import::upload).layer(DefaultBodyLimit::max(state.cfg.max_csv_bytes)),
+        )
+        .route(
+            "/import/preview",
+            get(pages::import::mapping).post(pages::import::preview),
+        )
+        .route("/import/commit", post(pages::import::commit))
         .route("/capture/{id}", get(pages::capture::show))
         .route("/capture/{id}/photo", get(pages::capture::photo))
         .route("/capture/{id}/confirm", post(pages::capture::confirm))

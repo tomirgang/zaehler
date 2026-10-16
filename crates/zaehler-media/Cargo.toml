@@ -12,7 +12,9 @@ zaehler-app.workspace = true
 
 async-trait.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 image.workspace = true
+kamadak-exif.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 
 [lints]

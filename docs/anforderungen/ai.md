@@ -73,3 +73,17 @@ vollständig abschaltbar halten. An OpenRouter werden nur das Bild/Dokument und
 ein fester Prompt übertragen, keine Nutzer- oder Haushaltsdaten. Fehler oder
 Zeitüberschreitungen führen zur manuellen Eingabe, nie zu Datenverlust.
 ```
+
+```{req} Messstelle per Foto anlegen
+:id: REQ_AI_007
+:status: accepted
+:priority: should
+:release: MVP
+
+Das System soll das Anlegen einer neuen Messstelle aus einem Foto des Zählers
+ermöglichen. Erkannte Angaben (Art, Einheit, Zählernummer, Register,
+Zählerstand) füllen das Formular als Vorschlag vor; alle Felder bleiben
+editierbar ({need}`REQ_AI_003`). Das Foto wird Belegfoto des Startstands.
+Ohne AI-Konfiguration bleibt der Ablauf mit leerem Formular und Foto nutzbar
+({need}`REQ_AI_006`).
+```

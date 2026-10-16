@@ -85,6 +85,7 @@ mod tests {
             bytes: Bytes::from_static(b"\xFF\xD8\xFFtest"),
             width: 1,
             height: 1,
+            taken_at: None,
         }
     }
 
