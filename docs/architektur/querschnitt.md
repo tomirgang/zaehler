@@ -62,7 +62,8 @@ Bezeichner (Tabellen, Spalten) werden nie aus Eingaben gebildet.
 
 Reihenfolge (spätere überschreiben frühere): eingebaute Defaults →
 TOML-Datei (`--config` / `ZAEHLER_CONFIG`) → Umgebungsvariablen `ZAEHLER_*`
-mit `__` als Trenner (`ZAEHLER_DATABASE__URL`). Geheimnisse sind nicht
+mit `__` als Trenner (`ZAEHLER_DATABASE__URL`), ergänzt um eine optionale
+`.env` im Arbeitsverzeichnis (gesetzte Variablen haben Vorrang). Geheimnisse sind nicht
 serialisierbar; `zaehler config` gibt die wirksame Konfiguration ohne
 Geheimnisse und mit maskierten Zugangsdaten in URLs aus.
 ```

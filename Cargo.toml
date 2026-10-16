@@ -29,6 +29,7 @@ bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
+dotenvy = "0.15"
 figment = { version = "0.10", features = ["env", "toml"] }
 futures = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

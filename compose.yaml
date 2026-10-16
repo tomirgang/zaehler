@@ -21,8 +21,8 @@ services:
         required: false
     environment:
       ZAEHLER_LOG__FORMAT: pretty
-      ZAEHLER_SERVER__PUBLIC_URL: ${ZAEHLER_PUBLIC_URL:-http://localhost:8080}
-      ZAEHLER_AUTH__DEV_LOGIN: ${ZAEHLER_DEV_LOGIN:-true}
+      ZAEHLER_SERVER__PUBLIC_URL: ${ZAEHLER_SERVER__PUBLIC_URL:-http://localhost:8080}
+      ZAEHLER_AUTH__DEV_LOGIN: ${ZAEHLER_AUTH__DEV_LOGIN:-true}
       ZAEHLER_DATABASE__URL: sqlite:///var/lib/zaehler/data/zaehler.db?mode=rwc
       ZAEHLER_STORAGE__KIND: fs
       ZAEHLER_STORAGE__PATH: /var/lib/zaehler/data/files

@@ -5,7 +5,9 @@ Quellen in aufsteigender Priorität ({need}`SPEC_OPS_CONFIG`):
 1. eingebaute Defaults
 2. TOML-Datei (`zaehler --config pfad.toml` oder `ZAEHLER_CONFIG`), Beispiel:
    `config/zaehler.example.toml`
-3. Umgebungsvariablen `ZAEHLER_<SEKTION>__<SCHLÜSSEL>`
+3. Umgebungsvariablen `ZAEHLER_<SEKTION>__<SCHLÜSSEL>`; eine `.env` im
+   Arbeitsverzeichnis wird zusätzlich eingelesen, bereits gesetzte Variablen
+   haben Vorrang (Vorlage: `.env.example`)
 
 `zaehler config` gibt die wirksame Konfiguration ohne Geheimnisse aus.
 

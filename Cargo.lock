@@ -5800,6 +5800,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "dotenvy",
  "figment",
  "metrics",
  "metrics-exporter-prometheus",

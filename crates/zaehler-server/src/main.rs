@@ -37,6 +37,12 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Optionale `.env` im Arbeitsverzeichnis; bereits gesetzte Variablen haben Vorrang.
+    if let Err(e) = dotenvy::dotenv()
+        && !e.not_found()
+    {
+        return Err(e).context(".env nicht lesbar");
+    }
     let cli = Cli::parse();
     let config = Config::load(cli.config.as_deref()).context("Konfiguration ungültig")?;
     telemetry::init_tracing(&config.log);
