@@ -85,6 +85,26 @@ pub struct MeterRecord {
     pub billing_start_day: Option<i16>,
     pub archived: bool,
     pub created_at: DateTime<Utc>,
+    /// Ab `m20261016_000008_meter_v1`
+    #[serde(default = "general_purpose")]
+    pub purpose: String,
+    #[serde(default)]
+    pub schedule_kind: Option<String>,
+    #[serde(default)]
+    pub schedule_value: Option<i16>,
+    #[serde(default)]
+    pub archived_at: Option<DateTime<Utc>>,
+    /// Ab `m20261016_000010_expectation`: angepasstes Profil als JSON
+    #[serde(default)]
+    pub season_weights: Option<String>,
+    #[serde(default)]
+    pub annual_target_milli: Option<i64>,
+    #[serde(default)]
+    pub target_tolerance_pct: Option<i16>,
+}
+
+fn general_purpose() -> String {
+    "general".into()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +116,9 @@ pub struct DeviceRecord {
     pub removed_at: Option<DateTime<Utc>>,
     pub rollover_digits: Option<i16>,
     pub decimal_places: i16,
+    /// Übergeordnete Messstelle (ab `m20261016_000008_meter_v1`)
+    #[serde(default)]
+    pub parent_meter_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +143,30 @@ pub struct ReadingRecord {
     pub note: Option<String>,
     pub created_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// Letzte Korrektur (ab `m20261016_000007_reading_revisions`)
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Revision einer Ablesung (ab `m20261016_000007_reading_revisions`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevisionRecord {
+    pub id: Uuid,
+    pub household_id: Uuid,
+    /// Ablesung; nach dem Löschen nicht mehr vorhanden
+    pub reading_id: Uuid,
+    pub meter_id: Uuid,
+    pub register_id: Uuid,
+    /// `update` oder `delete`
+    pub action: String,
+    pub changed_by: Uuid,
+    pub changed_at: DateTime<Utc>,
+    pub old_read_at: DateTime<Utc>,
+    pub old_value_milli: i64,
+    pub old_note: Option<String>,
+    pub new_read_at: Option<DateTime<Utc>>,
+    pub new_value_milli: Option<i64>,
+    pub new_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +191,34 @@ pub struct DraftRecord {
     pub analysis_started_at: Option<DateTime<Utc>>,
 }
 
+/// Einladung (ab `m20261016_000006_members`); nur im Installationsarchiv.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvitationRecord {
+    pub id: Uuid,
+    pub household_id: Uuid,
+    pub role: String,
+    /// SHA-256 des Tokens, hexadezimal
+    pub token_hash: String,
+    pub email: Option<String>,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub accepted_by: Option<Uuid>,
+    pub accepted_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// Benachrichtigungseinstellungen eines Nutzers (ab `m20261016_000009_jobs`);
+/// nur im Installationsarchiv.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationSettingRecord {
+    pub user_id: Uuid,
+    pub email: Option<String>,
+    pub reminder: bool,
+    pub alarm: bool,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Alle Datensätze eines Archivs. Sitzungen und temporäre Dateien sind nicht
 /// enthalten.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -164,6 +239,12 @@ pub struct BackupData {
     pub readings: Vec<ReadingRecord>,
     #[serde(default)]
     pub drafts: Vec<DraftRecord>,
+    #[serde(default)]
+    pub invitations: Vec<InvitationRecord>,
+    #[serde(default)]
+    pub revisions: Vec<RevisionRecord>,
+    #[serde(default)]
+    pub notification_settings: Vec<NotificationSettingRecord>,
 }
 
 impl BackupData {
@@ -190,7 +271,8 @@ impl BackupData {
         keys.into_iter().collect()
     }
 
-    /// Nur die Daten eines Haushalts; Nutzerkonten entfallen.
+    /// Nur die Daten eines Haushalts; Nutzerkonten, Einladungen und
+    /// Benachrichtigungseinstellungen entfallen.
     #[must_use]
     pub fn household(self, id: Uuid) -> Self {
         let meters: HashSet<Uuid> = self
@@ -238,6 +320,13 @@ impl BackupData {
                 .into_iter()
                 .filter(|d| d.household_id == id)
                 .collect(),
+            invitations: Vec::new(),
+            revisions: self
+                .revisions
+                .into_iter()
+                .filter(|r| r.household_id == id)
+                .collect(),
+            notification_settings: Vec::new(),
         }
     }
 

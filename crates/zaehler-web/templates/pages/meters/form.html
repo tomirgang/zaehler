@@ -66,12 +66,44 @@
     </div>
   </div>
 
+  <input type="hidden" name="meter_id" value="{{ form.meter_id }}">
   <div class="grid">
-    <div class="field{% if self.has_errs("reading_interval_days") %} has-error{% endif %}">
-      <label for="reading_interval_days">{{ ctx.lang.t("meter-interval") }}</label>
-      <input id="reading_interval_days" name="reading_interval_days" value="{{ form.interval }}" inputmode="numeric">
-      <p class="hint">{{ ctx.lang.t("meter-interval-hint") }}</p>
-      {% for e in self.errs("reading_interval_days") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    <div class="field{% if self.has_errs("purpose") %} has-error{% endif %}">
+      <label for="purpose">{{ ctx.lang.t("meter-purpose") }}</label>
+      <select id="purpose" name="purpose">
+        {% for (value, label) in purposes %}
+        <option value="{{ value }}"{% if self.same(value, form.purpose) %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">{{ ctx.lang.t("meter-purpose-hint") }}</p>
+      {% for e in self.errs("purpose") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("parent_meter_id") %} has-error{% endif %}">
+      <label for="parent_meter_id">{{ ctx.lang.t("meter-parent") }}</label>
+      <select id="parent_meter_id" name="parent_meter_id">
+        <option value="">{{ ctx.lang.t("meter-parent-none") }}</option>
+        {% for (value, label) in parents %}
+        <option value="{{ value }}"{% if self.same(value, form.parent) %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">{{ ctx.lang.t("meter-parent-hint") }}</p>
+      {% for e in self.errs("parent_meter_id") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="field{% if self.has_errs("schedule") %} has-error{% endif %}">
+      <label for="schedule_kind">{{ ctx.lang.t("meter-schedule") }}</label>
+      <div class="pair">
+        <select id="schedule_kind" name="schedule_kind">
+          <option value=""{% if form.schedule_kind.is_empty() %} selected{% endif %}>{{ ctx.lang.t("schedule-none") }}</option>
+          <option value="every_days"{% if self.same(form.schedule_kind, "every_days") %} selected{% endif %}>{{ ctx.lang.t("schedule-every-days") }}</option>
+          <option value="monthly"{% if self.same(form.schedule_kind, "monthly") %} selected{% endif %}>{{ ctx.lang.t("schedule-monthly") }}</option>
+        </select>
+        <input name="schedule_value" value="{{ form.schedule_value }}" inputmode="numeric" aria-label="{{ ctx.lang.t("schedule-value") }}">
+      </div>
+      <p class="hint">{{ ctx.lang.t("meter-schedule-hint") }}</p>
+      {% for e in self.errs("schedule") %}<p class="field-error">{{ e }}</p>{% endfor %}
     </div>
     <div class="field{% if self.has_errs("max_daily_rate") %} has-error{% endif %}">
       <label for="max_daily_rate">{{ ctx.lang.t("meter-max-rate") }}</label>
@@ -88,6 +120,36 @@
       {% for e in self.errs("billing_start") %}<p class="field-error">{{ e }}</p>{% endfor %}
     </div>
   </div>
+
+  <fieldset>
+    <legend>{{ ctx.lang.t("meter-expectation") }}</legend>
+    <p class="hint">{{ ctx.lang.t("meter-expectation-hint") }}</p>
+    <div class="grid">
+      <div class="field{% if self.has_errs("annual_target") %} has-error{% endif %}">
+        <label for="annual_target">{{ ctx.lang.t("meter-annual-target") }}</label>
+        <input id="annual_target" name="annual_target" value="{{ form.annual_target }}" inputmode="decimal">
+        {% for e in self.errs("annual_target") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field{% if self.has_errs("tolerance_pct") %} has-error{% endif %}">
+        <label for="tolerance_pct">{{ ctx.lang.t("meter-tolerance") }}</label>
+        <input id="tolerance_pct" name="tolerance_pct" value="{{ form.tolerance }}" inputmode="numeric" placeholder="20">
+        {% for e in self.errs("tolerance_pct") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    <details{% if self.has_errs("season_weights") %} open{% endif %}>
+      <summary>{{ ctx.lang.t("meter-season") }}</summary>
+      <p class="hint">{{ ctx.lang.t("meter-season-hint") }}</p>
+      {% for e in self.errs("season_weights") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      <div class="grid">
+        {% for (m, label, value) in self.season_rows() %}
+        <div class="field">
+          <label for="season_{{ m }}">{{ label }}</label>
+          <input id="season_{{ m }}" name="season_{{ m }}" value="{{ value }}" inputmode="decimal">
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+  </fieldset>
 
   {% if form.is_new %}
   <div class="field{% if self.has_errs("start_at") %} has-error{% endif %}">

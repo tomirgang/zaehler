@@ -32,7 +32,12 @@ Prometheus-Format unter `GET /metrics` auf `server.metrics_listen`
 | `zaehler_ai_request_duration_seconds` | |
 | `zaehler_ai_corrections_total` | `corrected` |
 | `zaehler_import_rows_total` | `result` |
-| `zaehler_housekeeping_removed_total` | `kind` (`draft`, `tmp`, `session`) |
+| `zaehler_housekeeping_removed_total` | `kind` (`draft`, `tmp`, `session`, `outbox`) |
+| `zaehler_leader` | Gauge: 1 auf der Instanz mit Leader-Lock |
+| `zaehler_job_runs_total` | `job` (`dispatch_outbox`, `send_reminders`, `housekeeping`), `outcome` (`ok`, `error`) |
+| `zaehler_outbox_pending` | Gauge: offene Outbox-Einträge |
+| `zaehler_outbox_failed_total` | |
+| `zaehler_notifications_total` | `kind` (`reminder`, `alarm`, `invitation`), `outcome` (`sent`, `error`) |
 
 ## Traces
 

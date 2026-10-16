@@ -112,7 +112,15 @@ async fn create_meter_due(c: &mut Client, csrf: &str, name: &str, interval: &str
                 ("serial_number", ""),
                 ("rollover_digits", ""),
                 ("decimal_places", "1"),
-                ("reading_interval_days", interval),
+                (
+                    "schedule_kind",
+                    if interval.is_empty() {
+                        ""
+                    } else {
+                        "every_days"
+                    },
+                ),
+                ("schedule_value", interval),
                 ("max_daily_rate", "50"),
                 ("billing_month", ""),
                 ("billing_day", ""),
@@ -150,7 +158,8 @@ async fn create_two_register_meter(
                 ("serial_number", ""),
                 ("rollover_digits", ""),
                 ("decimal_places", "1"),
-                ("reading_interval_days", ""),
+                ("schedule_kind", ""),
+                ("schedule_value", ""),
                 ("max_daily_rate", ""),
                 ("billing_month", ""),
                 ("billing_day", ""),
@@ -497,7 +506,8 @@ async fn new_meter_from_photo_is_prefilled_and_keeps_the_photo() {
                 ("serial_number", ""),
                 ("rollover_digits", ""),
                 ("decimal_places", "1"),
-                ("reading_interval_days", "30"),
+                ("schedule_kind", "every_days"),
+                ("schedule_value", "30"),
                 ("max_daily_rate", ""),
                 ("billing_month", ""),
                 ("billing_day", ""),
@@ -1546,4 +1556,219 @@ async fn responses_carry_a_request_id() {
         let res = c.send(req).await;
         assert_eq!(res.headers()["x-request-id"].len(), 36, "{invalid}");
     }
+}
+
+/// Link aus der Seite nach dem Erzeugen einer Einladung.
+fn invitation_link(html: &str) -> String {
+    let start = html
+        .find("id=\"invite-link\" value=\"")
+        .expect("Einladungslink")
+        + 24;
+    html[start..start + html[start..].find('"').unwrap()].to_owned()
+}
+
+// @test SPEC_TEN_INVITES, SPEC_TEN_ROLES
+#[tokio::test]
+async fn invitation_workflow_with_login_redirect_and_roles() {
+    let app = test_app(true);
+    let mut anna = Client::new(&app);
+    anna.login("anna").await;
+    let csrf = anna.csrf().await;
+    let res = anna
+        .post(
+            "/settings/invitations",
+            &[("_csrf", &csrf), ("role", "member"), ("email", "")],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let link = invitation_link(&text(res).await);
+    let path = link.trim_start_matches("http://localhost:8080").to_owned();
+    assert!(path.starts_with("/invite/"), "{path}");
+    // offene Einladung in der Liste, Link selbst nicht mehr
+    let html = text(anna.get("/settings/members").await).await;
+    assert!(html.contains("/revoke"));
+    assert!(!html.contains(&path));
+
+    // Bea ist nicht angemeldet: Anmeldung, danach zurück zur Einladung
+    let mut bea = Client::new(&app);
+    let res = bea.get(&path).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&res), "/auth/login");
+    let res = bea.get("/auth/dev-login?name=bea").await;
+    assert_eq!(location(&res), path);
+    let html = text(bea.get(&path).await).await;
+    assert!(html.contains("anna"), "Name des Haushalts");
+    let bea_csrf = bea.csrf().await;
+    let res = bea
+        .post(&format!("{path}/accept"), &[("_csrf", &bea_csrf)])
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    // Haushalt von Anna ist aktiv; Bea ist Mitglied und darf nicht einladen
+    let html = text(bea.get("/settings/members").await).await;
+    assert!(html.contains("anna") && html.contains("bea"));
+    assert!(!html.contains("/settings/invitations"));
+    let res = bea
+        .post(
+            "/settings/invitations",
+            &[("_csrf", &bea_csrf), ("role", "owner"), ("email", "")],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    // zweites Einlösen: ungültig ohne Angabe des Grundes
+    let res = bea
+        .post(&format!("{path}/accept"), &[("_csrf", &bea_csrf)])
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    assert!(text(res).await.contains("ungültig oder abgelaufen"));
+
+    // letzter Owner kann nicht austreten
+    let res = anna.post("/settings/leave", &[("_csrf", &csrf)]).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    // Bea tritt aus
+    let res = bea.post("/settings/leave", &[("_csrf", &bea_csrf)]).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let html = text(anna.get("/settings/members").await).await;
+    assert!(!html.contains(">bea<"));
+}
+
+/// ID der ersten Ablesung mit Bearbeiten-Link auf der Detailseite (neueste zuerst).
+fn first_editable_reading(html: &str) -> String {
+    let start = html.find("href=\"/readings/").expect("Bearbeiten-Link") + 16;
+    html[start..start + 36].to_owned()
+}
+
+// @test SPEC_RDG_HISTORY
+#[tokio::test]
+async fn reading_correction_with_confirmation_and_history() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let id = create_meter(&mut c, &csrf, "Hausstrom").await;
+    let register =
+        detail_register_id(&text(c.get(&format!("/meters/{id}/readings/new")).await).await);
+    let value_field = format!("value_{register}");
+    let res = c
+        .post(
+            &format!("/meters/{id}/readings"),
+            &[
+                ("_csrf", &csrf),
+                ("at", "2026-01-10T10:00"),
+                (&value_field, "1100,5"),
+                ("note", ""),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let detail = text(c.get(&format!("/meters/{id}")).await).await;
+    assert!(!detail.contains(&format!("/meters/{id}/history")));
+    let reading = first_editable_reading(&detail);
+    let path = format!("/readings/{reading}/edit");
+    let form = text(c.get(&path).await).await;
+    assert!(form.contains("1100,5") && form.contains("2026-01-10T10:00"));
+
+    // kleiner als der Startstand: Bestätigung nötig, nichts gespeichert
+    let lower = [
+        ("_csrf", csrf.as_str()),
+        ("at", "2026-01-10T10:00"),
+        ("value", "900"),
+        ("note", "Tippfehler"),
+    ];
+    let res = c.post(&path, &lower).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("Trotzdem speichern"));
+    let mut confirmed = lower.to_vec();
+    confirmed.push(("confirm_warnings", "true"));
+    let res = c.post(&path, &confirmed).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    let detail = text(c.get(&format!("/meters/{id}")).await).await;
+    assert!(detail.contains("geändert") && detail.contains("900,0"));
+    let history = text(c.get(&format!("/meters/{id}/history")).await).await;
+    assert!(history.contains("korrigiert") && history.contains("1100,5"));
+    assert!(history.contains("anna"));
+
+    // nach dem Löschen bleibt der Verlauf
+    let res = c
+        .post(&format!("/readings/{reading}/delete"), &[("_csrf", &csrf)])
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let history = text(c.get(&format!("/meters/{id}/history")).await).await;
+    assert!(history.contains("gelöscht") && history.contains("korrigiert"));
+    assert_eq!(c.get(&path).await.status(), StatusCode::NOT_FOUND);
+}
+
+/// Einheiten mit Hochzahl erscheinen als HTML-Entität.
+// @test SPEC_I18N
+#[tokio::test]
+async fn water_unit_rendered_with_sup3_entity() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let res = c
+        .post(
+            "/meters",
+            &[
+                ("_csrf", csrf.as_str()),
+                ("name", "Wasser"),
+                ("kind", "water"),
+                ("unit", ""),
+                ("decimal_places", "3"),
+                ("start_at", "2026-01-01T00:00"),
+                ("register_count", "1"),
+                ("register_0_code", "main"),
+                ("register_0_direction", "import"),
+                ("register_0_start", "10"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let detail = text(c.get(&location(&res)).await).await;
+    assert!(detail.contains("<dd>m&sup3;</dd>"), "{detail}");
+    let list = text(c.get("/meters").await).await;
+    assert!(list.contains("<td>m&sup3;</td>"));
+    assert!(!list.contains("<td>m³</td>"));
+}
+
+// @test SPEC_NTF_EMAIL
+#[tokio::test]
+async fn notification_settings_page() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let html = text(c.get("/settings").await).await;
+    assert!(html.contains("/settings/notifications"));
+    let html = text(c.get("/settings/notifications").await).await;
+    assert!(html.contains("nicht eingerichtet"), "Hinweis ohne SMTP");
+    assert!(html.contains(r#"name="reminder" value="true" checked"#));
+    let res = c
+        .post(
+            "/settings/notifications",
+            &[
+                ("_csrf", csrf.as_str()),
+                ("email", "kein-at"),
+                ("alarm", "true"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("aria-invalid"));
+    let res = c
+        .post(
+            "/settings/notifications",
+            &[
+                ("_csrf", csrf.as_str()),
+                ("email", "anna@privat.test"),
+                ("alarm", "true"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let html = text(c.get("/settings/notifications").await).await;
+    assert!(html.contains(r#"value="anna@privat.test""#));
+    assert!(html.contains(r#"name="reminder" value="true">"#));
+    assert!(html.contains(r#"name="alarm" value="true" checked"#));
+    assert!(html.contains("Benachrichtigungen gespeichert."));
 }

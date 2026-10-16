@@ -11,7 +11,7 @@
       <dt>{{ ctx.lang.t("reading-value") }}</dt><dd>{{ s.value }}</dd>
       <dt>{{ ctx.lang.t("capture-serial") }}</dt><dd>{{ s.serial }}</dd>
       <dt>{{ ctx.lang.t("reading-register") }}</dt><dd>{{ s.register }}</dd>
-      <dt>{{ ctx.lang.t("capture-unit") }}</dt><dd>{{ s.unit }}</dd>
+      <dt>{{ ctx.lang.t("capture-unit") }}</dt><dd>{{ crate::pages::unit_html(s.unit)|safe }}</dd>
       <dt>{{ ctx.lang.t("capture-confidence") }}</dt><dd>{{ s.confidence }} %</dd>
     </dl>
     <p class="hint">{{ ctx.lang.t("capture-suggestion-hint") }}</p>
@@ -50,7 +50,7 @@
         {% for e in self.errs("register_id") %}<p class="field-error">{{ e }}</p>{% endfor %}
       </div>
       <div class="field{% if self.has_errs("value") %} has-error{% endif %}">
-        <label for="value">{{ ctx.lang.t("reading-value") }} <span class="muted">({{ m.unit }})</span></label>
+        <label for="value">{{ ctx.lang.t("reading-value") }} <span class="muted">({{ crate::pages::unit_html(m.unit)|safe }})</span></label>
         <input id="value" name="value" value="{{ value }}" inputmode="decimal" autocomplete="off">
         {% if let Some(h) = hint %}<p class="warning">{{ h }}</p>{% endif %}
         {% for e in self.errs("value") %}<p class="field-error">{{ e }}</p>{% endfor %}

@@ -23,6 +23,9 @@ zugleich ist unzulässig.
 | `database.url` | `ZAEHLER_DATABASE__URL` | `sqlite://data/zaehler.db?mode=rwc` |
 | `database.max_connections` | `ZAEHLER_DATABASE__MAX_CONNECTIONS` | `10` |
 | `database.auto_migrate` | `ZAEHLER_DATABASE__AUTO_MIGRATE` | `true` |
+| `database.lock_url` | `ZAEHLER_DATABASE__LOCK_URL` | `database.url`; direkte Verbindung für den Leader-Lock, nicht über einen Pooler im Transaktionsmodus |
+| `scheduler.tick_seconds` | `ZAEHLER_SCHEDULER__TICK_SECONDS` | `60` |
+| `invitations.ttl_days` | `ZAEHLER_INVITATIONS__TTL_DAYS` | `7` |
 | `log.format` | `ZAEHLER_LOG__FORMAT` | `json` (`pretty`) |
 | `log.filter` | `ZAEHLER_LOG__FILTER` / `RUST_LOG` | `info` |
 | `storage.kind` | `ZAEHLER_STORAGE__KIND` | `fs` (`s3`) |
@@ -45,7 +48,7 @@ zugleich ist unzulässig.
 | `session.ttl_hours` | `ZAEHLER_SESSION__TTL_HOURS` | `720` (gleitend) |
 | `session.cookie_secure` | `ZAEHLER_SESSION__COOKIE_SECURE` | aus dem Schema von `public_url` |
 | `ai.api_key`, `ai.model`, `ai.base_url`, `ai.timeout_secs` | `ZAEHLER_AI__…` | Base-URL `https://openrouter.ai/api/v1`, 60 s |
-| `notify.smtp.*` | `ZAEHLER_NOTIFY__SMTP__…` | Port 587 |
+| `notify.smtp.host`, `port`, `security`, `username`, `password`, `from` | `ZAEHLER_NOTIFY__SMTP__…` | ohne `host` kein Versand; Port `587`, `security` `starttls` (`tls`, `none` nur mit `localhost`) |
 | `otel.endpoint` | `ZAEHLER_OTEL__ENDPOINT` | leer; ohne Angabe `OTEL_EXPORTER_OTLP_ENDPOINT`, sonst kein Trace-Export |
 | `otel.service_name` | `ZAEHLER_OTEL__SERVICE_NAME` | `zaehler` |
 
@@ -67,5 +70,18 @@ Ohne Abschnitt `ai` ist die automatische Erkennung abgeschaltet
 ({need}`REQ_AI_006`); die Foto-Erfassung speichert dann das Foto und
 verlangt die Eingabe des Stands von Hand. An OpenRouter gehen nur das
 verkleinerte JPEG ohne Metadaten und ein fester Prompt.
+
+Hintergrundjobs ({need}`SPEC_JOB_SCHEDULER`) laufen nur auf der Instanz mit
+dem Leader-Lock (PostgreSQL: Advisory-Lock über `database.lock_url`; SQLite:
+immer): `DispatchOutbox` in jedem Takt von `scheduler.tick_seconds`,
+`SendReminders` stündlich. Ohne `notify.smtp` werden keine E-Mails
+versendet; Einladungen erscheinen dann nur als Link. Erinnerungen gehen
+frühestens ab 08:00 Uhr in der Zeitzone des Haushalts und höchstens einmal je
+Tag an Mitglieder und Eigentümer; Alarme bei auffälligem Verbrauch höchstens
+einmal je Ablesung. Benutzername und Passwort sind nur gemeinsam zulässig.
+Der Mail-Server sollte SPF und DKIM für die Absenderdomain unterstützen,
+sonst landen E-Mails im Spam. Fehler beim Versand zeigt
+`zaehler_notifications_total{outcome="error"}`; die Outbox wiederholt mit
+Backoff bis zu zehn Versuche.
 
 Logs, Metriken und Traces beschreibt {doc}`observability`.

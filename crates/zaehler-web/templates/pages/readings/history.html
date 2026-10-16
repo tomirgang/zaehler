@@ -1,0 +1,38 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("history-title") }}: {{ meter_name }}</h1>
+  <div class="actions"><a class="button secondary" href="/meters/{{ meter_id }}">{{ ctx.lang.t("history-back") }}</a></div>
+</div>
+{% if rows.is_empty() %}
+<p>{{ ctx.lang.t("history-empty") }}</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>{{ ctx.lang.t("history-changed-at") }}</th>
+      <th>{{ ctx.lang.t("history-changed-by") }}</th>
+      <th>{{ ctx.lang.t("history-action") }}</th>
+      <th>{{ ctx.lang.t("reading-register") }}</th>
+      <th>{{ ctx.lang.t("history-old") }}</th>
+      <th>{{ ctx.lang.t("history-new") }}</th>
+      <th>{{ ctx.lang.t("reading-note") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.at }}</td>
+      <td>{{ r.by }}</td>
+      <td>{{ r.action }}</td>
+      <td>{{ r.register }}</td>
+      <td>{{ r.old }}</td>
+      <td>{{ r.new }}</td>
+      <td>{{ r.note }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

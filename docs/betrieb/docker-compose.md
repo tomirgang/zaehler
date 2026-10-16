@@ -57,4 +57,13 @@ ZAEHLER_NOTIFY__SMTP__HOST=smtp.example.com
 ZAEHLER_NOTIFY__SMTP__USERNAME=…
 ZAEHLER_NOTIFY__SMTP__PASSWORD=…
 ZAEHLER_NOTIFY__SMTP__FROM=zaehler@example.com
+# starttls (Standard, Port 587) oder tls (Port 465)
+ZAEHLER_NOTIFY__SMTP__SECURITY=starttls
+```
+
+Zum Ausprobieren ohne echten Mail-Server nimmt Mailpit alle E-Mails an und
+zeigt sie unter <http://localhost:8025>:
+
+```bash
+docker compose -f compose.yaml -f compose.mail.yaml up -d
 ```

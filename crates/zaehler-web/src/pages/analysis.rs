@@ -21,6 +21,7 @@ use zaehler_app::{
 use zaehler_domain::{
     analysis::{MonthComparison, PeriodForecast, YearToDate},
     comparison::Comparison,
+    expectation::{BandSource, MonthExpectation, Status},
     period::{Period, Reference},
     series::MonthValue,
 };
@@ -32,6 +33,58 @@ pub struct MonthRow {
     pub import: String,
     pub export: String,
     pub registers: Vec<String>,
+    /// Bezug ohne Zwischenzähler (SPEC_MTR_SUBMETER)
+    pub net: String,
+    /// Ampel des Monats (SPEC_ANA_TRAFFIC_LIGHT)
+    pub traffic: Option<TrafficView>,
+}
+
+/// Ampel mit Text; die Farbe ist nie die einzige Information (SPEC_A11Y).
+#[derive(Debug, Clone)]
+pub struct TrafficView {
+    /// `green`, `yellow` oder `red`
+    pub css: &'static str,
+    pub label: String,
+    /// Erwartungsbereich und Grundlage
+    pub detail: String,
+}
+
+/// Ampel eines Monats als Text; `None` ohne gemessenen Wert.
+// @impl SPEC_ANA_TRAFFIC_LIGHT
+#[must_use]
+pub fn traffic_view(
+    lang: Lang,
+    e: &MonthExpectation,
+    unit: &str,
+    places: u8,
+) -> Option<TrafficView> {
+    let css = match e.status? {
+        Status::Green => "green",
+        Status::Yellow => "yellow",
+        Status::Red => "red",
+    };
+    let source = match e.source {
+        BandSource::History => "history",
+        BandSource::Target => "target",
+    };
+    Some(TrafficView {
+        css,
+        label: lang.t(&format!("traffic-{css}")),
+        detail: lang.ta(
+            &format!("traffic-band-{source}"),
+            &[
+                ("lower", format::decimal(lang, e.band.lower, places)),
+                ("upper", format::decimal(lang, e.band.upper, places)),
+                ("unit", unit.to_owned()),
+            ],
+        ),
+    })
+}
+
+/// Zwischenzähler der Messstelle.
+pub struct SubmeterView {
+    pub id: String,
+    pub name: String,
 }
 
 pub struct MonthChoice {
@@ -126,6 +179,14 @@ pub struct AnalysisView {
     pub chart_source: Option<String>,
     /// Nur bei mehreren Registern, ohne das alleinige Quellregister
     pub register_views: Vec<RegisterView>,
+    /// Zwischenzähler (SPEC_MTR_SUBMETER)
+    pub submeters: Vec<SubmeterView>,
+    /// Vergleiche beziehen sich auf den Bezug ohne Zwischenzähler
+    pub excluding_submeters: bool,
+    /// Herkunft des Saisonprofils der Prognosen
+    pub profile_note: String,
+    /// Ampel des Bezugsmonats
+    pub month_traffic: Option<TrafficView>,
 }
 
 fn opt(lang: Lang, v: Option<Decimal>, places: u8) -> String {
@@ -234,6 +295,8 @@ fn forecast_view(lang: Lang, f: &ScopedForecast, places: u8) -> ForecastView {
 pub fn view(lang: Lang, a: &Analysis) -> AnalysisView {
     let agg = &a.detail.aggregate;
     let places = agg.active_device().map_or(1, |d| d.data.decimal_places);
+    // die Tabelle zeigt immer den Bezug mit Zwischenzählern, der Nettowert
+    // steht in einer eigenen Spalte
     let main: &[MonthValue] = if a.import.is_empty() {
         &a.export
     } else {
@@ -307,6 +370,20 @@ pub fn view(lang: Lang, a: &Analysis) -> AnalysisView {
         } else {
             Vec::new()
         },
+        submeters: a
+            .submeters
+            .iter()
+            .map(|s| SubmeterView {
+                id: s.meter.id.to_string(),
+                name: s.meter.data.name.clone(),
+            })
+            .collect(),
+        excluding_submeters: a.excluding_submeters,
+        profile_note: lang.t(&format!("profile-{}", a.profile_source.as_str())),
+        month_traffic: a
+            .month_expectation
+            .as_ref()
+            .and_then(|e| traffic_view(lang, e, &agg.meter.data.unit, places)),
     }
 }
 
@@ -472,8 +549,24 @@ fn month_rows(
             } else {
                 Vec::new()
             },
+            net: opt(lang, a.import_net.get(i).and_then(|v| v.value), places),
+            traffic: expectation_of(a, m.month)
+                .and_then(|e| traffic_view(lang, &e, &a.detail.aggregate.meter.data.unit, places)),
         })
         .collect()
+}
+
+/// Erwartung eines Monats der Hauptreihe (gleiche Reihenfolge wie die Monate).
+fn expectation_of(a: &Analysis, month: Period) -> Option<MonthExpectation> {
+    let main = if a.excluding_submeters {
+        &a.import_net
+    } else if a.import.is_empty() {
+        &a.export
+    } else {
+        &a.import
+    };
+    let i = main.iter().position(|m| m.month == month)?;
+    a.expectations.get(i).copied().flatten()
 }
 
 fn ytd_view(lang: Lang, y: &YearToDate, places: u8) -> YtdView {

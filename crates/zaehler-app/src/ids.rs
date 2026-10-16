@@ -48,6 +48,12 @@ id_type!(
     ReadingId,
     /// AI-Entwurf der Foto-Erfassung
     DraftId,
+    /// Einladung in einen Haushalt
+    InvitationId,
+    /// Änderung an einer Ablesung
+    RevisionId,
+    /// Eintrag der Outbox
+    OutboxId,
 );
 
 /// Schlüssel im Objektspeicher, immer unter `households/{household_id}/`.

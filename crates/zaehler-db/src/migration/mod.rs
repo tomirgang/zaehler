@@ -8,6 +8,11 @@ mod m20261015_000002_mvp;
 mod m20261015_000003_ai_drafts;
 mod m20261016_000004_draft_taken_at;
 mod m20261016_000005_draft_analysis_started_at;
+mod m20261016_000006_members;
+mod m20261016_000007_reading_revisions;
+mod m20261016_000008_meter_v1;
+mod m20261016_000009_jobs;
+mod m20261016_000010_expectation;
 
 pub struct Migrator;
 
@@ -20,6 +25,11 @@ impl MigratorTrait for Migrator {
             Box::new(m20261015_000003_ai_drafts::Migration),
             Box::new(m20261016_000004_draft_taken_at::Migration),
             Box::new(m20261016_000005_draft_analysis_started_at::Migration),
+            Box::new(m20261016_000006_members::Migration),
+            Box::new(m20261016_000007_reading_revisions::Migration),
+            Box::new(m20261016_000008_meter_v1::Migration),
+            Box::new(m20261016_000009_jobs::Migration),
+            Box::new(m20261016_000010_expectation::Migration),
         ]
     }
 }

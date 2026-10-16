@@ -4,7 +4,7 @@ use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::period::Period;
+use crate::{meter::MeterKind, period::Period, series::MonthValue};
 
 /// Saisonprofil: relativer Anteil jedes Kalendermonats am Jahresverbrauch.
 /// Innerhalb eines Monats wird gleichmäßig auf die Tage verteilt.
@@ -49,6 +49,52 @@ impl SeasonProfile {
         }
         Self {
             monthly_weights: avgs.map(|a| a / total * total_uniform),
+        }
+    }
+
+    /// Standardprofil einer Art (SPEC_ANA_TRAFFIC_LIGHT): Gas und Wärme mit
+    /// Heizperiode, alle anderen gleichverteilt.
+    // @impl SPEC_ANA_TRAFFIC_LIGHT
+    #[must_use]
+    pub fn default_for(kind: MeterKind) -> Self {
+        match kind {
+            MeterKind::Gas | MeterKind::Heat => Self {
+                monthly_weights: [17, 15, 12, 8, 4, 2, 2, 2, 4, 8, 12, 14].map(Decimal::from),
+            },
+            _ => Self::uniform(),
+        }
+    }
+
+    /// Gelerntes Profil, sobald die Reihe mindestens 12 aufeinanderfolgende
+    /// vollständige Monate enthält; gelernt wird aus allen vollständigen
+    /// Monaten (SPEC_FC_SEASON_PROFILE).
+    // @impl SPEC_FC_SEASON_PROFILE
+    #[must_use]
+    pub fn learn_series(series: &[MonthValue]) -> Option<Self> {
+        let mut run = 0;
+        let mut longest = 0;
+        for m in series {
+            run = if m.value.is_some() { run + 1 } else { 0 };
+            longest = longest.max(run);
+        }
+        if longest < 12 {
+            return None;
+        }
+        let samples: Vec<(u32, Decimal)> = series
+            .iter()
+            .filter_map(|m| m.value.map(|v| (m.month.start.month(), v)))
+            .collect();
+        Some(Self::learn(&samples))
+    }
+
+    /// Anteil des Zeitraums am Gewicht seines Kalenderjahres.
+    #[must_use]
+    pub fn share_of_year(&self, period: Period) -> Decimal {
+        let total = self.weight(Period::year(period.start.year()));
+        if total.is_zero() {
+            Decimal::ZERO
+        } else {
+            self.weight(period) / total
         }
     }
 
@@ -143,6 +189,43 @@ mod tests {
         assert_eq!(f.projected_total, dec!(3650));
         assert_eq!(f.coverage, dec!(0.2493));
         assert!(f.estimated_start());
+    }
+
+    // @test SPEC_FC_SEASON_PROFILE, SPEC_ANA_TRAFFIC_LIGHT
+    #[test]
+    fn defaults_and_learning_from_twelve_consecutive_months() {
+        let gas = SeasonProfile::default_for(MeterKind::Gas);
+        let total: Decimal = gas.monthly_weights.iter().sum();
+        assert_eq!(total, dec!(100));
+        assert_eq!(
+            gas.share_of_year(Period::month_of(d(1, 1))).round_dp(2),
+            dec!(0.17)
+        );
+        assert_eq!(
+            SeasonProfile::default_for(MeterKind::Electricity),
+            SeasonProfile::uniform()
+        );
+
+        let month = |m: u32, y: i32| Period::month_of(NaiveDate::from_ymd_opt(y, m, 1).unwrap());
+        let mut series: Vec<MonthValue> = (1..=11)
+            .map(|m| MonthValue {
+                month: month(m, 2025),
+                value: Some(if m <= 3 { dec!(300) } else { dec!(100) }),
+            })
+            .collect();
+        assert_eq!(SeasonProfile::learn_series(&series), None, "11 Monate");
+        series.push(MonthValue {
+            month: month(12, 2025),
+            value: None,
+        });
+        series.push(MonthValue {
+            month: month(1, 2026),
+            value: Some(dec!(300)),
+        });
+        assert_eq!(SeasonProfile::learn_series(&series), None, "Lücke");
+        series[11].value = Some(dec!(250));
+        let learned = SeasonProfile::learn_series(&series).expect("12 Monate");
+        assert!(learned.monthly_weights[0] > learned.monthly_weights[6]);
     }
 
     // @test SPEC_FC_SEASON_PROFILE

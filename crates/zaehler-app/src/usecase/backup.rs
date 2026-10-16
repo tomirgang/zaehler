@@ -236,6 +236,7 @@ pub fn remap_household(
     let known = |old: Uuid, ids: &HashMap<Uuid, Uuid>| ids.get(&old).copied().ok_or_else(invalid);
     for d in &mut data.devices {
         d.meter_id = known(d.meter_id, &ids)?;
+        d.parent_meter_id = d.parent_meter_id.map(|p| known(p, &ids)).transpose()?;
         d.id = map(d.id, &mut ids);
     }
     for r in &mut data.registers {
@@ -263,7 +264,18 @@ pub fn remap_household(
         let key = BlobKey::draft_photo(hh, DraftId(d.id));
         keys.insert(std::mem::replace(&mut d.photo_key, key.to_string()), key);
     }
+    for r in &mut data.revisions {
+        r.id = map(r.id, &mut ids);
+        r.household_id = new_household;
+        r.meter_id = known(r.meter_id, &ids)?;
+        r.register_id = known(r.register_id, &ids)?;
+        // gelöschte Ablesungen haben keine neue ID; sie erhalten eine eigene
+        r.reading_id = map(r.reading_id, &mut ids);
+        r.changed_by = owner;
+    }
     data.users.clear();
+    data.invitations.clear();
+    data.notification_settings.clear();
     data.memberships = vec![MembershipRecord {
         household_id: new_household,
         user_id: owner,

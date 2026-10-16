@@ -141,6 +141,65 @@ pub fn monthly(registers: &[&[Interval]], months: &[Period], cal: Calendar) -> V
         .collect()
 }
 
+/// Zeitraum `[from, until)`, in dem ein Zwischenzähler einer Messstelle
+/// zugeordnet ist (Einbauzeit des Geräts); `until = None` bis heute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Window {
+    pub from: DateTime<Utc>,
+    pub until: Option<DateTime<Utc>>,
+}
+
+/// Monatsverbrauch der Register innerhalb der Zeitfenster: außerhalb 0,
+/// `None`, wenn ein Fenster im Monat nicht durch Ablesungen abgedeckt ist.
+// @impl SPEC_MTR_SUBMETER
+#[must_use]
+pub fn monthly_within(
+    registers: &[&[Interval]],
+    windows: &[Window],
+    months: &[Period],
+    cal: Calendar,
+) -> Vec<MonthValue> {
+    months
+        .iter()
+        .map(|m| {
+            let (start, end) = (cal.start_of(m.start), cal.start_of(m.end));
+            let value = windows
+                .iter()
+                .filter_map(|w| {
+                    let from = start.max(w.from);
+                    let to = w.until.map_or(end, |u| end.min(u));
+                    (from < to).then_some((from, to))
+                })
+                .map(|(from, to)| total_in(registers, from, to))
+                .sum::<Option<Decimal>>();
+            MonthValue { month: *m, value }
+        })
+        .collect()
+}
+
+/// Monatswerte abzüglich der Teile (z.B. Zwischenzähler); `None`, sobald
+/// der Hauptwert oder ein Teil im Monat fehlt.
+// @impl SPEC_MTR_SUBMETER
+#[must_use]
+pub fn subtract(main: &[MonthValue], parts: &[Vec<MonthValue>]) -> Vec<MonthValue> {
+    main.iter()
+        .map(|m| {
+            let parts: Option<Decimal> = parts
+                .iter()
+                .map(|p| {
+                    p.iter()
+                        .find(|x| x.month == m.month)
+                        .map_or(Some(Decimal::ZERO), |x| x.value)
+                })
+                .sum();
+            MonthValue {
+                month: m.month,
+                value: m.value.zip(parts).map(|(v, p)| v - p),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +224,57 @@ mod tests {
             device_id: Uuid::nil(),
             rollover_digits: None,
         }
+    }
+
+    // @test SPEC_MTR_SUBMETER
+    #[test]
+    fn submeters_are_subtracted_only_while_assigned() {
+        let cal = berlin();
+        let at = |m: u32| cal.start_of(d(2026, m, 1));
+        let house = intervals(&[
+            reading(at(1), dec!(0)),
+            reading(at(2), dec!(500)),
+            reading(at(3), dec!(900)),
+            reading(at(4), dec!(1300)),
+        ])
+        .unwrap();
+        // Wärmepumpe: Januar und Februar Zwischenzähler, ab März eigener Zähler
+        let pump = intervals(&[
+            reading(at(1), dec!(0)),
+            reading(at(2), dec!(200)),
+            reading(at(3), dec!(350)),
+            reading(at(4), dec!(450)),
+        ])
+        .unwrap();
+        let months = months_between(d(2026, 1, 1), d(2026, 4, 1));
+        let windows = [Window {
+            from: at(1),
+            until: Some(at(3)),
+        }];
+        let part = monthly_within(&[&pump], &windows, &months, cal);
+        assert_eq!(
+            part.iter().map(|m| m.value).collect::<Vec<_>>(),
+            [
+                Some(dec!(200)),
+                Some(dec!(150)),
+                Some(dec!(0)),
+                Some(dec!(0))
+            ]
+        );
+        let main = monthly(&[&house], &months, cal);
+        let net = subtract(&main, &[part]);
+        assert_eq!(
+            net.iter().map(|m| m.value).collect::<Vec<_>>(),
+            [Some(dec!(300)), Some(dec!(250)), Some(dec!(400)), None]
+        );
+        // fehlt der Zwischenzähler im Monat, fehlt der Nettowert
+        let open = [Window {
+            from: at(1),
+            until: None,
+        }];
+        let part = monthly_within(&[&pump], &open, &months, cal);
+        assert_eq!(part[3].value, None);
+        assert_eq!(subtract(&main, &[part])[2].value, Some(dec!(300)));
     }
 
     // @test SPEC_ANA_MONTHLY_SERIES

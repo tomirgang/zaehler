@@ -17,6 +17,18 @@ pub struct Model {
     pub billing_start_day: Option<i16>,
     pub archived: bool,
     pub created_at: DateTimeUtc,
+    /// `zaehler_domain::meter::MeterPurpose` (`m20261016_000008_meter_v1`)
+    pub purpose: String,
+    /// `every_days` oder `monthly`; ohne Wert gilt `reading_interval_days`
+    pub schedule_kind: Option<String>,
+    pub schedule_value: Option<i16>,
+    pub archived_at: Option<DateTimeUtc>,
+    /// 12 Monatsgewichte als JSON (`m20261016_000010_expectation`)
+    #[sea_orm(column_type = "Text", nullable)]
+    pub season_weights: Option<String>,
+    /// Festkomma, Skala 10⁻³ (siehe [`crate::fixed`]).
+    pub annual_target_milli: Option<i64>,
+    pub target_tolerance_pct: Option<i16>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

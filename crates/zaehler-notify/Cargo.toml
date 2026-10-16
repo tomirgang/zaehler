@@ -8,9 +8,19 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+zaehler-app.workspace = true
+
 async-trait.workspace = true
+chrono.workspace = true
+fluent-templates = "0.15"
+lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "pool", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
+rust_decimal.workspace = true
 serde.workspace = true
-thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+lettre = { version = "0.11", default-features = false, features = ["builder", "tokio1"] }
+tokio.workspace = true
 
 [lints]
 workspace = true

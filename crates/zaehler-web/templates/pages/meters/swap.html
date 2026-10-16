@@ -38,6 +38,20 @@
     </table>
   </fieldset>
 
+  {% if !parents.is_empty() %}
+  <div class="field{% if self.has_errs("parent_meter_id") %} has-error{% endif %}">
+    <label for="parent_meter_id">{{ ctx.lang.t("meter-parent") }}</label>
+    <select id="parent_meter_id" name="parent_meter_id">
+      <option value="">{{ ctx.lang.t("meter-parent-none") }}</option>
+      {% for (value, label) in parents %}
+      <option value="{{ value }}"{% if self.same(value, parent) %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <p class="hint">{{ ctx.lang.t("swap-parent-hint") }}</p>
+    {% for e in self.errs("parent_meter_id") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+  {% endif %}
+
   <fieldset>
     <legend>{{ ctx.lang.t("swap-new") }}</legend>
     <div class="grid">

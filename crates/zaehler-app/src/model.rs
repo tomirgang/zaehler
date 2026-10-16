@@ -6,12 +6,17 @@ use chrono_tz::Tz;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use zaehler_domain::{
-    meter::{Direction, MeterKind},
+    forecast::SeasonProfile,
+    meter::{Direction, MeterKind, MeterPurpose},
     reading::ReadingSource,
+    schedule::ReadingSchedule,
 };
 
 use crate::{
-    ids::{BlobKey, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
+    ids::{
+        BlobKey, DeviceId, DraftId, HouseholdId, InvitationId, MeterId, OutboxId, ReadingId,
+        RegisterId, RevisionId, UserId,
+    },
     tenant::Role,
 };
 
@@ -42,6 +47,51 @@ pub struct HouseholdSummary {
     pub role: Role,
 }
 
+/// Mitglied eines Haushalts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Member {
+    pub user_id: UserId,
+    pub display_name: String,
+    pub role: Role,
+}
+
+/// Einladung in einen Haushalt (SPEC_TEN_INVITES). Gespeichert wird nur der
+/// SHA-256 des Tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Invitation {
+    pub id: InvitationId,
+    pub household_id: HouseholdId,
+    pub household_name: String,
+    pub role: Role,
+    pub email: Option<String>,
+    pub created_by: UserId,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub accepted_by: Option<UserId>,
+    pub accepted_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+impl Invitation {
+    /// Weder angenommen noch widerrufen noch abgelaufen.
+    #[must_use]
+    pub fn is_open(&self, now: DateTime<Utc>) -> bool {
+        self.accepted_at.is_none() && self.revoked_at.is_none() && self.expires_at > now
+    }
+}
+
+/// Neue Einladung; `token_hash` ist der SHA-256 des Tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewInvitation {
+    pub id: InvitationId,
+    pub role: Role,
+    pub token_hash: [u8; 32],
+    pub email: Option<String>,
+    pub created_by: UserId,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HouseholdData {
     pub name: String,
@@ -66,9 +116,71 @@ pub struct MeterData {
     pub name: String,
     pub kind: MeterKind,
     pub unit: String,
-    pub reading_interval_days: Option<u16>,
+    /// Ableseplan (SPEC_RDG_SCHEDULE)
+    pub schedule: Option<ReadingSchedule>,
     pub max_daily_rate: Option<Decimal>,
     pub billing_start: Option<MonthDay>,
+    /// Verwendungszweck (SPEC_MTR_SUBMETER)
+    pub purpose: MeterPurpose,
+    /// Jahresziel und Saisonprofil für Prognose und Ampel
+    /// (SPEC_ANA_TRAFFIC_LIGHT)
+    pub targets: MeterTargets,
+}
+
+/// Vorgaben für Erwartung und Ampel einer Messstelle.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MeterTargets {
+    /// Angepasstes Standardprofil (12 Monatsgewichte); ohne gilt das
+    /// gelernte oder das Standardprofil der Art
+    pub season_weights: Option<SeasonProfile>,
+    /// Erwarteter Jahresverbrauch in der Einheit der Messstelle
+    pub annual_target: Option<Decimal>,
+    /// Toleranz um das Ziel in Prozent; ohne Angabe 20
+    pub tolerance_pct: Option<u8>,
+}
+
+/// Angepasstes Saisonprofil als JSON (12 Gewichte als Zeichenketten).
+#[must_use]
+pub fn season_weights_to_json(profile: &SeasonProfile) -> String {
+    serde_json::to_string(&profile.monthly_weights).unwrap_or_default()
+}
+
+/// Angepasstes Saisonprofil aus seinem JSON; `None` bei ungültigem Inhalt.
+#[must_use]
+pub fn season_weights_from_json(json: &str) -> Option<SeasonProfile> {
+    serde_json::from_str(json)
+        .ok()
+        .map(|monthly_weights| SeasonProfile { monthly_weights })
+}
+
+/// Ableseplan aus den gespeicherten Spalten (`schedule_kind`,
+/// `schedule_value`); ohne Art gilt der Turnus `reading_interval_days`
+/// aus dem Schema vor `m20261016_000008_meter_v1`.
+#[must_use]
+pub fn schedule_from_columns(
+    kind: Option<&str>,
+    value: Option<i64>,
+    legacy_interval_days: Option<i64>,
+) -> Option<ReadingSchedule> {
+    match (kind, value) {
+        (Some(kind), Some(value)) => ReadingSchedule::from_parts(kind, u16::try_from(value).ok()?),
+        _ => legacy_interval_days
+            .and_then(|d| u16::try_from(d).ok())
+            .map(ReadingSchedule::EveryDays),
+    }
+}
+
+/// Gespeicherte Spalten eines Ableseplans: Art, Zahl und für ältere
+/// Programmversionen der Turnus in Tagen.
+#[must_use]
+pub fn schedule_columns(
+    schedule: Option<ReadingSchedule>,
+) -> (Option<&'static str>, Option<u16>, Option<u16>) {
+    match schedule {
+        None => (None, None, None),
+        Some(s @ ReadingSchedule::EveryDays(n)) => (Some(s.kind()), Some(n), Some(n)),
+        Some(s) => (Some(s.kind()), Some(s.value()), None),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +188,8 @@ pub struct Meter {
     pub id: MeterId,
     pub data: MeterData,
     pub archived: bool,
+    /// Zeitpunkt der Archivierung (SPEC_MTR_ARCHIVE)
+    pub archived_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -85,6 +199,9 @@ pub struct DeviceData {
     pub installed_at: DateTime<Utc>,
     pub rollover_digits: Option<u8>,
     pub decimal_places: u8,
+    /// Übergeordnete Messstelle während der Einbauzeit (Zwischenzähler,
+    /// SPEC_MTR_SUBMETER)
+    pub parent_meter_id: Option<MeterId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +268,273 @@ pub struct Reading {
     /// Konfidenz der AI-Erkennung (0..1) bei `source = photo`.
     pub ai_confidence: Option<Decimal>,
     pub created_by: Option<UserId>,
+}
+
+/// Änderbare Felder einer Ablesung (SPEC_RDG_HISTORY).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadingUpdate {
+    pub read_at: DateTime<Utc>,
+    pub value: Decimal,
+    pub note: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Art einer Änderung an einer Ablesung.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevisionAction {
+    Update,
+    Delete,
+}
+
+impl RevisionAction {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Update => "update",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+impl std::str::FromStr for RevisionAction {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "update" => Ok(Self::Update),
+            "delete" => Ok(Self::Delete),
+            other => Err(format!("unbekannte Änderung: {other}")),
+        }
+    }
+}
+
+/// Unveränderliche Revision einer Ablesung; bleibt nach dem Löschen der
+/// Ablesung erhalten (SPEC_RDG_HISTORY).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Revision {
+    pub id: RevisionId,
+    pub reading_id: ReadingId,
+    pub meter_id: MeterId,
+    pub register_id: RegisterId,
+    pub action: RevisionAction,
+    pub changed_by: UserId,
+    pub changed_at: DateTime<Utc>,
+    pub old_read_at: DateTime<Utc>,
+    pub old_value: Decimal,
+    pub old_note: Option<String>,
+    /// `None` beim Löschen
+    pub new_read_at: Option<DateTime<Utc>>,
+    pub new_value: Option<Decimal>,
+    pub new_note: Option<String>,
+}
+
+/// Art einer Benachrichtigung; zugleich Ereignistyp der Einstellungen
+/// (SPEC_NTF_EMAIL).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NotificationKind {
+    Reminder,
+    Alarm,
+    Invitation,
+}
+
+impl NotificationKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reminder => "reminder",
+            Self::Alarm => "alarm",
+            Self::Invitation => "invitation",
+        }
+    }
+}
+
+/// Benachrichtigungseinstellungen eines Nutzers; ohne Eintrag sind alle
+/// Ereignistypen aktiv und die Adresse aus der Anmeldung gilt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationSettings {
+    /// Abweichende Adresse; `None`: E-Mail aus dem OIDC-Login
+    pub email: Option<String>,
+    pub reminder: bool,
+    pub alarm: bool,
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        Self {
+            email: None,
+            reminder: true,
+            alarm: true,
+        }
+    }
+}
+
+/// Empfänger einer Benachrichtigung (nur für Jobs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recipient {
+    pub user_id: UserId,
+    pub email: String,
+    pub locale: String,
+}
+
+/// Eintrag im Versandprotokoll; `(user_id, kind, subject_key)` ist
+/// eindeutig und verhindert Doppelversand (SPEC_NTF_REMINDERS,
+/// SPEC_NTF_ALARMS).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationLogEntry {
+    pub household_id: HouseholdId,
+    pub user_id: UserId,
+    pub kind: NotificationKind,
+    pub subject_key: String,
+    pub sent_at: DateTime<Utc>,
+}
+
+/// Fällige Messstelle in einer Erinnerung.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DueMeter {
+    pub name: String,
+    pub due_on: chrono::NaiveDate,
+    pub overdue: bool,
+    pub link: String,
+}
+
+/// Inhalt einer Benachrichtigung mit fachlichen Daten; Texte und Sprache
+/// erzeugt der Adapter (SPEC_NTF_EMAIL).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Notification {
+    Reminder {
+        household: String,
+        meters: Vec<DueMeter>,
+        settings_link: String,
+    },
+    ConsumptionAlarm {
+        household: String,
+        meter: String,
+        unit: String,
+        from: chrono::NaiveDateTime,
+        until: chrono::NaiveDateTime,
+        consumption: Decimal,
+        expected_lower: Decimal,
+        expected_upper: Decimal,
+        link: String,
+        settings_link: String,
+    },
+    Invitation {
+        household: String,
+        inviter: String,
+        role: Role,
+        link: String,
+        expires_on: chrono::NaiveDate,
+    },
+}
+
+impl Notification {
+    #[must_use]
+    pub fn kind(&self) -> NotificationKind {
+        match self {
+            Self::Reminder { .. } => NotificationKind::Reminder,
+            Self::ConsumptionAlarm { .. } => NotificationKind::Alarm,
+            Self::Invitation { .. } => NotificationKind::Invitation,
+        }
+    }
+}
+
+/// Ereignis für die Folgeverarbeitung, geschrieben in derselben Unit of Work
+/// wie die fachliche Änderung (SPEC_JOB_OUTBOX, ADR_024).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum OutboxEvent {
+    /// Neue oder korrigierte Ablesungen einer Messstelle
+    ReadingsRecorded {
+        meter_id: MeterId,
+        reading_ids: Vec<ReadingId>,
+    },
+    /// Einladung mit E-Mail-Adresse; das Token steht nur bis zur Zustellung
+    /// im Eintrag und ist nach Ablauf der Einladung wertlos
+    InvitationCreated {
+        invitation_id: InvitationId,
+        token: String,
+    },
+}
+
+impl OutboxEvent {
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::ReadingsRecorded { .. } => "readings_recorded",
+            Self::InvitationCreated { .. } => "invitation_created",
+        }
+    }
+}
+
+/// Zustand eines Outbox-Eintrags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutboxStatus {
+    Pending,
+    Done,
+    Failed,
+}
+
+impl OutboxStatus {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Done => "done",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl std::str::FromStr for OutboxStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "done" => Ok(Self::Done),
+            "failed" => Ok(Self::Failed),
+            other => Err(format!("unbekannter Status: {other}")),
+        }
+    }
+}
+
+/// Offener Outbox-Eintrag; `payload` ist das Ereignis als JSON, damit
+/// unbekannte Arten nicht schon beim Lesen scheitern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutboxEntry {
+    pub id: OutboxId,
+    pub household_id: HouseholdId,
+    pub kind: String,
+    pub payload: String,
+    pub attempts: u32,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Ergebnis der Verarbeitung eines Outbox-Eintrags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutboxResult {
+    Done {
+        at: DateTime<Utc>,
+    },
+    /// Erneuter Versuch ab `next_attempt_at`
+    Retry {
+        attempts: u32,
+        next_attempt_at: DateTime<Utc>,
+    },
+    /// Endgültig fehlgeschlagen
+    Failed {
+        attempts: u32,
+        at: DateTime<Utc>,
+    },
+}
+
+/// Ergebnis eines Job-Laufs für `job_runs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobRun {
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    /// `ok` oder `error`
+    pub outcome: String,
 }
 
 /// Vorschlag der Zählerstandserkennung; nicht lesbare Felder sind `None`.

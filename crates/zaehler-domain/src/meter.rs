@@ -64,6 +64,41 @@ impl std::str::FromStr for MeterKind {
     }
 }
 
+/// Verwendungszweck einer Strom-Messstelle (SPEC_MTR_SUBMETER).
+// @impl SPEC_MTR_SUBMETER
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeterPurpose {
+    #[default]
+    General,
+    HeatPump,
+    Wallbox,
+}
+
+impl MeterPurpose {
+    pub const ALL: [Self; 3] = [Self::General, Self::HeatPump, Self::Wallbox];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::HeatPump => "heat_pump",
+            Self::Wallbox => "wallbox",
+        }
+    }
+}
+
+impl std::str::FromStr for MeterPurpose {
+    type Err = UnknownVariant;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|p| p.as_str() == s)
+            .ok_or_else(|| UnknownVariant(s.to_owned()))
+    }
+}
+
 /// Richtung eines Registers: Bezug oder Einspeisung (z.B. PV).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

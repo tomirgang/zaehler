@@ -69,6 +69,11 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
         .route("/meters/{id}/readings", post(pages::readings::record))
         .route("/meters/{id}/readings/check", post(pages::readings::check))
         .route("/readings/{id}/delete", post(pages::readings::delete))
+        .route(
+            "/readings/{id}/edit",
+            get(pages::readings::edit_form).post(pages::readings::edit),
+        )
+        .route("/meters/{id}/history", get(pages::readings::history))
         .route("/readings/{id}/photo", get(pages::readings::photo))
         .route(
             "/capture",
@@ -102,6 +107,33 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
             post(pages::settings::update_household),
         )
         .route("/settings/locale", post(pages::settings::update_locale))
+        .route("/settings/members", get(pages::members::show))
+        .route(
+            "/settings/members/{user}/role",
+            post(pages::members::change_role),
+        )
+        .route(
+            "/settings/members/{user}/remove",
+            post(pages::members::remove),
+        )
+        .route("/settings/leave", post(pages::members::leave))
+        .route(
+            "/settings/notifications",
+            get(pages::notifications::show).post(pages::notifications::update),
+        )
+        .route(
+            "/settings/invitations",
+            post(pages::members::create_invitation),
+        )
+        .route(
+            "/settings/invitations/{id}/revoke",
+            post(pages::members::revoke_invitation),
+        )
+        .route("/invite/{token}", get(pages::members::show_invitation))
+        .route(
+            "/invite/{token}/accept",
+            post(pages::members::accept_invitation),
+        )
         .route("/settings/export", get(pages::backup::export))
         .route(
             "/settings/import",

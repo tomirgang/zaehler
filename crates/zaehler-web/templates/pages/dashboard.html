@@ -17,9 +17,9 @@
     <p>{{ ctx.lang.t("dashboard-last-reading") }}:
       {% if let Some(l) = c.last %}{{ l }}{% else %}{{ ctx.lang.t("dashboard-no-reading") }}{% endif %}</p>
     {% if !c.values.is_empty() %}<p>{% for v in c.values %}<span class="tag">{{ v }}</span> {% endfor %}</p>{% endif %}
-    {% if let Some(m) = c.last_month %}<p>{{ m }}{% if let Some(v) = c.vs_previous %} <span class="muted">({{ v }})</span>{% endif %}</p>{% endif %}
+    {% if let Some(m) = c.last_month %}<p>{{ m }}{% if let Some(v) = c.vs_previous %} <span class="muted">({{ v }})</span>{% endif %}{% if let Some(tv) = c.traffic %} {% include "partials/traffic_light.html" %}{% endif %}</p>{% endif %}
     {% if let Some(f) = c.forecast %}<p>{{ f }}</p>{% endif %}
-    {% if let Some(d) = c.due %}<p class="{% if c.overdue %}warning{% else %}muted{% endif %}">{{ d }}</p>{% endif %}
+    {% if let Some(d) = c.due %}<p class="{% if c.overdue %}warning{% else if c.due_now %}due{% else %}muted{% endif %}">{{ d }}</p>{% endif %}
     {% if ctx.can_write %}
     <div class="actions">
       <a class="button" href="/meters/{{ c.id }}/readings/new">{{ ctx.lang.t("dashboard-record") }}</a>

@@ -18,6 +18,8 @@ pub struct HousekeepingReport {
     pub drafts: u64,
     pub tmp: u64,
     pub sessions: u64,
+    /// Erledigte Outbox-Einträge (SPEC_JOB_OUTBOX)
+    pub outbox: u64,
 }
 
 /// Wird von einem Intervall in der Composition Root in jeder Instanz
@@ -68,6 +70,14 @@ impl Housekeeping {
             Ok(n) => report.sessions = n,
             Err(e) => first_error = first_error.or(Some(e.into())),
         }
+        match self
+            .maintenance
+            .purge_outbox(now - crate::usecase::jobs::OUTBOX_RETENTION)
+            .await
+        {
+            Ok(n) => report.outbox = n,
+            Err(e) => first_error = first_error.or(Some(e.into())),
+        }
 
         metrics::counter!("zaehler_housekeeping_removed_total", "kind" => "draft")
             .increment(report.drafts);
@@ -75,6 +85,8 @@ impl Housekeeping {
             .increment(report.tmp);
         metrics::counter!("zaehler_housekeeping_removed_total", "kind" => "session")
             .increment(report.sessions);
+        metrics::counter!("zaehler_housekeeping_removed_total", "kind" => "outbox")
+            .increment(report.outbox);
         match first_error {
             Some(e) => Err(e),
             None => Ok(report),

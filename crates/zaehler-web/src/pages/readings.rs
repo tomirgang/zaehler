@@ -12,7 +12,10 @@ use zaehler_app::{
     ids::{MeterId, ReadingId},
     usecase::{
         meter::MeterDetail,
-        reading::{ReadingsInput, RecordOutcome, RegisterCheck},
+        reading::{
+            CorrectionInput, CorrectionOutcome, ReadingContext, ReadingsInput, RecordOutcome,
+            RegisterCheck,
+        },
     },
 };
 use zaehler_domain::{
@@ -355,4 +358,256 @@ pub async fn photo(
         jpeg,
     )
         .into_response())
+}
+
+#[derive(Template)]
+#[template(path = "pages/readings/edit.html")]
+struct EditPage {
+    ctx: PageCtx,
+    reading_id: String,
+    meter_id: String,
+    meter_name: String,
+    register: String,
+    unit: String,
+    at: String,
+    value: String,
+    note: String,
+    part_of_swap: bool,
+    hint: Option<String>,
+    needs_confirm: bool,
+    errors: FieldErrors,
+}
+
+impl EditPage {
+    fn errs(&self, field: &str) -> Vec<String> {
+        field_errors(self.ctx.lang, &self.errors, field)
+    }
+
+    fn has_errs(&self, field: &str) -> bool {
+        !self.errors.for_field(field).is_empty()
+    }
+}
+
+fn edit_page(
+    ctx: &Ctx,
+    rc: &ReadingContext,
+    form: Option<&FormData>,
+    hint_text: Option<String>,
+    errors: FieldErrors,
+) -> EditPage {
+    let lang = ctx.page.lang;
+    let agg = &rc.detail.aggregate;
+    let r = &rc.reading;
+    let pick = |key: &str, default: String| form.map_or(default, |f| f.get(key).to_owned());
+    EditPage {
+        reading_id: r.id.to_string(),
+        meter_id: agg.meter.id.to_string(),
+        meter_name: agg.meter.data.name.clone(),
+        register: agg
+            .register(r.register_id)
+            .map(|x| x.data.code.clone())
+            .unwrap_or_default(),
+        unit: agg.meter.data.unit.clone(),
+        at: pick(
+            "at",
+            format::datetime_input(r.read_at.with_timezone(&ctx.page.tz).naive_local()),
+        ),
+        value: pick("value", format::decimal_plain(lang, r.value)),
+        note: pick("note", r.note.clone().unwrap_or_default()),
+        part_of_swap: rc.part_of_swap,
+        needs_confirm: hint_text.is_some(),
+        hint: hint_text,
+        errors,
+        ctx: ctx.page.clone(),
+    }
+}
+
+fn parse_reading(id: &str) -> Result<ReadingId, AppError> {
+    id.parse().map_err(|_| AppError::NotFound)
+}
+
+// @impl SPEC_RDG_HISTORY
+pub async fn edit_form(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path(id): Path<String>,
+) -> Result<Response, Response> {
+    let id = parse_reading(&id).map_err(|e| ctx.fail(e))?;
+    let rc = state
+        .uc
+        .get_reading
+        .execute(&ctx.tenant, id)
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    Ok(render(&edit_page(
+        &ctx,
+        &rc,
+        None,
+        None,
+        FieldErrors::default(),
+    )))
+}
+
+/// Korrektur speichern; bei Warnungen erneut mit Bestätigungsfeld.
+// @impl SPEC_RDG_HISTORY
+pub async fn edit(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path(id): Path<String>,
+    axum::Form(pairs): axum::Form<Vec<(String, String)>>,
+) -> Result<Response, Response> {
+    let id = parse_reading(&id).map_err(|e| ctx.fail(e))?;
+    let rc = state
+        .uc
+        .get_reading
+        .execute(&ctx.tenant, id)
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    let form = FormData::new(pairs);
+    let cal = Calendar::new(ctx.page.tz);
+    let mut errors = FieldErrors::default();
+    let at = parse::datetime_local(form.get("at")).map(|l| cal.to_utc(l));
+    if at.is_err() {
+        errors.add("at", "form.datetime_invalid");
+    }
+    let value = match parse::decimal(form.get("value")) {
+        Ok(Some(v)) => Some(v),
+        Ok(None) => {
+            errors.add("value", "reading.values_required");
+            None
+        }
+        Err(_) => {
+            errors.add("value", "form.number_invalid");
+            None
+        }
+    };
+    let (Ok(at), Some(value)) = (at, value) else {
+        let page = edit_page(&ctx, &rc, Some(&form), None, errors);
+        return Ok(render_status(StatusCode::UNPROCESSABLE_ENTITY, &page));
+    };
+    let input = CorrectionInput {
+        at,
+        value,
+        note: form.opt("note"),
+    };
+    let confirmed = form.get("confirm_warnings") == "true";
+    match state
+        .uc
+        .correct_reading
+        .execute(&ctx.tenant, id, &input, confirmed)
+        .await
+    {
+        Ok(CorrectionOutcome::Saved(meter)) => {
+            ctx.flash("flash-reading-corrected").await;
+            Ok(see_other(&format!("/meters/{meter}")))
+        }
+        Ok(CorrectionOutcome::NeedsConfirmation(p)) => {
+            let page = edit_page(
+                &ctx,
+                &rc,
+                Some(&form),
+                hint(ctx.page.lang, &p),
+                FieldErrors::default(),
+            );
+            Ok(render_status(StatusCode::UNPROCESSABLE_ENTITY, &page))
+        }
+        Err(AppError::Validation(errors)) => {
+            let page = edit_page(&ctx, &rc, Some(&form), None, errors);
+            Ok(render_status(StatusCode::UNPROCESSABLE_ENTITY, &page))
+        }
+        Err(e) => Err(ctx.fail(e)),
+    }
+}
+
+pub struct RevisionRow {
+    pub at: String,
+    pub by: String,
+    pub action: String,
+    pub register: String,
+    pub old: String,
+    pub new: String,
+    pub note: String,
+}
+
+#[derive(Template)]
+#[template(path = "pages/readings/history.html")]
+struct HistoryPage {
+    ctx: PageCtx,
+    meter_id: String,
+    meter_name: String,
+    rows: Vec<RevisionRow>,
+}
+
+/// Änderungsverlauf der Ablesungen einer Messstelle, auch gelöschter.
+// @impl SPEC_RDG_HISTORY
+pub async fn history(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path(id): Path<String>,
+) -> Result<Response, Response> {
+    let meter_id = parse_meter(&id).map_err(|e| ctx.fail(e))?;
+    let detail = state
+        .uc
+        .get_meter
+        .execute(&ctx.tenant, meter_id)
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    let entries = state
+        .uc
+        .reading_history
+        .execute(&ctx.tenant, meter_id)
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    let lang = ctx.page.lang;
+    let tz = ctx.page.tz;
+    let agg = &detail.aggregate;
+    let places = agg.active_device().map_or(3, |d| d.data.decimal_places);
+    let point = |at: chrono::DateTime<Utc>, v: rust_decimal::Decimal| {
+        format!(
+            "{}: {}",
+            format::datetime_in(lang, at, tz),
+            format::decimal(lang, v, places)
+        )
+    };
+    let rows = entries
+        .iter()
+        .map(|e| {
+            let r = &e.revision;
+            let note = if r.old_note == r.new_note || r.new_read_at.is_none() {
+                String::new()
+            } else {
+                let empty = lang.t("history-empty-note");
+                format!(
+                    "{} → {}",
+                    r.old_note.as_deref().unwrap_or(&empty),
+                    r.new_note.as_deref().unwrap_or(&empty)
+                )
+            };
+            RevisionRow {
+                at: format::datetime_in(lang, r.changed_at, tz),
+                by: e
+                    .changed_by_name
+                    .clone()
+                    .unwrap_or_else(|| lang.t("history-unknown-user")),
+                action: lang.t(&format!("history-action-{}", r.action.as_str())),
+                register: agg
+                    .register(r.register_id)
+                    .map(|x| x.data.code.clone())
+                    .unwrap_or_default(),
+                old: point(r.old_read_at, r.old_value),
+                new: r
+                    .new_read_at
+                    .zip(r.new_value)
+                    .map(|(at, v)| point(at, v))
+                    .unwrap_or_default(),
+                note,
+            }
+        })
+        .collect();
+    Ok(render(&HistoryPage {
+        meter_id: meter_id.to_string(),
+        meter_name: agg.meter.data.name.clone(),
+        rows,
+        ctx: ctx.page,
+    }))
 }

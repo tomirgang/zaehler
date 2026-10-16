@@ -22,7 +22,9 @@ use crate::{
     usecase::{
         Ports,
         meter::{MeterDetail, neighbours, to_domain},
-        reading::{ReadingExtras, ReadingsInput, RecordOutcome, check_all, record_in},
+        reading::{
+            ReadingExtras, ReadingsInput, RecordOutcome, check_all, enqueue_readings, record_in,
+        },
         use_case,
     },
 };
@@ -576,9 +578,10 @@ impl ConfirmDraft {
             extras,
         )
         .await?;
-        if !matches!(outcome, RecordOutcome::Saved(_)) {
+        let RecordOutcome::Saved(ids) = &outcome else {
             return Ok(outcome);
-        }
+        };
+        enqueue_readings(&self.p, uow.as_mut(), t, input.meter_id, ids).await?;
         let corrected = suggestion.map(|s| s.value != input.values.first().map(|(_, v)| *v));
         self.p
             .blobs

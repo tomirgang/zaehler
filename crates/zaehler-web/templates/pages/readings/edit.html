@@ -1,0 +1,37 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("reading-edit-title") }}: {{ meter_name }}</h1>
+<p class="muted">{{ ctx.lang.t("reading-register") }} {{ register }}</p>
+{% if part_of_swap %}<p class="callout">{{ ctx.lang.t("reading-edit-swap-hint") }}</p>{% endif %}
+<form method="post" action="/readings/{{ reading_id }}/edit" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <div class="field{% if self.has_errs("value") %} has-error{% endif %}">
+    <label for="value">{{ ctx.lang.t("reading-value") }} ({{ crate::pages::unit_html(unit)|safe }})</label>
+    <input id="value" name="value" value="{{ value }}" inputmode="decimal" autocomplete="off">
+    {% for e in self.errs("value") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+  <div class="field{% if self.has_errs("at") %} has-error{% endif %}">
+    <label for="at">{{ ctx.lang.t("reading-at") }}</label>
+    <input id="at" name="at" type="datetime-local" value="{{ at }}" required>
+    {% for e in self.errs("at") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+  <div class="field{% if self.has_errs("note") %} has-error{% endif %}">
+    <label for="note">{{ ctx.lang.t("reading-note") }}</label>
+    <textarea id="note" name="note" maxlength="500" rows="2">{{ note }}</textarea>
+    {% for e in self.errs("note") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+  {% if needs_confirm %}
+  <div class="callout warning">
+    {% if let Some(h) = hint %}<p>{{ h }}</p>{% endif %}
+    <p>{{ ctx.lang.t("readings-warnings") }}</p>
+    <label><input type="checkbox" name="confirm_warnings" value="true"> {{ ctx.lang.t("readings-confirm") }}</label>
+  </div>
+  {% endif %}
+  <p class="hint">{{ ctx.lang.t("reading-edit-history-hint") }}</p>
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("action-save") }}</button>
+    <a href="/meters/{{ meter_id }}">{{ ctx.lang.t("action-cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

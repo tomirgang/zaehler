@@ -11,6 +11,8 @@ pub struct Model {
     pub removed_at: Option<DateTimeUtc>,
     pub rollover_digits: Option<i16>,
     pub decimal_places: i16,
+    /// Übergeordnete Messstelle (`m20261016_000008_meter_v1`)
+    pub parent_meter_id: Option<Uuid>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

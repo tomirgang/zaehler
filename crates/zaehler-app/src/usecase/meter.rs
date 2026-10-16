@@ -3,16 +3,17 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use zaehler_domain::{
-    meter::{Direction, MeterKind},
+    meter::{Direction, MeterKind, MeterPurpose},
     reading::{Plausibility, Reading as DomainReading, ReadingSource, check_plausibility},
+    schedule::ReadingSchedule,
 };
 
 use crate::{
     AppError, FieldErrors, PortError, Role, Tenant,
     ids::{BlobKey, DeviceId, DraftId, MeterId, ReadingId, RegisterId},
     model::{
-        DeviceData, Draft, DraftOutcome, MeterAggregate, MeterData, MeterSummary, MonthDay,
-        Reading, RegisterData,
+        DeviceData, Draft, DraftOutcome, MeterAggregate, MeterData, MeterSummary, MeterTargets,
+        MonthDay, Reading, RegisterData,
     },
     usecase::{Ports, use_case, validate},
 };
@@ -38,9 +39,15 @@ pub struct MeterInput {
     pub name: String,
     pub kind: MeterKind,
     pub unit: String,
-    pub reading_interval_days: Option<u16>,
+    pub schedule: Option<ReadingSchedule>,
     pub max_daily_rate: Option<Decimal>,
     pub billing_start: Option<MonthDay>,
+    /// Verwendungszweck; nur Strom kennt andere als `General`
+    pub purpose: MeterPurpose,
+    /// Übergeordnete Messstelle des eingebauten Geräts (Zwischenzähler)
+    pub parent_meter_id: Option<MeterId>,
+    /// Jahresziel, Toleranz und angepasstes Saisonprofil
+    pub targets: MeterTargets,
     pub serial_number: Option<String>,
     pub rollover_digits: Option<u8>,
     pub decimal_places: u8,
@@ -65,9 +72,50 @@ pub struct SwapInput {
     pub rollover_digits: Option<u8>,
     pub decimal_places: u8,
     pub start_values: Vec<(RegisterId, Decimal)>,
+    /// Übergeordnete Messstelle des neuen Geräts; `None` beim Wechsel auf
+    /// einen eigenen Zähler (SPEC_MTR_SUBMETER)
+    pub parent_meter_id: Option<MeterId>,
 }
 
-use_case!(CreateMeter, UpdateMeter, ListMeters, GetMeter, SwapDevice);
+use_case!(
+    CreateMeter,
+    UpdateMeter,
+    ListMeters,
+    GetMeter,
+    SwapDevice,
+    /// Messstelle archivieren (SPEC_MTR_ARCHIVE).
+    ArchiveMeter,
+    /// Archivierung aufheben (SPEC_MTR_ARCHIVE).
+    RestoreMeter,
+);
+
+impl ArchiveMeter {
+    /// Die Messstelle verschwindet aus Erfassung, Übersicht und Erinnerungen;
+    /// Auswertungen und Verweise bleiben.
+    // @impl SPEC_MTR_ARCHIVE
+    #[tracing::instrument(name = "ArchiveMeter", skip_all)]
+    pub async fn execute(&self, t: &Tenant, id: MeterId) -> Result<(), AppError> {
+        t.require(Role::Owner)?;
+        let mut uow = self.p.uow.begin().await?;
+        uow.meters()
+            .set_archived(t, id, Some(self.p.clock.now()))
+            .await?;
+        uow.commit().await?;
+        Ok(())
+    }
+}
+
+impl RestoreMeter {
+    // @impl SPEC_MTR_ARCHIVE
+    #[tracing::instrument(name = "RestoreMeter", skip_all)]
+    pub async fn execute(&self, t: &Tenant, id: MeterId) -> Result<(), AppError> {
+        t.require(Role::Owner)?;
+        let mut uow = self.p.uow.begin().await?;
+        uow.meters().set_archived(t, id, None).await?;
+        uow.commit().await?;
+        Ok(())
+    }
+}
 
 fn serial(input: Option<&String>) -> Option<String> {
     input
@@ -100,11 +148,17 @@ fn validate_input(input: &MeterInput, creating: bool) -> FieldErrors {
             vec![("max", MAX_UNIT.to_string())],
         );
     }
-    if input
-        .reading_interval_days
-        .is_some_and(|d| d == 0 || d > 3650)
-    {
-        e.add("reading_interval_days", "meter.interval_invalid");
+    if input.schedule.is_some_and(|s| !s.is_valid()) {
+        e.add("schedule", "meter.schedule_invalid");
+    }
+    validate_targets(&input.targets, &mut e);
+    if input.kind != MeterKind::Electricity {
+        if input.purpose != MeterPurpose::General {
+            e.add("purpose", "meter.purpose_invalid");
+        }
+        if input.parent_meter_id.is_some() {
+            e.add("parent_meter_id", "meter.parent_invalid");
+        }
     }
     if input.max_daily_rate.is_some_and(|r| r <= Decimal::ZERO) {
         e.add("max_daily_rate", "meter.max_rate_invalid");
@@ -171,10 +225,66 @@ fn meter_data(input: &MeterInput) -> MeterData {
         } else {
             unit.to_owned()
         },
-        reading_interval_days: input.reading_interval_days,
+        schedule: input.schedule,
         max_daily_rate: input.max_daily_rate,
         billing_start: input.billing_start,
+        purpose: input.purpose,
+        targets: input.targets.clone(),
     }
+}
+
+/// Ziel größer 0, Toleranz 1 bis 100 %, Profil mit nicht negativen
+/// Gewichten und Summe größer 0 (SPEC_ANA_TRAFFIC_LIGHT).
+// @impl SPEC_ANA_TRAFFIC_LIGHT
+fn validate_targets(t: &MeterTargets, e: &mut FieldErrors) {
+    if t.annual_target.is_some_and(|v| v <= Decimal::ZERO) {
+        e.add("annual_target", "meter.target_invalid");
+    }
+    if t.tolerance_pct.is_some_and(|p| p == 0 || p > 100) {
+        e.add("tolerance_pct", "meter.tolerance_invalid");
+    }
+    if let Some(p) = &t.season_weights {
+        let total: Decimal = p.monthly_weights.iter().sum();
+        if p.monthly_weights.iter().any(Decimal::is_sign_negative) || total <= Decimal::ZERO {
+            e.add("season_weights", "meter.season_invalid");
+        }
+    }
+}
+
+/// Prüft die übergeordnete Messstelle eines Zwischenzählers: Strom im
+/// selben Haushalt, nicht die Messstelle selbst, keine Ketten (die
+/// übergeordnete ist selbst kein Zwischenzähler, die eigene hat keine
+/// Zwischenzähler).
+// @impl SPEC_MTR_SUBMETER
+async fn check_parent(
+    uow: &mut dyn crate::port::UnitOfWork,
+    t: &Tenant,
+    own: Option<MeterId>,
+    parent: Option<MeterId>,
+) -> Result<(), AppError> {
+    let Some(parent) = parent else {
+        return Ok(());
+    };
+    let invalid = || AppError::field("parent_meter_id", "meter.parent_invalid");
+    if Some(parent) == own {
+        return Err(invalid());
+    }
+    let p = uow.meters().get(t, parent).await?.ok_or_else(invalid)?;
+    if p.meter.data.kind != MeterKind::Electricity
+        || p.active_device()
+            .is_some_and(|d| d.data.parent_meter_id.is_some())
+    {
+        return Err(invalid());
+    }
+    if let Some(own) = own
+        && !uow.meters().submeters_of(t, own).await?.is_empty()
+    {
+        return Err(AppError::field(
+            "parent_meter_id",
+            "meter.parent_has_submeters",
+        ));
+    }
+    Ok(())
 }
 
 /// Prüft, dass Name und Zählernummer im Haushalt frei sind.
@@ -239,6 +349,7 @@ impl CreateMeter {
             None => None,
         };
         check_unique(&mut *uow, t, &input, None).await?;
+        check_parent(&mut *uow, t, None, input.parent_meter_id).await?;
 
         let now = self.p.clock.now();
         let meter_id = MeterId(self.p.ids.new_uuid());
@@ -251,6 +362,7 @@ impl CreateMeter {
             installed_at: input.start_at,
             rollover_digits: input.rollover_digits,
             decimal_places: input.decimal_places,
+            parent_meter_id: input.parent_meter_id,
         };
         uow.meters()
             .add_device(t, meter_id, device_id, &device)
@@ -432,6 +544,7 @@ impl UpdateMeter {
             Some((id, active.as_ref().map(|d| d.id))),
         )
         .await?;
+        check_parent(&mut *uow, t, Some(id), input.parent_meter_id).await?;
 
         uow.meters().update(t, id, &data).await?;
         for r in &input.registers {
@@ -455,6 +568,7 @@ impl UpdateMeter {
                 serial_number: serial(input.serial_number.as_ref()),
                 rollover_digits: input.rollover_digits,
                 decimal_places: input.decimal_places,
+                parent_meter_id: input.parent_meter_id,
                 ..device.data
             };
             uow.meters().update_device(t, device.id, &updated).await?;
@@ -554,12 +668,16 @@ impl SwapDevice {
                 }
             }
         }
+        if input.parent_meter_id.is_some() && agg.meter.data.kind != MeterKind::Electricity {
+            e.add("parent_meter_id", "meter.parent_invalid");
+        }
         e.into_result()?;
         if let Some(s) = serial(input.serial_number.as_ref())
             && uow.meters().find_by_serial(t, &s).await?.is_some()
         {
             return Err(AppError::field("serial_number", "meter.serial_taken"));
         }
+        check_parent(&mut *uow, t, Some(id), input.parent_meter_id).await?;
 
         let ends: Vec<Reading> = input
             .end_values
@@ -574,6 +692,7 @@ impl SwapDevice {
             installed_at: input.at,
             rollover_digits: input.rollover_digits,
             decimal_places: input.decimal_places,
+            parent_meter_id: input.parent_meter_id,
         };
         uow.meters().add_device(t, id, new_id, &device).await?;
         let starts: Vec<Reading> = input

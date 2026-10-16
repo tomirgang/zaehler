@@ -1,7 +1,10 @@
 //! Erwartungsbereich ("liegt der Verbrauch im Rahmen?") und Ampelbewertung.
 
+use chrono::Datelike;
 use rust_decimal::{Decimal, MathematicalOps};
 use serde::{Deserialize, Serialize};
+
+use crate::{forecast::SeasonProfile, period::Period, series::MonthValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -70,6 +73,80 @@ impl Band {
     }
 }
 
+/// Standardfaktor `k` des Bands aus der Historie (SPEC_EXP_BAND).
+pub const HISTORY_K: Decimal = Decimal::from_parts(15, 0, 0, false, 1);
+/// Standardtoleranz des Jahresziels in Prozent (SPEC_ANA_TRAFFIC_LIGHT).
+pub const DEFAULT_TOLERANCE_PCT: u8 = 20;
+
+/// Grundlage eines Erwartungsbands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BandSource {
+    /// Gleicher Kalendermonat der Vorjahre
+    History,
+    /// Jahresziel, verteilt mit dem Saisonprofil
+    Target,
+}
+
+/// Erwartung und Ampel eines Monats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonthExpectation {
+    pub month: Period,
+    pub band: Band,
+    pub source: BandSource,
+    /// `None`, wenn der Monat nicht vollständig gemessen ist
+    pub status: Option<Status>,
+}
+
+/// Jahresziel mit Toleranz in Prozent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Target {
+    pub annual: Decimal,
+    pub tolerance_pct: Decimal,
+}
+
+/// Erwartung je Monat der Reihe: mit mindestens zwei Werten desselben
+/// Kalendermonats aus Vorjahren das Band aus der Historie, sonst mit
+/// Jahresziel dessen Anteil nach Saisonprofil, sonst keine Ampel
+/// (SPEC_ANA_TRAFFIC_LIGHT).
+// @impl SPEC_ANA_TRAFFIC_LIGHT, SPEC_EXP_BAND
+#[must_use]
+pub fn expectations(
+    series: &[MonthValue],
+    profile: &SeasonProfile,
+    target: Option<Target>,
+) -> Vec<Option<MonthExpectation>> {
+    series
+        .iter()
+        .map(|m| {
+            let earlier: Vec<Decimal> = series
+                .iter()
+                .filter(|x| {
+                    x.month.start.month() == m.month.start.month()
+                        && x.month.start.year() < m.month.start.year()
+                })
+                .filter_map(|x| x.value)
+                .collect();
+            let (band, source) = if let Some(b) = Band::from_history(&earlier, HISTORY_K) {
+                (b, BandSource::History)
+            } else {
+                let t = target?;
+                let expected = (t.annual * profile.share_of_year(m.month)).round_dp(3);
+                (
+                    Band::from_target(expected, t.tolerance_pct),
+                    BandSource::Target,
+                )
+            };
+            Some(MonthExpectation {
+                month: m.month,
+                band,
+                source,
+                status: m.value.map(|v| band.classify(v)),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +165,53 @@ mod tests {
         assert_eq!(h.expected, dec!(100));
         assert_eq!(h.upper, dec!(115));
         assert!(Band::from_history(&[dec!(1)], dec!(1)).is_none());
+    }
+
+    // @test SPEC_ANA_TRAFFIC_LIGHT
+    #[test]
+    fn traffic_light_from_history_or_target() {
+        use chrono::NaiveDate;
+        let month = |y: i32, m: u32| Period::month_of(NaiveDate::from_ymd_opt(y, m, 1).unwrap());
+        let mv = |y, m, v: Option<Decimal>| MonthValue {
+            month: month(y, m),
+            value: v,
+        };
+        let series = [
+            mv(2024, 1, Some(dec!(90))),
+            mv(2025, 1, Some(dec!(110))),
+            mv(2025, 2, Some(dec!(80))),
+            mv(2026, 1, Some(dec!(140))),
+            mv(2026, 2, Some(dec!(95))),
+            mv(2026, 3, None),
+        ];
+        let gas = SeasonProfile::default_for(crate::meter::MeterKind::Gas);
+        let none = expectations(&series, &gas, None);
+        assert!(
+            none[0].is_none() && none[1].is_none(),
+            "ohne Historie und Ziel"
+        );
+        // Januar 2026: Vorjahre 90 und 110, σ ≈ 14,1: Band 78,8 bis 121,2
+        let jan = none[3].expect("Historie");
+        assert_eq!(jan.source, BandSource::History);
+        assert_eq!(jan.status, Some(Status::Red));
+        assert!(none[4].is_none(), "Februar nur ein Vorjahreswert");
+
+        let target = Target {
+            annual: dec!(1000),
+            tolerance_pct: dec!(20),
+        };
+        let with = expectations(&series, &gas, Some(target));
+        let feb = with[4].expect("Ziel");
+        assert_eq!(feb.source, BandSource::Target);
+        // Februar: 15 % von 1000 = 150, Band 120 bis 180
+        assert_eq!(feb.band.expected, dec!(150));
+        assert_eq!(feb.status, Some(Status::Red));
+        assert_eq!(with[3].expect("Historie").source, BandSource::History);
+        let march = with[5].expect("Ziel");
+        assert_eq!(march.status, None, "nicht gemessen");
+        assert_eq!(
+            Band::from_target(dec!(150), dec!(20)).classify(dec!(115)),
+            Status::Yellow
+        );
     }
 }

@@ -15,18 +15,23 @@ use chrono::{DateTime, Utc};
 use crate::{
     PortError, Role, Tenant,
     ids::{
-        BlobKey, BlobKind, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId,
+        BlobKey, BlobKind, DeviceId, DraftId, HouseholdId, InvitationId, MeterId, OutboxId,
+        ReadingId, RegisterId, UserId,
     },
     model::{
         Device, DeviceData, Draft, DraftAnalysis, DraftOutcome, DraftStatus, Household,
-        HouseholdData, HouseholdSummary, Identity, Meter, MeterAggregate, MeterData, MeterSummary,
-        Reading, Recognition, Register, RegisterData, User,
+        HouseholdData, HouseholdSummary, Identity, Invitation, JobRun, Member, Meter,
+        MeterAggregate, MeterData, MeterSummary, NewInvitation, Notification, NotificationKind,
+        NotificationLogEntry, NotificationSettings, OutboxEntry, OutboxEvent, OutboxResult,
+        OutboxStatus, Reading, ReadingUpdate, Recipient, Recognition, Register, RegisterData,
+        Revision, User,
     },
     port::{
         BlobStore, Clock, DraftRepository, HouseholdRepository, ImageNormalizer,
-        MaintenanceRepository, MembershipRepository, MeterRecognizer, MeterRepository,
-        NormalizedJpeg, PhotoTime, PortResult, Readiness, ReadingRepository, RecognitionError,
-        UnitOfWork, UnitOfWorkFactory, UserRepository,
+        InvitationRepository, JobRepository, MaintenanceRepository, MembershipRepository,
+        MeterRecognizer, MeterRepository, NormalizedJpeg, NotificationSettingsRepository, Notifier,
+        OutboxRepository, PhotoTime, PortResult, Readiness, ReadingRepository, RecognitionError,
+        RevisionRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
     },
 };
 
@@ -49,6 +54,55 @@ struct State {
     /// Ablaufzeitpunkte von Sitzungen (nur für `MaintenanceRepository`)
     sessions: Vec<DateTime<Utc>>,
     drafts: Vec<StoredDraft>,
+    invitations: Vec<StoredInvitation>,
+    revisions: Vec<(HouseholdId, Revision)>,
+    outbox: Vec<StoredOutbox>,
+    job_runs: BTreeMap<String, JobRun>,
+    notification_settings: BTreeMap<UserId, (NotificationSettings, DateTime<Utc>)>,
+    /// (Nutzer, Art, Schlüssel) des Versandprotokolls
+    notification_log: Vec<(UserId, &'static str, String)>,
+}
+
+/// Outbox-Eintrag mit Zustand (nur für Tests einsehbar).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredOutbox {
+    pub entry: OutboxEntry,
+    pub status: OutboxStatus,
+    pub next_attempt_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredInvitation {
+    invitation: NewInvitation,
+    household: HouseholdId,
+    accepted_by: Option<UserId>,
+    accepted_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+impl State {
+    fn invitation(&self, s: &StoredInvitation) -> Invitation {
+        let i = &s.invitation;
+        Invitation {
+            id: i.id,
+            household_id: s.household,
+            household_name: self
+                .households
+                .iter()
+                .find(|h| h.id == s.household)
+                .map(|h| h.data.name.clone())
+                .unwrap_or_default(),
+            role: i.role,
+            email: i.email.clone(),
+            created_by: i.created_by,
+            created_at: i.created_at,
+            expires_at: i.expires_at,
+            accepted_by: s.accepted_by,
+            accepted_at: s.accepted_at,
+            revoked_at: s.revoked_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -157,6 +211,256 @@ impl MaintenanceRepository for InMemoryStore {
         let before = s.sessions.len();
         s.sessions.retain(|e| *e >= now);
         Ok((before - s.sessions.len()) as u64)
+    }
+
+    async fn purge_outbox(&self, before: DateTime<Utc>) -> PortResult<u64> {
+        let mut s = self.shared.lock().map_err(poisoned)?;
+        let count = s.outbox.len();
+        s.outbox.retain(|o| {
+            !(o.status == OutboxStatus::Done && o.finished_at.is_some_and(|f| f < before))
+        });
+        Ok((count - s.outbox.len()) as u64)
+    }
+}
+
+#[async_trait]
+impl JobRepository for InMemoryStore {
+    async fn claim_outbox(&self, now: DateTime<Utc>, limit: u32) -> PortResult<Vec<OutboxEntry>> {
+        let s = self.shared.lock().map_err(poisoned)?;
+        let mut due: Vec<&StoredOutbox> = s
+            .outbox
+            .iter()
+            .filter(|o| o.status == OutboxStatus::Pending && o.next_attempt_at <= now)
+            .collect();
+        due.sort_by_key(|o| (o.entry.created_at, o.entry.id));
+        Ok(due
+            .into_iter()
+            .take(limit as usize)
+            .map(|o| o.entry.clone())
+            .collect())
+    }
+
+    async fn finish_outbox(&self, id: OutboxId, result: OutboxResult) -> PortResult<()> {
+        let mut s = self.shared.lock().map_err(poisoned)?;
+        let o = s
+            .outbox
+            .iter_mut()
+            .find(|o| o.entry.id == id)
+            .ok_or(PortError::NotFound)?;
+        match result {
+            OutboxResult::Done { at } => {
+                o.status = OutboxStatus::Done;
+                o.finished_at = Some(at);
+            }
+            OutboxResult::Retry {
+                attempts,
+                next_attempt_at,
+            } => {
+                o.entry.attempts = attempts;
+                o.next_attempt_at = next_attempt_at;
+            }
+            OutboxResult::Failed { attempts, at } => {
+                o.entry.attempts = attempts;
+                o.status = OutboxStatus::Failed;
+                o.finished_at = Some(at);
+            }
+        }
+        Ok(())
+    }
+
+    async fn pending_outbox(&self) -> PortResult<u64> {
+        let s = self.shared.lock().map_err(poisoned)?;
+        Ok(s.outbox
+            .iter()
+            .filter(|o| o.status == OutboxStatus::Pending)
+            .count() as u64)
+    }
+
+    async fn record_run(&self, job: &str, run: &JobRun) -> PortResult<()> {
+        let mut s = self.shared.lock().map_err(poisoned)?;
+        s.job_runs.insert(job.to_owned(), run.clone());
+        Ok(())
+    }
+
+    async fn last_run(&self, job: &str) -> PortResult<Option<JobRun>> {
+        let s = self.shared.lock().map_err(poisoned)?;
+        Ok(s.job_runs.get(job).cloned())
+    }
+
+    async fn households_with_schedules(&self) -> PortResult<Vec<HouseholdId>> {
+        let s = self.shared.lock().map_err(poisoned)?;
+        let mut out: Vec<HouseholdId> = s
+            .meters
+            .iter()
+            .filter(|(_, m)| !m.archived && m.data.schedule.is_some())
+            .map(|(h, _)| *h)
+            .collect();
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
+    async fn recipients(
+        &self,
+        household: HouseholdId,
+        kind: NotificationKind,
+    ) -> PortResult<Vec<Recipient>> {
+        let s = self.shared.lock().map_err(poisoned)?;
+        let mut out: Vec<Recipient> = s
+            .memberships
+            .iter()
+            .filter(|(h, _, role)| {
+                *h == household && (kind != NotificationKind::Reminder || *role >= Role::Member)
+            })
+            .filter_map(|(_, u, _)| {
+                let user = s.users.iter().find(|x| x.user.id == *u)?;
+                let settings = s
+                    .notification_settings
+                    .get(u)
+                    .map(|x| x.0.clone())
+                    .unwrap_or_default();
+                let wanted = match kind {
+                    NotificationKind::Reminder => settings.reminder,
+                    NotificationKind::Alarm => settings.alarm,
+                    NotificationKind::Invitation => true,
+                };
+                let email = settings.email.or_else(|| user.user.email.clone())?;
+                wanted.then(|| Recipient {
+                    user_id: *u,
+                    email,
+                    locale: user.user.locale.clone(),
+                })
+            })
+            .collect();
+        out.sort_by_key(|r| r.user_id);
+        Ok(out)
+    }
+
+    async fn log_once(&self, entry: &NotificationLogEntry) -> PortResult<bool> {
+        let mut s = self.shared.lock().map_err(poisoned)?;
+        let key = (
+            entry.user_id,
+            entry.kind.as_str(),
+            entry.subject_key.clone(),
+        );
+        if s.notification_log.contains(&key) {
+            return Ok(false);
+        }
+        s.notification_log.push(key);
+        Ok(true)
+    }
+
+    async fn release_log(&self, entry: &NotificationLogEntry) -> PortResult<()> {
+        let mut s = self.shared.lock().map_err(poisoned)?;
+        s.notification_log.retain(|(u, k, key)| {
+            !(*u == entry.user_id && *k == entry.kind.as_str() && *key == entry.subject_key)
+        });
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl NotificationSettingsRepository for MemoryUow {
+    async fn get(&mut self, user: UserId) -> PortResult<Option<NotificationSettings>> {
+        Ok(self
+            .state
+            .notification_settings
+            .get(&user)
+            .map(|x| x.0.clone()))
+    }
+
+    async fn set(
+        &mut self,
+        user: UserId,
+        settings: &NotificationSettings,
+        now: DateTime<Utc>,
+    ) -> PortResult<()> {
+        self.state
+            .notification_settings
+            .insert(user, (settings.clone(), now));
+        Ok(())
+    }
+}
+
+/// Aufzeichnender Notifier für Tests; `fail` lässt jeden Versand scheitern.
+#[derive(Debug, Default)]
+pub struct RecordingNotifier {
+    pub sent: Mutex<Vec<(String, Notification, String)>>,
+    pub fail: std::sync::atomic::AtomicBool,
+}
+
+impl RecordingNotifier {
+    /// Versendete Benachrichtigungen: (Adresse, Inhalt, Sprache).
+    #[must_use]
+    pub fn sent(&self) -> Vec<(String, Notification, String)> {
+        self.sent.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+}
+
+#[async_trait]
+impl Notifier for RecordingNotifier {
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    async fn send(&self, to: &str, notification: &Notification, locale: &str) -> PortResult<()> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(PortError::Backend("SMTP nicht erreichbar".into()));
+        }
+        self.sent.lock().map_err(poisoned)?.push((
+            to.to_owned(),
+            notification.clone(),
+            locale.to_owned(),
+        ));
+        Ok(())
+    }
+}
+
+impl InMemoryStore {
+    /// Macht den Inhalt eines Outbox-Eintrags unlesbar (Fehlerpfad im Test).
+    pub fn corrupt_outbox_payload(&self, id: OutboxId) {
+        if let Ok(mut s) = self.shared.lock()
+            && let Some(o) = s.outbox.iter_mut().find(|o| o.entry.id == id)
+        {
+            "{".clone_into(&mut o.entry.payload);
+        }
+    }
+
+    /// Alle Outbox-Einträge in Reihenfolge der Erzeugung.
+    #[must_use]
+    pub fn outbox(&self) -> Vec<StoredOutbox> {
+        self.shared
+            .lock()
+            .map(|s| s.outbox.clone())
+            .unwrap_or_default()
+    }
+}
+
+#[async_trait]
+impl OutboxRepository for MemoryUow {
+    async fn enqueue(
+        &mut self,
+        t: &Tenant,
+        id: OutboxId,
+        event: &OutboxEvent,
+        now: DateTime<Utc>,
+    ) -> PortResult<()> {
+        let payload =
+            serde_json::to_string(event).map_err(|e| PortError::Backend(e.to_string()))?;
+        self.state.outbox.push(StoredOutbox {
+            entry: OutboxEntry {
+                id,
+                household_id: t.household_id(),
+                kind: event.kind().to_owned(),
+                payload,
+                attempts: 0,
+                created_at: now,
+            },
+            status: OutboxStatus::Pending,
+            next_attempt_at: now,
+            finished_at: None,
+        });
+        Ok(())
     }
 }
 
@@ -412,8 +716,111 @@ impl UnitOfWork for MemoryUow {
     fn drafts(&mut self) -> &mut dyn DraftRepository {
         self
     }
+    fn invitations(&mut self) -> &mut dyn InvitationRepository {
+        self
+    }
+    fn revisions(&mut self) -> &mut dyn RevisionRepository {
+        self
+    }
+    fn outbox(&mut self) -> &mut dyn OutboxRepository {
+        self
+    }
+    fn notification_settings(&mut self) -> &mut dyn NotificationSettingsRepository {
+        self
+    }
     async fn commit(self: Box<Self>) -> PortResult<()> {
-        *self.shared.lock().map_err(poisoned)? = self.state;
+        let mut shared = self.shared.lock().map_err(poisoned)?;
+        // Einlösen wie das bedingte Update der Datenbank: eine parallel
+        // eingelöste Einladung lässt den späteren Commit scheitern.
+        for mine in &self.state.invitations {
+            let accepted_elsewhere = shared.invitations.iter().any(|other| {
+                other.invitation.id == mine.invitation.id
+                    && other.accepted_at.is_some()
+                    && other.accepted_by != mine.accepted_by
+            });
+            if mine.accepted_at.is_some() && accepted_elsewhere {
+                return Err(PortError::Conflict("invitation".into()));
+            }
+        }
+        *shared = self.state;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl InvitationRepository for MemoryUow {
+    async fn create(&mut self, t: &Tenant, i: &NewInvitation) -> PortResult<()> {
+        if self
+            .state
+            .invitations
+            .iter()
+            .any(|x| x.invitation.token_hash == i.token_hash)
+        {
+            return Err(PortError::Conflict("token".into()));
+        }
+        self.state.invitations.push(StoredInvitation {
+            invitation: i.clone(),
+            household: t.household_id(),
+            accepted_by: None,
+            accepted_at: None,
+            revoked_at: None,
+        });
+        Ok(())
+    }
+
+    async fn find_by_hash(&mut self, hash: &[u8; 32]) -> PortResult<Option<Invitation>> {
+        Ok(self
+            .state
+            .invitations
+            .iter()
+            .find(|x| &x.invitation.token_hash == hash)
+            .map(|x| self.state.invitation(x)))
+    }
+
+    async fn mark_accepted(
+        &mut self,
+        id: InvitationId,
+        user: UserId,
+        at: DateTime<Utc>,
+    ) -> PortResult<bool> {
+        let Some(x) =
+            self.state.invitations.iter_mut().find(|x| {
+                x.invitation.id == id && x.accepted_at.is_none() && x.revoked_at.is_none()
+            })
+        else {
+            return Ok(false);
+        };
+        x.accepted_by = Some(user);
+        x.accepted_at = Some(at);
+        Ok(true)
+    }
+
+    async fn list_open(&mut self, t: &Tenant, now: DateTime<Utc>) -> PortResult<Vec<Invitation>> {
+        let mut out: Vec<Invitation> = self
+            .state
+            .invitations
+            .iter()
+            .filter(|x| x.household == t.household_id())
+            .map(|x| self.state.invitation(x))
+            .filter(|i| i.is_open(now))
+            .collect();
+        out.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
+        Ok(out)
+    }
+
+    async fn revoke(&mut self, t: &Tenant, id: InvitationId, at: DateTime<Utc>) -> PortResult<()> {
+        let x = self
+            .state
+            .invitations
+            .iter_mut()
+            .find(|x| {
+                x.household == t.household_id()
+                    && x.invitation.id == id
+                    && x.accepted_at.is_none()
+                    && x.revoked_at.is_none()
+            })
+            .ok_or(PortError::NotFound)?;
+        x.revoked_at = Some(at);
         Ok(())
     }
 }
@@ -450,6 +857,76 @@ impl MembershipRepository for MemoryUow {
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         Ok(out)
+    }
+
+    async fn list(&mut self, t: &Tenant) -> PortResult<Vec<Member>> {
+        let mut out: Vec<Member> = self
+            .state
+            .memberships
+            .iter()
+            .filter(|(h, _, _)| *h == t.household_id())
+            .map(|(_, u, role)| Member {
+                user_id: *u,
+                display_name: self
+                    .state
+                    .users
+                    .iter()
+                    .find(|x| x.user.id == *u)
+                    .map(|x| x.user.display_name.clone())
+                    .unwrap_or_default(),
+                role: *role,
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+                .then(a.user_id.cmp(&b.user_id))
+        });
+        Ok(out)
+    }
+
+    async fn lock_household(&mut self, _t: &Tenant) -> PortResult<()> {
+        // Eine Unit of Work arbeitet auf einer eigenen Kopie
+        Ok(())
+    }
+
+    async fn set_role(&mut self, t: &Tenant, user: UserId, role: Role) -> PortResult<()> {
+        let m = self
+            .state
+            .memberships
+            .iter_mut()
+            .find(|(h, u, _)| *h == t.household_id() && *u == user)
+            .ok_or(PortError::NotFound)?;
+        m.2 = role;
+        Ok(())
+    }
+
+    async fn remove(&mut self, t: &Tenant, user: UserId) -> PortResult<()> {
+        let before = self.state.memberships.len();
+        self.state
+            .memberships
+            .retain(|(h, u, _)| !(*h == t.household_id() && *u == user));
+        if before == self.state.memberships.len() {
+            return Err(PortError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn add(&mut self, household: HouseholdId, user: UserId, role: Role) -> PortResult<()> {
+        if !self.state.households.iter().any(|h| h.id == household) {
+            return Err(PortError::NotFound);
+        }
+        match self
+            .state
+            .memberships
+            .iter_mut()
+            .find(|(h, u, _)| *h == household && *u == user)
+        {
+            Some(m) => m.2 = m.2.max(role),
+            None => self.state.memberships.push((household, user, role)),
+        }
+        Ok(())
     }
 }
 
@@ -513,6 +990,9 @@ impl HouseholdRepository for MemoryUow {
         self.state.devices.retain(|(m, _)| !meters.contains(m));
         self.state.meters.retain(|(h, _)| *h != hid);
         self.state.drafts.retain(|d| d.household != hid);
+        self.state.invitations.retain(|i| i.household != hid);
+        self.state.revisions.retain(|(h, _)| *h != hid);
+        self.state.outbox.retain(|o| o.entry.household_id != hid);
         self.state.memberships.retain(|(h, _, _)| *h != hid);
         self.state.households.retain(|h| h.id != hid);
         Ok(())
@@ -650,6 +1130,7 @@ impl MeterRepository for MemoryUow {
                 id,
                 data: data.clone(),
                 archived: false,
+                archived_at: None,
                 created_at: now,
             },
         ));
@@ -776,6 +1257,36 @@ impl MeterRepository for MemoryUow {
             .map(|(m, d)| (*m, d.id)))
     }
 
+    async fn submeters_of(&mut self, t: &Tenant, parent: MeterId) -> PortResult<Vec<MeterId>> {
+        let mut out: Vec<MeterId> = self
+            .state
+            .devices
+            .iter()
+            .filter(|(m, d)| d.data.parent_meter_id == Some(parent) && self.state.owns_meter(t, *m))
+            .map(|(m, _)| *m)
+            .collect();
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
+    async fn set_archived(
+        &mut self,
+        t: &Tenant,
+        id: MeterId,
+        at: Option<DateTime<Utc>>,
+    ) -> PortResult<()> {
+        let (_, m) = self
+            .state
+            .meters
+            .iter_mut()
+            .find(|(h, m)| *h == t.household_id() && m.id == id)
+            .ok_or(PortError::NotFound)?;
+        m.archived = at.is_some();
+        m.archived_at = at;
+        Ok(())
+    }
+
     async fn find_by_name(&mut self, t: &Tenant, name: &str) -> PortResult<Option<MeterId>> {
         Ok(self
             .state
@@ -845,6 +1356,52 @@ impl ReadingRepository for MemoryUow {
         };
         self.state.readings.retain(|r| r.id != id);
         Ok(())
+    }
+
+    async fn update(&mut self, t: &Tenant, id: ReadingId, u: &ReadingUpdate) -> PortResult<()> {
+        let Some((_, current)) = ReadingRepository::get(self, t, id).await? else {
+            return Err(PortError::NotFound);
+        };
+        let duplicate = self.state.readings.iter().any(|x| {
+            x.id != id
+                && x.register_id == current.register_id
+                && x.device_id == current.device_id
+                && x.read_at == u.read_at
+        });
+        if duplicate {
+            return Err(PortError::Conflict("reading".into()));
+        }
+        if let Some(r) = self.state.readings.iter_mut().find(|r| r.id == id) {
+            r.read_at = u.read_at;
+            r.value = u.value;
+            r.note.clone_from(&u.note);
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl RevisionRepository for MemoryUow {
+    async fn append(&mut self, t: &Tenant, r: &Revision) -> PortResult<()> {
+        if !self.state.owns_meter(t, r.meter_id)
+            || self.state.meter_of_register(r.register_id) != Some(r.meter_id)
+        {
+            return Err(PortError::NotFound);
+        }
+        self.state.revisions.push((t.household_id(), r.clone()));
+        Ok(())
+    }
+
+    async fn for_meter(&mut self, t: &Tenant, meter: MeterId) -> PortResult<Vec<Revision>> {
+        let mut out: Vec<Revision> = self
+            .state
+            .revisions
+            .iter()
+            .filter(|(h, r)| *h == t.household_id() && r.meter_id == meter)
+            .map(|(_, r)| r.clone())
+            .collect();
+        out.sort_by(|a, b| b.changed_at.cmp(&a.changed_at).then(b.id.cmp(&a.id)));
+        Ok(out)
     }
 }
 

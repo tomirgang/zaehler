@@ -8,9 +8,9 @@
     <thead>
       <tr>
         <th>{{ ctx.lang.t("analysis-month") }}</th>
-        <th class="num">{{ year }} ({{ unit }})</th>
+        <th class="num">{{ year }} ({{ crate::pages::unit_html(unit)|safe }})</th>
         {% if notes.has_projected %}<th class="num">{{ notes.projected_current }}</th>{% endif %}
-        <th class="num">{{ previous }} ({{ unit }})</th>
+        <th class="num">{{ previous }} ({{ crate::pages::unit_html(unit)|safe }})</th>
         {% if notes.has_projected %}<th class="num">{{ notes.projected_previous }}</th>{% endif %}
         {% if notes.has_estimate %}<th class="num">{{ ctx.lang.t("chart-estimate-series") }}</th>{% endif %}
         <th class="num">{{ ctx.lang.t("chart-cumulative-series") }}</th>
@@ -43,14 +43,27 @@
     {% if ctx.is_owner %}
     <a class="button secondary" href="/meters/{{ id }}/edit">{{ ctx.lang.t("action-edit") }}</a>
     <a class="button secondary" href="/meters/{{ id }}/swap">{{ ctx.lang.t("meter-swap") }}</a>
+    {% if archived.is_some() %}
+    <form method="post" action="/meters/{{ id }}/restore" class="inline">
+      <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+      <button type="submit" class="secondary">{{ ctx.lang.t("meter-restore") }}</button>
+    </form>
+    {% else %}
+    <form method="post" action="/meters/{{ id }}/archive" class="inline" hx-confirm="{{ ctx.lang.t("meter-archive-confirm") }}">
+      <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+      <button type="submit" class="secondary">{{ ctx.lang.t("meter-archive") }}</button>
+    </form>
+    {% endif %}
     {% endif %}
   </div>
 </div>
 
 <dl class="facts">
   <dt>{{ ctx.lang.t("meter-kind") }}</dt><dd>{{ kind }}</dd>
-  <dt>{{ ctx.lang.t("meter-unit") }}</dt><dd>{{ unit }}</dd>
-  {% if let Some(i) = interval %}<dt>{{ ctx.lang.t("meter-interval") }}</dt><dd>{{ i }}</dd>{% endif %}
+  <dt>{{ ctx.lang.t("meter-unit") }}</dt><dd>{{ crate::pages::unit_html(unit)|safe }}</dd>
+  {% if let Some(a) = archived %}<dt>{{ ctx.lang.t("meter-archived") }}</dt><dd><span class="tag">{{ ctx.lang.t("meter-archived-tag") }}</span> {{ a }}</dd>{% endif %}
+  {% if let Some(p) = purpose %}<dt>{{ ctx.lang.t("meter-purpose") }}</dt><dd>{{ p }}</dd>{% endif %}
+  {% if let Some(s) = schedule %}<dt>{{ ctx.lang.t("meter-schedule") }}</dt><dd>{{ s }}</dd>{% endif %}
   {% if let Some(r) = max_rate %}<dt>{{ ctx.lang.t("meter-max-rate") }}</dt><dd>{{ r }}</dd>{% endif %}
   {% if let Some(b) = billing_start %}<dt>{{ ctx.lang.t("meter-billing-start") }}</dt><dd>{{ b }}</dd>{% endif %}
   <dt>{{ ctx.lang.t("meter-registers") }}</dt>
@@ -62,10 +75,28 @@
   <h2 id="analysis-title">{{ ctx.lang.t("analysis-title") }}</h2>
   {% for msg in a.invalid %}<p class="callout warning">{{ msg }}</p>{% endfor %}
 
+  {% if !a.submeters.is_empty() %}
+  <div class="callout">
+    <p>{{ ctx.lang.t("analysis-submeters") }}
+      {% for s in a.submeters %}<a class="tag" href="/meters/{{ s.id }}">{{ s.name }}</a> {% endfor %}</p>
+    <p>
+      {% if a.excluding_submeters %}
+      <strong>{{ ctx.lang.t("analysis-submeters-excluded") }}</strong>
+      <a href="/meters/{{ id }}">{{ ctx.lang.t("analysis-submeters-include") }}</a>
+      {% else %}
+      <strong>{{ ctx.lang.t("analysis-submeters-included") }}</strong>
+      <a href="/meters/{{ id }}?submeters=exclude">{{ ctx.lang.t("analysis-submeters-exclude") }}</a>
+      {% endif %}
+    </p>
+    <p class="hint">{{ ctx.lang.t("analysis-submeters-hint") }}</p>
+  </div>
+  {% endif %}
+
   {% if a.months.is_empty() %}
   <p class="muted">{{ ctx.lang.t("analysis-no-data") }}</p>
   {% else %}
   <form method="get" class="form inline-form">
+    {% if a.excluding_submeters %}<input type="hidden" name="submeters" value="exclude">{% endif %}
     <div class="field">
       <label for="month">{{ ctx.lang.t("analysis-reference-month") }}</label>
       <select id="month" name="month">
@@ -77,11 +108,12 @@
 
   {% if let Some(title) = a.compare_title %}
   <h3>{{ title }}</h3>
+  {% if let Some(tv) = a.month_traffic %}{% include "partials/traffic_light.html" %}{% endif %}
   <table class="table">
     <thead>
       <tr>
         <th>{{ ctx.lang.t("analysis-reference") }}</th>
-        <th class="num">{{ ctx.lang.t("analysis-reference-value") }} ({{ a.unit }})</th>
+        <th class="num">{{ ctx.lang.t("analysis-reference-value") }} ({{ crate::pages::unit_html(a.unit)|safe }})</th>
         <th class="num">{{ ctx.lang.t("analysis-diff") }}</th>
         <th class="num">{{ ctx.lang.t("analysis-diff-rel") }}</th>
       </tr>
@@ -108,9 +140,9 @@
   <h3>{{ ctx.lang.t("analysis-ytd-title") }}</h3>
   <p class="hint">{{ y.label }}</p>
   <dl class="facts">
-    <dt>{{ ctx.lang.t("analysis-current") }}</dt><dd>{% if y.current.is_empty() %}<span class="muted">{{ ctx.lang.t("analysis-incomplete") }}</span>{% else %}{{ y.current }} {{ a.unit }}{% endif %}</dd>
-    <dt>{{ ctx.lang.t("analysis-previous") }}</dt><dd>{% if y.previous.is_empty() %}<span class="muted">{{ ctx.lang.t("analysis-incomplete") }}</span>{% else %}{{ y.previous }} {{ a.unit }}{% endif %}</dd>
-    {% if !y.incomplete %}<dt>{{ ctx.lang.t("analysis-diff") }}</dt><dd>{{ y.abs }} {{ a.unit }} ({{ y.rel }})</dd>{% endif %}
+    <dt>{{ ctx.lang.t("analysis-current") }}</dt><dd>{% if y.current.is_empty() %}<span class="muted">{{ ctx.lang.t("analysis-incomplete") }}</span>{% else %}{{ y.current }} {{ crate::pages::unit_html(a.unit)|safe }}{% endif %}</dd>
+    <dt>{{ ctx.lang.t("analysis-previous") }}</dt><dd>{% if y.previous.is_empty() %}<span class="muted">{{ ctx.lang.t("analysis-incomplete") }}</span>{% else %}{{ y.previous }} {{ crate::pages::unit_html(a.unit)|safe }}{% endif %}</dd>
+    {% if !y.incomplete %}<dt>{{ ctx.lang.t("analysis-diff") }}</dt><dd>{{ y.abs }} {{ crate::pages::unit_html(a.unit)|safe }} ({{ y.rel }})</dd>{% endif %}
   </dl>
   {% endif %}
 
@@ -119,8 +151,8 @@
     <thead>
       <tr>
         <th>{{ ctx.lang.t("analysis-period") }}</th>
-        <th class="num">{{ ctx.lang.t("forecast-observed") }} ({{ a.unit }})</th>
-        <th class="num">{{ ctx.lang.t("forecast-projected") }} ({{ a.unit }})</th>
+        <th class="num">{{ ctx.lang.t("forecast-observed") }} ({{ crate::pages::unit_html(a.unit)|safe }})</th>
+        <th class="num">{{ ctx.lang.t("forecast-projected") }} ({{ crate::pages::unit_html(a.unit)|safe }})</th>
         <th class="num">{{ ctx.lang.t("forecast-coverage") }}</th>
       </tr>
     </thead>
@@ -139,7 +171,7 @@
       {% endfor %}
     </tbody>
   </table>
-  <p class="hint">{{ ctx.lang.t("forecast-hint") }}</p>
+  <p class="hint">{{ ctx.lang.t("forecast-hint") }} {{ a.profile_note }}</p>
 
   <div class="charts" data-chart-url="/meters/{{ id }}/chart.json" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
     <h3 id="chart-monthly-title">{{ a.chart_title_monthly }}</h3>
@@ -161,8 +193,8 @@
       <thead>
         <tr>
           <th>{{ ctx.lang.t("analysis-period") }}</th>
-          <th class="num">{{ ctx.lang.t("forecast-observed") }} ({{ a.unit }})</th>
-          <th class="num">{{ ctx.lang.t("forecast-projected") }} ({{ a.unit }})</th>
+          <th class="num">{{ ctx.lang.t("forecast-observed") }} ({{ crate::pages::unit_html(a.unit)|safe }})</th>
+          <th class="num">{{ ctx.lang.t("forecast-projected") }} ({{ crate::pages::unit_html(a.unit)|safe }})</th>
           <th class="num">{{ ctx.lang.t("forecast-coverage") }}</th>
         </tr>
       </thead>
@@ -201,9 +233,11 @@
       <thead>
         <tr>
           <th>{{ ctx.lang.t("analysis-month") }}</th>
-          <th class="num">{{ a.primary_label }} ({{ a.unit }})</th>
-          {% if a.has_export %}<th class="num">{{ ctx.lang.t("analysis-export") }} ({{ a.unit }})</th>{% endif %}
+          <th class="num">{{ a.primary_label }} ({{ crate::pages::unit_html(a.unit)|safe }})</th>
+          {% if !a.submeters.is_empty() %}<th class="num">{{ ctx.lang.t("analysis-net") }} ({{ crate::pages::unit_html(a.unit)|safe }})</th>{% endif %}
+          {% if a.has_export %}<th class="num">{{ ctx.lang.t("analysis-export") }} ({{ crate::pages::unit_html(a.unit)|safe }})</th>{% endif %}
           {% for code in a.register_codes %}<th class="num">{{ code }}</th>{% endfor %}
+          <th>{{ ctx.lang.t("traffic-title") }}</th>
         </tr>
       </thead>
       <tbody>
@@ -211,8 +245,10 @@
         <tr>
           <td>{{ r.label }}</td>
           <td class="num">{% if r.import.is_empty() %}<span class="muted">{{ ctx.lang.t("analysis-incomplete-short") }}</span>{% else %}{{ r.import }}{% endif %}</td>
+          {% if !a.submeters.is_empty() %}<td class="num">{{ r.net }}</td>{% endif %}
           {% if a.has_export %}<td class="num">{{ r.export }}</td>{% endif %}
           {% for v in r.registers %}<td class="num">{{ v }}</td>{% endfor %}
+          <td>{% if let Some(tv) = r.traffic %}{% include "partials/traffic_light.html" %}{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -222,6 +258,7 @@
 </section>
 
 <h2>{{ ctx.lang.t("meter-readings") }}</h2>
+{% if has_history %}<p><a href="/meters/{{ id }}/history">{{ ctx.lang.t("history-link") }}</a></p>{% endif %}
 {% if readings.is_empty() %}
 <p>{{ ctx.lang.t("readings-empty") }}</p>
 {% else %}
@@ -233,7 +270,7 @@
       <th class="num">{{ ctx.lang.t("reading-value") }}</th>
       <th>{{ ctx.lang.t("reading-source") }}</th>
       <th>{{ ctx.lang.t("reading-note") }}</th>
-      {% if ctx.can_write %}<th><span class="visually-hidden">{{ ctx.lang.t("action-delete") }}</span></th>{% endif %}
+      {% if ctx.can_write %}<th><span class="visually-hidden">{{ ctx.lang.t("member-actions") }}</span></th>{% endif %}
     </tr>
   </thead>
   <tbody>
@@ -243,9 +280,10 @@
       <td>{{ r.register }}</td>
       <td class="num">{{ r.value }}</td>
       <td>{{ r.source }}{% if r.has_photo %} <a href="/readings/{{ r.id }}/photo" target="_blank" rel="noopener">{{ ctx.lang.t("reading-photo") }}</a>{% endif %}</td>
-      <td>{{ r.note }}</td>
+      <td>{{ r.note }}{% if r.changed %} <span class="tag">{{ ctx.lang.t("reading-changed") }}</span>{% endif %}</td>
       {% if ctx.can_write %}
       <td>
+        <a href="/readings/{{ r.id }}/edit">{{ ctx.lang.t("action-edit") }}</a>
         <form method="post" action="/readings/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("reading-delete-confirm") }}">
           <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
           <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
@@ -267,6 +305,7 @@
       <th>{{ ctx.lang.t("device-removed") }}</th>
       <th>{{ ctx.lang.t("meter-digits") }}</th>
       <th>{{ ctx.lang.t("meter-decimals") }}</th>
+      <th>{{ ctx.lang.t("meter-parent") }}</th>
     </tr>
   </thead>
   <tbody>
@@ -277,6 +316,7 @@
       <td>{% if let Some(r) = d.removed %}{{ r }}{% else %}<span class="tag">{{ ctx.lang.t("device-active") }}</span>{% endif %}</td>
       <td>{{ d.digits }}</td>
       <td>{{ d.decimals }}</td>
+      <td>{% if let Some((pid, pname)) = d.parent %}<a href="/meters/{{ pid }}">{{ pname }}</a>{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>

@@ -15,6 +15,7 @@ pub mod forecast;
 pub mod meter;
 pub mod period;
 pub mod reading;
+pub mod schedule;
 pub mod series;
 pub mod tariff;
 

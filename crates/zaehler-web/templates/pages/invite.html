@@ -1,0 +1,13 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("invite-accept-title") }}</h1>
+<p>{{ text }}</p>
+<form method="post" action="/invite/{{ token }}/accept" class="form">
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("invite-accept") }}</button>
+    <a href="/">{{ ctx.lang.t("action-cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

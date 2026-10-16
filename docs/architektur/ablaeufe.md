@@ -65,13 +65,17 @@ Request gegen die Mitgliedschaften geprüft.
 
 ```{spec} Scheduler mit Leader-Lock
 :id: SPEC_JOB_SCHEDULER
-:status: draft
+:status: implemented
 :satisfies: REQ_NTF_001, REQ_NTF_004, REQ_OPS_008
 
 Ein In-Process-Scheduler (Tokio-Intervall, 1 min) führt Jobs aus: Fälligkeiten
 prüfen, Erinnerungen und Alarme versenden. Bei PostgreSQL hält genau eine
 Replica den Leader-Lock (`pg_try_advisory_lock`); bei SQLite gibt es nur eine
-Instanz. `job_runs` verhindert Doppelversand nach Neustarts.
+Instanz. `job_runs` protokolliert den letzten Lauf je Job; Doppelversand nach
+Neustarts verhindert das Versandprotokoll `notification_log`
+({need}`SPEC_NTF_REMINDERS`, {need}`SPEC_NTF_ALARMS`). Takt
+`scheduler.tick_seconds` (60 s); `DispatchOutbox` läuft in jedem Takt,
+`SendReminders` stündlich, Housekeeping im bisherigen Intervall.
 ```
 
 ## Import

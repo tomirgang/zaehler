@@ -7,23 +7,33 @@ use anyhow::Context;
 use axum::Router;
 use zaehler_ai::OpenRouter;
 use zaehler_app::{
-    port::{BlobStore, MeterRecognizer, SystemClock, UuidV7},
-    usecase::{Ports, UseCases, backup::ExportInstallation, housekeeping::Housekeeping},
+    port::{
+        BlobStore, DisabledNotifier, LeaderLock, MeterRecognizer, Notifier, SingleInstance,
+        SystemClock, UuidV7,
+    },
+    usecase::{
+        Ports, Settings, UseCases,
+        backup::ExportInstallation,
+        housekeeping::Housekeeping,
+        jobs::{DispatchOutbox, SendReminders},
+    },
 };
-use zaehler_db::{Db, DbSessionStore, SeaOrmStore};
+use zaehler_db::{Db, DbSessionStore, PgLeaderLock, SeaOrmStore};
 use zaehler_media::{ImageCrateNormalizer, ImageOptions};
+use zaehler_notify::SmtpNotifier;
 use zaehler_storage::{ObjectStoreBlobStore, S3Options};
 use zaehler_web::{OidcClient, WebConfig, WebState};
 
 use crate::{
     backup,
     config::{Config, StorageConfig},
+    scheduler::{self, Scheduler},
 };
 
-/// Router und Housekeeping der Instanz.
+/// Router und Scheduler der Instanz.
 pub struct App {
     pub router: Router,
-    pub housekeeping: Housekeeping,
+    pub scheduler: Scheduler,
     /// Anwendungsfälle des Routers (Seed-Daten im Leistungstest)
     #[cfg_attr(not(test), allow(dead_code))]
     pub uc: Arc<UseCases>,
@@ -61,6 +71,20 @@ fn blob_store(config: &StorageConfig) -> anyhow::Result<ObjectStoreBlobStore> {
     store.map_err(|e| anyhow::anyhow!("Objektspeicher nicht verfügbar: {e}"))
 }
 
+/// E-Mail-Versand gemäß `notify.smtp`; ohne Konfiguration deaktiviert
+/// (SPEC_NTF_EMAIL).
+// @impl SPEC_NTF_EMAIL
+fn notifier(config: &Config) -> anyhow::Result<Arc<dyn Notifier>> {
+    let Some(smtp) = &config.notify.smtp else {
+        tracing::info!("notify.smtp nicht konfiguriert; keine E-Mail-Benachrichtigungen");
+        return Ok(Arc::new(DisabledNotifier));
+    };
+    tracing::info!(host = %smtp.host, port = smtp.port, "E-Mail-Versand aktiv");
+    Ok(Arc::new(
+        SmtpNotifier::new(smtp).map_err(anyhow::Error::msg)?,
+    ))
+}
+
 /// Erzeugt die Adapter; `recognizer` nur für den Webserver.
 pub async fn adapters(
     config: &Config,
@@ -83,6 +107,12 @@ pub async fn adapters(
         })),
         recognizer,
         backup: store.clone(),
+        jobs: store.clone(),
+        notifier: notifier(config)?,
+        settings: Settings {
+            invitation_ttl: chrono::Duration::days(i64::from(config.invitations.ttl_days)),
+            public_url: config.server.public_url.trim_end_matches('/').to_owned(),
+        },
     };
     Ok(Adapters {
         db,
@@ -112,7 +142,52 @@ pub async fn prepare_database(config: &Config, a: &Adapters) -> anyhow::Result<(
     Ok(())
 }
 
-/// Baut den HTTP-Router und das Housekeeping mit allen Adaptern; `traces`
+/// Leader-Lock: bei PostgreSQL ein Advisory-Lock auf eigener Verbindung
+/// (`database.lock_url`), bei SQLite immer Leader (SPEC_OPS_REPLICAS).
+// @impl SPEC_OPS_REPLICAS
+async fn leader_lock(config: &Config) -> anyhow::Result<Arc<dyn LeaderLock>> {
+    let url = config
+        .database
+        .lock_url
+        .as_deref()
+        .unwrap_or(&config.database.url);
+    if url.starts_with("postgres") {
+        Ok(Arc::new(PgLeaderLock::connect(url).await.context(
+            "Verbindung für den Leader-Lock fehlgeschlagen",
+        )?))
+    } else {
+        Ok(Arc::new(SingleInstance))
+    }
+}
+
+/// Scheduler mit den Jobs der Instanz (SPEC_JOB_SCHEDULER).
+async fn scheduler(config: &Config, a: &Adapters) -> anyhow::Result<Scheduler> {
+    let housekeeping = Housekeeping::new(
+        a.store.clone(),
+        a.blobs.clone(),
+        a.ports.clock.clone(),
+        chrono::Duration::hours(config.housekeeping.draft_ttl_hours),
+    );
+    let every_tick = chrono::Duration::seconds(i64::try_from(config.scheduler.tick_seconds)?);
+    let housekeeping_every =
+        chrono::Duration::minutes(i64::try_from(config.housekeeping.interval_minutes)?);
+    Ok(Scheduler::new(
+        leader_lock(config).await?,
+        a.store.clone(),
+        a.ports.clock.clone(),
+    )
+    .with(scheduler::dispatch_outbox(
+        DispatchOutbox::new(a.ports.clone()),
+        every_tick,
+    ))
+    .with(scheduler::send_reminders(
+        SendReminders::new(a.ports.clone()),
+        chrono::Duration::hours(1),
+    ))
+    .with(scheduler::housekeeping(housekeeping, housekeeping_every)))
+}
+
+/// Baut den HTTP-Router und den Scheduler mit allen Adaptern; `traces`
 /// übernimmt den Trace-Context eingehender Requests (SPEC_OPS_OTEL).
 pub async fn build(config: &Config, traces: bool) -> anyhow::Result<App> {
     let recognizer: Option<Arc<dyn MeterRecognizer>> = if let Some(ai) = &config.ai {
@@ -179,12 +254,7 @@ pub async fn build(config: &Config, traces: bool) -> anyhow::Result<App> {
     };
     Ok(App {
         router: zaehler_web::router(state, DbSessionStore::new(a.db.clone())),
-        housekeeping: Housekeeping::new(
-            a.store,
-            a.blobs,
-            a.ports.clock.clone(),
-            chrono::Duration::hours(config.housekeeping.draft_ttl_hours),
-        ),
+        scheduler: scheduler(config, &a).await?,
         uc,
     })
 }

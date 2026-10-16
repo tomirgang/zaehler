@@ -5,10 +5,13 @@
 mod backup;
 pub mod entity;
 pub mod fixed;
+mod jobs;
+mod lock;
 pub mod migration;
 mod session_store;
 mod uow;
 
+pub use lock::PgLeaderLock;
 pub use session_store::DbSessionStore;
 pub use uow::SeaOrmStore;
 
@@ -185,6 +188,7 @@ mod tests {
         let store = super::SeaOrmStore::new(db);
         zaehler_app::testing::suite::run(&store).await;
         zaehler_app::testing::suite::drafts(&store, &store).await;
+        zaehler_app::testing::suite::jobs(&store, &store, &store).await;
 
         // Export und Import verlustfrei auch auf PostgreSQL (SPEC_BACKUP_DATA)
         let fixture = crate::upgrade_tests::fixture();
@@ -194,6 +198,38 @@ mod tests {
             store.export().await.unwrap().household(household),
             fixture.household(household)
         );
+    }
+
+    /// Zwei Instanzen gegen dieselbe Datenbank: genau eine ist Leader; nach
+    /// dem Beenden übernimmt die andere im nächsten Takt. Nur mit
+    /// `ZAEHLER_TEST_DATABASE_URL`.
+    // @test SPEC_JOB_SCHEDULER, SPEC_OPS_REPLICAS
+    #[tokio::test]
+    async fn leader_lock_is_held_by_exactly_one_instance() {
+        use zaehler_app::port::LeaderLock;
+        let Ok(url) = std::env::var("ZAEHLER_TEST_DATABASE_URL") else {
+            eprintln!("ZAEHLER_TEST_DATABASE_URL nicht gesetzt, Test übersprungen");
+            return;
+        };
+        let a = super::PgLeaderLock::connect(&url).await.unwrap();
+        let b = super::PgLeaderLock::connect(&url).await.unwrap();
+        assert!(a.is_leader().await);
+        assert!(!b.is_leader().await);
+        // mehrere Takte: Leader bleibt, ohne den Lock zu stapeln
+        for _ in 0..3 {
+            assert!(a.is_leader().await);
+            assert!(!b.is_leader().await);
+        }
+        a.release().await.unwrap();
+        let mut took_over = false;
+        for _ in 0..2 {
+            if b.is_leader().await {
+                took_over = true;
+                break;
+            }
+        }
+        assert!(took_over, "Übernahme innerhalb von zwei Takten");
+        b.release().await.unwrap();
     }
 
     // @test SPEC_ARCH_UOW, SPEC_SEC_TENANT_SCOPE, SPEC_OPS_DB_BACKENDS, SPEC_DM_CORE
@@ -206,6 +242,7 @@ mod tests {
         let store = super::SeaOrmStore::new(db);
         zaehler_app::testing::suite::run(&store).await;
         zaehler_app::testing::suite::drafts(&store, &store).await;
+        zaehler_app::testing::suite::jobs(&store, &store, &store).await;
         std::fs::remove_dir_all(dir).ok();
     }
 

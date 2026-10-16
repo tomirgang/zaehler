@@ -18,6 +18,8 @@ pub struct Model {
     pub note: Option<String>,
     pub created_by: Option<Uuid>,
     pub created_at: DateTimeUtc,
+    /// Letzte Korrektur (`m20261016_000007_reading_revisions`)
+    pub updated_at: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

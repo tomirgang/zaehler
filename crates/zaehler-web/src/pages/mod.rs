@@ -8,7 +8,9 @@ pub mod backup;
 pub mod capture;
 pub mod dashboard;
 pub mod import;
+pub mod members;
 pub mod meters;
+pub mod notifications;
 pub mod pwa;
 pub mod readings;
 pub mod settings;
@@ -149,6 +151,27 @@ impl FormData {
     }
 }
 
+/// Einheit als HTML: maskiert, Hochzahlen als benannte Entität (`m&sup3;`),
+/// damit sie unabhängig von Schrift und Zeichensatz korrekt erscheinen.
+// @impl SPEC_I18N
+#[must_use]
+pub fn unit_html(unit: impl AsRef<str>) -> String {
+    let mut out = String::new();
+    for c in unit.as_ref().chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            '\u{b2}' => out.push_str("&sup2;"),
+            '\u{b3}' => out.push_str("&sup3;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Fehlertexte eines Feldes.
 #[must_use]
 pub fn field_errors(lang: Lang, errors: &FieldErrors, field: &str) -> Vec<String> {
@@ -174,5 +197,19 @@ pub async fn ready(State(state): State<WebState>) -> (StatusCode, &'static str) 
             tracing::warn!(error = %e, "readiness check failed");
             (StatusCode::SERVICE_UNAVAILABLE, "not ready")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unit_html;
+
+    // @test SPEC_I18N
+    #[test]
+    fn unit_with_superscript_entities() {
+        assert_eq!(unit_html("m³"), "m&sup3;");
+        assert_eq!(unit_html(String::from("m²")), "m&sup2;");
+        assert_eq!(unit_html("kWh"), "kWh");
+        assert_eq!(unit_html("<b>&"), "&lt;b&gt;&amp;");
     }
 }

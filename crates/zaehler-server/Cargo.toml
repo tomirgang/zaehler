@@ -39,6 +39,8 @@ opentelemetry-otlp.workspace = true
 tracing-opentelemetry.workspace = true
 
 [dev-dependencies]
+zaehler-app = { workspace = true, features = ["testing"] }
+async-trait.workspace = true
 zaehler-domain.workspace = true
 rust_decimal.workspace = true
 tempfile.workspace = true

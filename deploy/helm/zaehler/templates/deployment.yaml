@@ -152,8 +152,11 @@ spec:
               value: {{ .Values.notify.smtp.host | quote }}
             - name: ZAEHLER_NOTIFY__SMTP__PORT
               value: {{ .Values.notify.smtp.port | quote }}
+            - name: ZAEHLER_NOTIFY__SMTP__SECURITY
+              value: {{ .Values.notify.smtp.security | default "starttls" | quote }}
             - name: ZAEHLER_NOTIFY__SMTP__FROM
               value: {{ .Values.notify.smtp.from | quote }}
+            {{- if .Values.notify.smtp.existingSecret }}
             - name: ZAEHLER_NOTIFY__SMTP__USERNAME
               valueFrom:
                 secretKeyRef:
@@ -164,6 +167,7 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.notify.smtp.existingSecret }}
                   key: password
+            {{- end }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}

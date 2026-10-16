@@ -259,7 +259,7 @@ Mindestrolle gemäß {need}`SPEC_TEN_ROLES`: `V` Viewer, `M` Member, `O` Owner,
 
 ```{spec} Einladungen
 :id: SPEC_TEN_INVITES
-:status: draft
+:status: implemented
 :satisfies: REQ_TEN_004, REQ_TEN_003
 :links: SPEC_TEN_ROLES, SPEC_NTF_EMAIL
 
@@ -275,13 +275,21 @@ Work: Hash bekannt, nicht widerrufen, nicht abgelaufen, `mark_accepted` liefert
 Einlösen nur einmal gelingt). Ist der Nutzer schon Mitglied, bleibt die höhere
 Rolle erhalten. Danach wird der Haushalt aktiv. Fehlerfälle ergeben eine Seite
 „Einladung ungültig oder abgelaufen“ ohne Angabe des Grundes.
+
+Umsetzung: Das Token besteht aus zwei UUIDv4 (64 Hex-Zeichen, 244 Bit
+Zufall); die Gültigkeit ist über `invitations.ttl_days` (Standard 7)
+einstellbar. Für den E-Mail-Versand steht das Token im Outbox-Eintrag
+`invitation_created`, bis dieser erledigt ist und vom Housekeeping entfernt
+wird; der Link ist nach Annahme, Widerruf oder Ablauf wertlos. Zusätzlich
+sind `ListInvitations` und `PreviewInvitation` (Anzeige vor der Annahme)
+umgesetzt.
 ```
 
 ### Erfassung
 
 ```{spec} Korrektur und Löschen mit Historie
 :id: SPEC_RDG_HISTORY
-:status: draft
+:status: implemented
 :satisfies: REQ_RDG_003
 :links: SPEC_RDG_PLAUSIBILITY, SPEC_RDG_DELETE
 
@@ -296,11 +304,15 @@ Haushalt gelöscht. Die Detailseite der Messstelle zeigt je Ablesung den
 Hinweis „geändert“ und eine Liste der Änderungen (`ReadingHistory`).
 Zählerwechsel-Ablesungen (End- und Startstand) sind nur gemeinsam änderbar:
 der Zeitpunkt beider Ablesungen ändert sich zusammen.
+
+Umsetzung: Zusätzlich `GetReading` (Ablesung mit Kontext, ob sie zu einem
+Zählerwechsel gehört) und der Port-Typ `ReadingUpdate`; eine Zeitänderung
+beim Zählerwechsel verschiebt auch Aus- und Einbauzeit der Geräte.
 ```
 
 ```{spec} Ableseplan und Fälligkeit
 :id: SPEC_RDG_SCHEDULE
-:status: draft
+:status: implemented
 :satisfies: REQ_RDG_005, REQ_NTF_001
 
 `ReadingSchedule::EveryDays(n)`: fällig am Tag `letzte Ablesung + n`.
@@ -311,13 +323,18 @@ ist eine Messstelle ab dem Tag nach der Fälligkeit (Kalendertage in der
 Zeitzone des Haushalts). Archivierte Messstellen sind nie fällig. Das
 Dashboard ({need}`SPEC_UI_DASHBOARD`) zeigt fällig und überfällig getrennt und
 sortiert überfällige zuerst.
+
+Umsetzung: Statt einer Datenmigration gilt bei fehlendem `schedule_kind` der
+bisherige Turnus `reading_interval_days` als `EveryDays(n)`; beim Speichern
+eines Plans `EveryDays` wird `reading_interval_days` weiter geschrieben, damit
+ältere Programmversionen nach einem Rückschritt denselben Turnus sehen.
 ```
 
 ### Messstellen
 
 ```{spec} Archivieren von Messstellen
 :id: SPEC_MTR_ARCHIVE
-:status: draft
+:status: implemented
 :satisfies: REQ_MTR_007
 
 `ArchiveMeter` setzt `archived = true` und `archived_at`; `RestoreMeter`
@@ -331,7 +348,7 @@ oder Zwischenzähler auf die Messstelle, bleibt der Verweis gültig.
 
 ```{spec} Zwischenzähler und Verwendungszweck
 :id: SPEC_MTR_SUBMETER
-:status: draft
+:status: implemented
 :satisfies: REQ_MTR_008, REQ_CAR_008, REQ_MTR_002
 
 Eine Strom-Messstelle hat einen Verwendungszweck (`general`, `heat_pump`,
@@ -354,13 +371,19 @@ Zwischenzähler abgezogen; ist einer davon im Monat undefiniert, ist der
 Monatswert undefiniert. Die Art „Sonstiges“ mit freier Einheit
 ({need}`REQ_MTR_002`) bleibt unverändert und wird in der Abnahme mit Heizöl
 (l) und Pellets (kg) geprüft.
+
+Umsetzung: Die Umschaltung wirkt auf Monatstabelle und Vergleiche;
+Prognosen und Diagramme enthalten weiterhin den Verbrauch der
+Zwischenzähler. Die Regel zu Verträgen folgt mit den Verträgen
+(WP_V1_08). `meter_devices.parent_meter_id` hat keinen Fremdschlüssel, weil
+SQLite ihn nicht nachträglich anlegen kann; die Prüfung liegt im Anwendungsfall.
 ```
 
 ### Auswertung
 
 ```{spec} Saisonprofil und Ampel in der Auswertung
 :id: SPEC_ANA_TRAFFIC_LIGHT
-:status: draft
+:status: implemented
 :satisfies: REQ_ANA_006, REQ_ANA_002
 :links: SPEC_EXP_BAND, SPEC_FC_SEASON_PROFILE, SPEC_FC_CURRENT_YEAR
 
@@ -381,31 +404,44 @@ sonst keine Ampel. Bei einem Hausanschluss mit Erzeugungszähler bewertet die
 Ampel den Gesamtverbrauch ({need}`SPEC_PV_KPI`). Angezeigt wird die Ampel des
 Bezugsmonats auf der Detailseite und im Dashboard sowie je Monat in der
 Tabelle.
+
+Umsetzung: Bezugsmonat ist der letzte vollständige Monat. Die Variante
+„Abschlagsbasis“ folgt mit den Verträgen (WP_V1_09), die Bewertung des
+Gesamtverbrauchs bei PV-Anlagen mit M8.
 ```
 
 ### Benachrichtigungen
 
 ```{spec} E-Mail-Versand
 :id: SPEC_NTF_EMAIL
-:status: draft
+:status: implemented
 :satisfies: REQ_NTF_002, REQ_NTF_005
 :links: ADR_011
 
 `SmtpNotifier` (`lettre`, `AsyncSmtpTransport<Tokio1Executor>`, rustls):
-`smtp.host`, `smtp.port`, `smtp.security` (`starttls` Standard, `tls`,
-`none` nur bei `localhost`), `smtp.username`, `smtp.password` (Geheimnis),
-`smtp.from`, Timeout 30 s. Ohne `smtp.host` ist `enabled() == false`; die
+`notify.smtp.host`, `notify.smtp.port`, `notify.smtp.security` (`starttls`
+Standard, `tls`, `none` nur bei `localhost`), `notify.smtp.username`,
+`notify.smtp.password` (Geheimnis), `notify.smtp.from`, Timeout 30 s. Ohne
+`notify.smtp` ist `enabled() == false`; die
 Einstellungsseite zeigt dann einen Hinweis, Einladungen nur als Link. Jede
 E-Mail ist Text (UTF-8) mit Betreff und Link auf die betroffene Seite, in der
 Sprache des Empfängers. Einstellungen je Nutzer: Adresse (Standard: E-Mail aus
 dem OIDC-Login, falls vorhanden), Ereignistypen `reminder`, `alarm`,
 `pv_alarm` (Standard alle an), Abmeldelink in jeder E-Mail führt auf die
 Einstellungsseite. E-Mail-Adressen erscheinen nicht in Logs.
+
+Umsetzung: Der Konfigurationsschlüssel `notify.smtp.*` aus dem MVP bleibt
+erhalten. Der Ereignistyp `pv_alarm` entsteht mit M8; bis dahin speichert
+`notification_settings` `reminder` und `alarm`. SMTP-Fehler werden nur als
+Kategorie (`permanent`, `transient`, `timeout`, `tls`, `connection` mit
+Statuscode) weitergegeben, weil Serverantworten Adressen enthalten können;
+Logs nennen nur die Nutzer-ID. Die Einstellungen sind im
+Installationsarchiv enthalten, Versandprotokoll und Outbox nicht.
 ```
 
 ```{spec} Ablese-Erinnerungen
 :id: SPEC_NTF_REMINDERS
-:status: draft
+:status: implemented
 :satisfies: REQ_NTF_001
 :links: SPEC_RDG_SCHEDULE, SPEC_JOB_SCHEDULER
 
@@ -420,7 +456,7 @@ Doppelversand.
 
 ```{spec} Abweichungsalarme
 :id: SPEC_NTF_ALARMS
-:status: draft
+:status: implemented
 :satisfies: REQ_NTF_004, REQ_PV_008
 :links: SPEC_ANA_TRAFFIC_LIGHT, SPEC_PV_MONITORING, SPEC_JOB_OUTBOX
 
@@ -432,6 +468,11 @@ ergibt einen Alarm an Empfänger mit Ereignistyp `alarm`. Ist die Messstelle
 Erzeugungszähler einer PV-Anlage, gilt zusätzlich {need}`SPEC_PV_MONITORING`
 (Ereignistyp `pv_alarm`). Je Ablesung und Empfänger höchstens ein Alarm
 (Schlüssel `alarm:{reading}`). Intervalle unter 24 h werden nicht bewertet.
+
+Umsetzung: Bewertet wird die Summe des Intervalls gegen die anteilige Summe
+der Monatsbänder (gewichtet mit dem Saisonprofil), was der Tagesrate
+entspricht. Der PV-Teil folgt mit M8. Archivierte Messstellen lösen keinen
+Alarm aus.
 ```
 
 ### Tarife und Kosten

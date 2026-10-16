@@ -92,6 +92,8 @@ notify:
     enabled: false
     host: ""
     port: 587
+    # starttls (Standard), tls oder none (nur für einen Mail-Server auf localhost)
+    security: starttls
     from: ""
     # Secret mit Keys "username" und "password"
     existingSecret: ""

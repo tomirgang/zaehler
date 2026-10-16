@@ -7,17 +7,23 @@ use rust_decimal::{Decimal, prelude::ToPrimitive};
 
 use super::{
     BlobKey, DateTime, Device, DeviceData, DeviceId, Draft, DraftId, Household, HouseholdData,
-    HouseholdId, InMemoryStore, Meter, MeterData, MeterId, PortError, PortResult, Reading,
-    ReadingId, Register, RegisterData, RegisterId, Role, State, StoredDraft, StoredUser, User,
-    UserId, Utc, async_trait, poisoned,
+    HouseholdId, InMemoryStore, InvitationId, Meter, MeterData, MeterId, NewInvitation, PortError,
+    PortResult, Reading, ReadingId, Register, RegisterData, RegisterId, Role, State, StoredDraft,
+    StoredInvitation, StoredUser, User, UserId, Utc, async_trait, poisoned,
 };
 use crate::{
     backup::{
-        BackupData, DeviceRecord, DraftRecord, HouseholdRecord, MembershipRecord, MeterRecord,
-        ReadingRecord, RegisterRecord, UserRecord,
+        BackupData, DeviceRecord, DraftRecord, HouseholdRecord, InvitationRecord, MembershipRecord,
+        MeterRecord, NotificationSettingRecord, ReadingRecord, RegisterRecord, RevisionRecord,
+        UserRecord,
     },
-    model::MonthDay,
+    ids::RevisionId,
+    model::{
+        MeterTargets, MonthDay, Revision, schedule_columns, schedule_from_columns,
+        season_weights_from_json, season_weights_to_json,
+    },
     port::BackupRepository,
+    secret,
 };
 
 fn invalid<E>(_: E) -> PortError {
@@ -68,18 +74,33 @@ fn export(s: &State) -> BackupData {
         meters: s
             .meters
             .iter()
-            .map(|(h, m)| MeterRecord {
-                id: m.id.0,
-                household_id: h.0,
-                name: m.data.name.clone(),
-                kind: m.data.kind.as_str().into(),
-                unit: m.data.unit.clone(),
-                reading_interval_days: m.data.reading_interval_days.map(i32::from),
-                max_daily_rate_milli: m.data.max_daily_rate.map(milli),
-                billing_start_month: m.data.billing_start.map(|b| i16::from(b.month)),
-                billing_start_day: m.data.billing_start.map(|b| i16::from(b.day)),
-                archived: m.archived,
-                created_at: m.created_at,
+            .map(|(h, m)| {
+                let (kind, value, legacy) = schedule_columns(m.data.schedule);
+                MeterRecord {
+                    id: m.id.0,
+                    household_id: h.0,
+                    name: m.data.name.clone(),
+                    kind: m.data.kind.as_str().into(),
+                    unit: m.data.unit.clone(),
+                    reading_interval_days: legacy.map(i32::from),
+                    max_daily_rate_milli: m.data.max_daily_rate.map(milli),
+                    billing_start_month: m.data.billing_start.map(|b| i16::from(b.month)),
+                    billing_start_day: m.data.billing_start.map(|b| i16::from(b.day)),
+                    archived: m.archived,
+                    created_at: m.created_at,
+                    purpose: m.data.purpose.as_str().into(),
+                    schedule_kind: kind.map(Into::into),
+                    schedule_value: value.and_then(|v| i16::try_from(v).ok()),
+                    archived_at: m.archived_at,
+                    season_weights: m
+                        .data
+                        .targets
+                        .season_weights
+                        .as_ref()
+                        .map(season_weights_to_json),
+                    annual_target_milli: m.data.targets.annual_target.map(milli),
+                    target_tolerance_pct: m.data.targets.tolerance_pct.map(i16::from),
+                }
             })
             .collect(),
         devices: s
@@ -93,6 +114,7 @@ fn export(s: &State) -> BackupData {
                 removed_at: d.removed_at,
                 rollover_digits: d.data.rollover_digits.map(i16::from),
                 decimal_places: i16::from(d.data.decimal_places),
+                parent_meter_id: d.data.parent_meter_id.map(|p| p.0),
             })
             .collect(),
         registers: s
@@ -120,6 +142,7 @@ fn export(s: &State) -> BackupData {
                 note: r.note.clone(),
                 created_by: r.created_by.map(|u| u.0),
                 created_at: r.read_at,
+                updated_at: None,
             })
             .collect(),
         drafts: s
@@ -145,6 +168,54 @@ fn export(s: &State) -> BackupData {
                 finished_at: None,
                 taken_at: d.draft.taken_at,
                 analysis_started_at: d.draft.analysis_started_at,
+            })
+            .collect(),
+        invitations: s
+            .invitations
+            .iter()
+            .map(|x| InvitationRecord {
+                id: x.invitation.id.0,
+                household_id: x.household.0,
+                role: x.invitation.role.as_str().into(),
+                token_hash: secret::to_hex(&x.invitation.token_hash),
+                email: x.invitation.email.clone(),
+                created_by: x.invitation.created_by.0,
+                created_at: x.invitation.created_at,
+                expires_at: x.invitation.expires_at,
+                accepted_by: x.accepted_by.map(|u| u.0),
+                accepted_at: x.accepted_at,
+                revoked_at: x.revoked_at,
+            })
+            .collect(),
+        revisions: s
+            .revisions
+            .iter()
+            .map(|(h, r)| RevisionRecord {
+                id: r.id.0,
+                household_id: h.0,
+                reading_id: r.reading_id.0,
+                meter_id: r.meter_id.0,
+                register_id: r.register_id.0,
+                action: r.action.as_str().into(),
+                changed_by: r.changed_by.0,
+                changed_at: r.changed_at,
+                old_read_at: r.old_read_at,
+                old_value_milli: milli(r.old_value),
+                old_note: r.old_note.clone(),
+                new_read_at: r.new_read_at,
+                new_value_milli: r.new_value.map(milli),
+                new_note: r.new_note.clone(),
+            })
+            .collect(),
+        notification_settings: s
+            .notification_settings
+            .iter()
+            .map(|(u, (n, at))| NotificationSettingRecord {
+                user_id: u.0,
+                email: n.email.clone(),
+                reminder: n.reminder,
+                alarm: n.alarm,
+                updated_at: *at,
             })
             .collect(),
     }
@@ -175,15 +246,29 @@ fn import_meters(s: &mut State, d: &BackupData) -> PortResult<()> {
                     name: m.name.clone(),
                     kind: m.kind.parse().map_err(invalid)?,
                     unit: m.unit.clone(),
-                    reading_interval_days: m
-                        .reading_interval_days
-                        .map(u16::try_from)
-                        .transpose()
-                        .map_err(invalid)?,
+                    schedule: schedule_from_columns(
+                        m.schedule_kind.as_deref(),
+                        m.schedule_value.map(i64::from),
+                        m.reading_interval_days.map(i64::from),
+                    ),
                     max_daily_rate: m.max_daily_rate_milli.map(|v| Decimal::new(v, 3)),
                     billing_start,
+                    purpose: m.purpose.parse().map_err(invalid)?,
+                    targets: MeterTargets {
+                        season_weights: m
+                            .season_weights
+                            .as_deref()
+                            .map(|w| {
+                                season_weights_from_json(w)
+                                    .ok_or(PortError::Invalid("backup.invalid"))
+                            })
+                            .transpose()?,
+                        annual_target: m.annual_target_milli.map(|v| Decimal::new(v, 3)),
+                        tolerance_pct: m.target_tolerance_pct.map(small).transpose()?,
+                    },
                 },
                 archived: m.archived,
+                archived_at: m.archived_at,
                 created_at: m.created_at,
             },
         ));
@@ -198,6 +283,7 @@ fn import_meters(s: &mut State, d: &BackupData) -> PortResult<()> {
                     installed_at: x.installed_at,
                     rollover_digits: x.rollover_digits.map(small).transpose()?,
                     decimal_places: small(x.decimal_places)?,
+                    parent_meter_id: x.parent_meter_id.map(MeterId),
                 },
                 removed_at: x.removed_at,
             },
@@ -283,6 +369,62 @@ fn import(s: &mut State, d: &BackupData) -> PortResult<()> {
             },
             corrected: x.corrected,
         });
+    }
+    import_v1(s, d)
+}
+
+/// Datensätze ab v1: Einladungen und Revisionen.
+fn import_v1(s: &mut State, d: &BackupData) -> PortResult<()> {
+    for x in &d.invitations {
+        s.invitations.push(StoredInvitation {
+            invitation: NewInvitation {
+                id: InvitationId(x.id),
+                role: x.role.parse().map_err(invalid)?,
+                token_hash: secret::hash_from_hex(&x.token_hash)
+                    .ok_or(PortError::Invalid("backup.invalid"))?,
+                email: x.email.clone(),
+                created_by: UserId(x.created_by),
+                created_at: x.created_at,
+                expires_at: x.expires_at,
+            },
+            household: HouseholdId(x.household_id),
+            accepted_by: x.accepted_by.map(UserId),
+            accepted_at: x.accepted_at,
+            revoked_at: x.revoked_at,
+        });
+    }
+    for r in &d.revisions {
+        s.revisions.push((
+            HouseholdId(r.household_id),
+            Revision {
+                id: RevisionId(r.id),
+                reading_id: ReadingId(r.reading_id),
+                meter_id: MeterId(r.meter_id),
+                register_id: RegisterId(r.register_id),
+                action: r.action.parse().map_err(invalid)?,
+                changed_by: UserId(r.changed_by),
+                changed_at: r.changed_at,
+                old_read_at: r.old_read_at,
+                old_value: Decimal::new(r.old_value_milli, 3),
+                old_note: r.old_note.clone(),
+                new_read_at: r.new_read_at,
+                new_value: r.new_value_milli.map(|v| Decimal::new(v, 3)),
+                new_note: r.new_note.clone(),
+            },
+        ));
+    }
+    for x in &d.notification_settings {
+        s.notification_settings.insert(
+            UserId(x.user_id),
+            (
+                crate::model::NotificationSettings {
+                    email: x.email.clone(),
+                    reminder: x.reminder,
+                    alarm: x.alarm,
+                },
+                x.updated_at,
+            ),
+        );
     }
     Ok(())
 }

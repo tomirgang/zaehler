@@ -148,4 +148,39 @@ mod tests {
         assert_eq!(r.depreciation.round_dp(2), dec!(3997.81));
         assert_eq!(r.total_per_km, Some(dec!(0.5498)));
     }
+
+    // @test SPEC_CAR_DEPRECIATION
+    #[test]
+    fn depreciation_is_linear_within_the_holding_period() {
+        let acq = Acquisition {
+            date: d(2026, 7, 1),
+            price: dec!(12000),
+            residual_value: dec!(2000),
+            planned_end: d(2028, 7, 1),
+        };
+        // 731 Tage Haltedauer, davon 184 in 2026, 365 in 2027, 182 in 2028
+        let parts: Vec<Decimal> = [2025, 2026, 2027, 2028, 2029]
+            .map(|y| depreciation_in(&acq, Period::year(y)))
+            .to_vec();
+        assert_eq!(parts[0], Decimal::ZERO, "vor dem Kauf");
+        assert_eq!(parts[4], Decimal::ZERO, "nach dem geplanten Ende");
+        assert_eq!(parts.iter().sum::<Decimal>().round_dp(6), dec!(10000));
+        assert_eq!(parts[1].round_dp(2), dec!(2517.10));
+        // Verkauf: Verkaufserlös ersetzt den Restwert, Ende beim Verkauf
+        let sold = Acquisition {
+            residual_value: dec!(9000),
+            planned_end: d(2027, 7, 1),
+            ..acq
+        };
+        assert_eq!(
+            depreciation_in(&sold, Period::new(d(2026, 1, 1), d(2030, 1, 1))),
+            dec!(3000)
+        );
+        // Haltedauer ohne Tage
+        let empty = Acquisition {
+            planned_end: d(2026, 7, 1),
+            ..sold
+        };
+        assert_eq!(depreciation_in(&empty, Period::year(2026)), Decimal::ZERO);
+    }
 }

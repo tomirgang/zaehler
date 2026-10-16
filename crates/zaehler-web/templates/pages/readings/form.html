@@ -9,7 +9,7 @@
     {% for e in self.errs("values") %}<p class="field-error">{{ e }}</p>{% endfor %}
     {% for r in rows %}
     <div class="field{% if !self.value_errs(r.register_id).is_empty() %} has-error{% endif %}">
-      <label for="value_{{ r.register_id }}">{{ r.code }} <span class="muted">({{ r.direction }}, {{ unit }})</span></label>
+      <label for="value_{{ r.register_id }}">{{ r.code }} <span class="muted">({{ r.direction }}, {{ crate::pages::unit_html(unit)|safe }})</span></label>
       <input id="value_{{ r.register_id }}" name="value_{{ r.register_id }}" value="{{ r.value }}" inputmode="decimal" autocomplete="off">
       <p class="hint">{{ r.last }}</p>
       {% if let Some(h) = r.hint %}<p class="warning">{{ h }}</p>{% endif %}

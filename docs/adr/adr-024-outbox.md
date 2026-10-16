@@ -2,7 +2,7 @@
 
 ```{adr} Ereignisse über eine Outbox-Tabelle an Hintergrundjobs übergeben
 :id: ADR_024
-:status: proposed
+:status: accepted
 :decides: REQ_NTF_004, REQ_PV_008, SPEC_JOB_OUTBOX
 
 **Datum:** 2026-10-16

@@ -822,6 +822,10 @@ impl CommitImport {
             .get(t, mapping.meter_id)
             .await?
             .ok_or(AppError::NotFound)?;
+        // @impl SPEC_MTR_ARCHIVE
+        if agg.meter.archived {
+            return Err(AppError::field("meter_id", "meter.archived"));
+        }
         check_mapping(
             mapping,
             &agg,

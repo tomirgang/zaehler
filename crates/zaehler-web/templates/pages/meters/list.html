@@ -2,7 +2,7 @@
 
 {% block content %}
 <div class="page-head">
-  <h1>{{ ctx.lang.t("meters-title") }}</h1>
+  <h1>{% if show_archived %}{{ ctx.lang.t("meters-archived-title") }}{% else %}{{ ctx.lang.t("meters-title") }}{% endif %}</h1>
   {% if ctx.is_owner %}
   <div class="actions">
     <a class="button" href="/meters/new">{{ ctx.lang.t("meters-new") }}</a>
@@ -10,6 +10,11 @@
   </div>
   {% endif %}
 </div>
+{% if show_archived %}
+<p><a href="/meters">{{ ctx.lang.t("meters-show-active") }}</a></p>
+{% else if archived_count > 0 %}
+<p><a href="/meters?archived=true">{{ archived_link }}</a></p>
+{% endif %}
 {% if meters.is_empty() %}
 <p>{{ ctx.lang.t("meters-empty") }}</p>
 {% else %}
@@ -27,7 +32,7 @@
     <tr>
       <td><a href="/meters/{{ m.id }}">{{ m.name }}</a></td>
       <td>{{ m.kind }}</td>
-      <td>{{ m.unit }}</td>
+      <td>{{ crate::pages::unit_html(m.unit)|safe }}</td>
       <td>{% if let Some(l) = m.last %}{{ l }}{% endif %}</td>
     </tr>
     {% endfor %}

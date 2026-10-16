@@ -2,7 +2,7 @@
 
 ```{adr} REST-API mit utoipa und persönlichen Bearer-Tokens
 :id: ADR_023
-:status: proposed
+:status: accepted
 :decides: REQ_API_001, REQ_API_002, REQ_API_003, SPEC_API_AUTH, SPEC_API_REST
 
 **Datum:** 2026-10-16

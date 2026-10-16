@@ -16,6 +16,8 @@ pub const SESSION_HOUSEHOLD: &str = "hid";
 pub const SESSION_CSRF: &str = "csrf";
 pub const SESSION_FLASH: &str = "flash";
 pub const SESSION_OIDC: &str = "oidc";
+/// Token einer Einladung, die nach der Anmeldung angezeigt wird (SPEC_TEN_INVITES)
+pub const SESSION_INVITE: &str = "invite";
 
 /// Daten, die jede Seite im Layout braucht.
 #[derive(Debug, Clone)]

@@ -4,12 +4,15 @@ use askama::Template;
 use axum::{extract::State, response::Response};
 use chrono::Datelike;
 use zaehler_app::usecase::analysis::DashboardCard;
-use zaehler_domain::analysis::PeriodForecast;
+use zaehler_domain::{analysis::PeriodForecast, schedule::Due};
 
 use crate::{
     extract::{Ctx, PageCtx},
     i18n::{Lang, format},
-    pages::render,
+    pages::{
+        analysis::{TrafficView, traffic_view},
+        render,
+    },
     state::WebState,
 };
 
@@ -24,6 +27,10 @@ pub struct Card {
     pub forecast: Option<String>,
     pub due: Option<String>,
     pub overdue: bool,
+    /// Fällig oder überfällig
+    pub due_now: bool,
+    /// Ampel des letzten vollständigen Monats (SPEC_ANA_TRAFFIC_LIGHT)
+    pub traffic: Option<TrafficView>,
 }
 
 #[derive(Template)]
@@ -38,14 +45,14 @@ fn card(lang: Lang, tz: chrono_tz::Tz, c: &DashboardCard) -> Card {
     let data = &c.meter.data;
     let unit = &data.unit;
     let places = c.last_values.first().map_or(1, |v| v.decimal_places);
-    let due = c.due_at.map(|d| {
-        let day = format::date(lang, d.with_timezone(&tz).date_naive());
-        let key = if c.overdue {
-            "dashboard-overdue"
-        } else {
-            "dashboard-due"
+    // @impl SPEC_RDG_SCHEDULE
+    let due = c.due.map(|d| {
+        let key = match d {
+            Due::Upcoming(_) => "dashboard-due",
+            Due::Due(_) => "dashboard-due-today",
+            Due::Overdue(_) => "dashboard-overdue",
         };
-        lang.ta(key, &[("date", day)])
+        lang.ta(key, &[("date", format::date(lang, d.date()))])
     });
     Card {
         id: c.meter.id.to_string(),
@@ -97,7 +104,12 @@ fn card(lang: Lang, tz: chrono_tz::Tz, c: &DashboardCard) -> Card {
             _ => None,
         },
         due,
-        overdue: c.overdue,
+        overdue: c.overdue(),
+        due_now: c.due.is_some_and(Due::needs_reading),
+        traffic: c
+            .traffic
+            .as_ref()
+            .and_then(|e| traffic_view(lang, e, unit, places)),
     }
 }
 

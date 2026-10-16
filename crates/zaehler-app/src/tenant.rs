@@ -58,6 +58,19 @@ impl Tenant {
         }
     }
 
+    /// Tenant eines Jobs für einen Haushalt: Rolle `Viewer`, ohne Nutzer
+    /// (Nil-UUID). Nur innerhalb dieses Crates verfügbar; Jobs lesen damit
+    /// fachliche Daten über die normalen Ports (SPEC_JOB_OUTBOX).
+    // @impl SPEC_JOB_OUTBOX
+    pub(crate) fn for_job(household_id: HouseholdId) -> Self {
+        Self {
+            user_id: UserId(uuid::Uuid::nil()),
+            household_id,
+            role: Role::Viewer,
+        }
+    }
+
+    /// Nutzer des Tenants; beim Job-Tenant die Nil-UUID.
     #[must_use]
     pub fn user_id(&self) -> UserId {
         self.user_id

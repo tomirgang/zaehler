@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use zaehler_app::{
     backup::{
-        BackupData, DeviceRecord, DraftRecord, HouseholdRecord, MembershipRecord, MeterRecord,
-        ReadingRecord, RegisterRecord, UserRecord,
+        BackupData, DeviceRecord, DraftRecord, HouseholdRecord, InvitationRecord, MembershipRecord,
+        MeterRecord, ReadingRecord, RegisterRecord, RevisionRecord, UserRecord,
     },
     port::BackupRepository,
 };
@@ -206,6 +206,13 @@ fn expected_core() -> BackupData {
             billing_start_day: None,
             archived: false,
             created_at: at(1, 3),
+            purpose: "general".into(),
+            schedule_kind: None,
+            schedule_value: None,
+            archived_at: None,
+            season_weights: None,
+            annual_target_milli: None,
+            target_tolerance_pct: None,
         }],
         devices: vec![DeviceRecord {
             id: id(4),
@@ -215,6 +222,7 @@ fn expected_core() -> BackupData {
             removed_at: None,
             rollover_digits: Some(6),
             decimal_places: 0,
+            parent_meter_id: None,
         }],
         registers: vec![RegisterRecord {
             id: id(5),
@@ -234,8 +242,12 @@ fn expected_core() -> BackupData {
             note: Some("Ablesung im Keller".into()),
             created_by: Some(id(1)),
             created_at: at(2, 7),
+            updated_at: None,
         }],
         drafts: Vec::new(),
+        invitations: Vec::new(),
+        revisions: Vec::new(),
+        notification_settings: Vec::new(),
     }
 }
 
@@ -285,6 +297,7 @@ async fn database_of_a_newer_version_is_refused() {
 }
 
 /// Datensätze mit allen Feldern, auch NULL, Umlauten und Mikrosekunden.
+#[allow(clippy::too_many_lines)] // ein Datensatz je Tabelle
 pub(crate) fn fixture() -> BackupData {
     let mut data = expected_core();
     data.users.push(UserRecord {
@@ -314,6 +327,38 @@ pub(crate) fn fixture() -> BackupData {
         removed_at: None,
         rollover_digits: None,
         decimal_places: 3,
+        parent_meter_id: None,
+    });
+    // zweite Messstelle: Wärmepumpe als Zwischenzähler, monatlicher Plan, archiviert
+    data.meters.push(MeterRecord {
+        id: id(21),
+        household_id: id(2),
+        name: "Wärmepumpe".into(),
+        kind: "electricity".into(),
+        unit: "kWh".into(),
+        reading_interval_days: None,
+        max_daily_rate_milli: None,
+        billing_start_month: None,
+        billing_start_day: None,
+        archived: true,
+        created_at: at(3, 5),
+        purpose: "heat_pump".into(),
+        schedule_kind: Some("monthly".into()),
+        schedule_value: Some(1),
+        archived_at: Some(at(9, 0)),
+        season_weights: Some(r#"["10","10","9","8","7","6","6","6","7","9","10","12"]"#.into()),
+        annual_target_milli: Some(3_500_000),
+        target_tolerance_pct: Some(15),
+    });
+    data.devices.push(DeviceRecord {
+        id: id(22),
+        meter_id: id(21),
+        serial_number: Some("WP-1".into()),
+        installed_at: at(3, 5),
+        removed_at: None,
+        rollover_digits: None,
+        decimal_places: 1,
+        parent_meter_id: Some(id(3)),
     });
     data.readings.push(ReadingRecord {
         id: id(16),
@@ -327,6 +372,39 @@ pub(crate) fn fixture() -> BackupData {
         note: None,
         created_by: None,
         created_at: at(6, 2),
+        updated_at: Some(at(7, 3)),
+    });
+    data.revisions.push(RevisionRecord {
+        id: id(19),
+        household_id: id(2),
+        reading_id: id(16),
+        meter_id: id(3),
+        register_id: id(5),
+        action: "update".into(),
+        changed_by: id(11),
+        changed_at: at(7, 3),
+        old_read_at: at(6, 0),
+        old_value_milli: 1_500,
+        old_note: Some("Tippfehler".into()),
+        new_read_at: Some(at(6, 1)),
+        new_value_milli: Some(0),
+        new_note: None,
+    });
+    data.revisions.push(RevisionRecord {
+        id: id(20),
+        household_id: id(2),
+        reading_id: id(99),
+        meter_id: id(3),
+        register_id: id(5),
+        action: "delete".into(),
+        changed_by: id(1),
+        changed_at: at(8, 0),
+        old_read_at: at(7, 0),
+        old_value_milli: 26_500_000,
+        old_note: None,
+        new_read_at: None,
+        new_value_milli: None,
+        new_note: None,
     });
     data.drafts.push(DraftRecord {
         id: id(17),
@@ -344,6 +422,19 @@ pub(crate) fn fixture() -> BackupData {
         finished_at: Some(at(2, 8)),
         taken_at: Some(at(2, 0)),
         analysis_started_at: Some(at(2, 3)),
+    });
+    data.invitations.push(InvitationRecord {
+        id: id(18),
+        household_id: id(2),
+        role: "member".into(),
+        token_hash: "ab".repeat(32),
+        email: Some("björn@example.org".into()),
+        created_by: id(1),
+        created_at: at(3, 1),
+        expires_at: at(10, 1),
+        accepted_by: Some(id(11)),
+        accepted_at: Some(at(4, 7)),
+        revoked_at: None,
     });
     data
 }

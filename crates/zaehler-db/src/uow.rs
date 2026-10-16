@@ -14,40 +14,51 @@ use rust_decimal::{
     prelude::{FromPrimitive, ToPrimitive},
 };
 use sea_orm::{
-    ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, DatabaseTransaction, DbErr,
-    EntityTrait, QueryFilter, QueryOrder, QuerySelect, SqlErr, TransactionTrait, sea_query::Expr,
+    ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection,
+    DatabaseTransaction, DbBackend, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    SqlErr, TransactionTrait, sea_query::Expr,
 };
 use tracing::Instrument;
 use uuid::Uuid;
 use zaehler_app::{
     PortError, Role, Tenant,
-    ids::{BlobKey, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId},
+    ids::{
+        BlobKey, DeviceId, DraftId, HouseholdId, InvitationId, MeterId, OutboxId, ReadingId,
+        RegisterId, RevisionId, UserId,
+    },
     model::{
         Device, DeviceData, Draft, DraftAnalysis, DraftOutcome, DraftStatus, Household,
-        HouseholdData, HouseholdSummary, Identity, Meter, MeterAggregate, MeterData, MeterSummary,
-        MonthDay, Reading, Register, RegisterData, User,
+        HouseholdData, HouseholdSummary, Identity, Invitation, Member, Meter, MeterAggregate,
+        MeterData, MeterSummary, MeterTargets, MonthDay, NewInvitation, NotificationSettings,
+        OutboxEvent, OutboxStatus, Reading, ReadingUpdate, Register, RegisterData, Revision, User,
+        schedule_columns, schedule_from_columns, season_weights_from_json, season_weights_to_json,
     },
     port::{
-        DraftRepository, HouseholdRepository, MaintenanceRepository, MembershipRepository,
-        MeterRepository, PortResult, Readiness, ReadingRepository, UnitOfWork, UnitOfWorkFactory,
-        UserRepository,
+        DraftRepository, HouseholdRepository, InvitationRepository, MaintenanceRepository,
+        MembershipRepository, MeterRepository, NotificationSettingsRepository, OutboxRepository,
+        PortResult, Readiness, ReadingRepository, RevisionRepository, UnitOfWork,
+        UnitOfWorkFactory, UserRepository,
     },
+    secret,
 };
 
 use crate::{
-    entity::{ai_draft, household, membership, meter, meter_device, reading, register, user},
+    entity::{
+        ai_draft, household, invitation, membership, meter, meter_device, notification_settings,
+        outbox, reading, reading_revision, register, user,
+    },
     fixed,
 };
 
 #[allow(clippy::needless_pass_by_value)] // als Funktion für `map_err` verwendet
-fn db_err(e: DbErr) -> PortError {
+pub(crate) fn db_err(e: DbErr) -> PortError {
     match e.sql_err() {
         Some(SqlErr::UniqueConstraintViolation(msg)) => PortError::Conflict(msg),
         _ => PortError::Backend(e.to_string()),
     }
 }
 
-fn data_err(e: impl std::fmt::Display) -> PortError {
+pub(crate) fn data_err(e: impl std::fmt::Display) -> PortError {
     PortError::Backend(format!("ungültige Daten: {e}"))
 }
 
@@ -144,6 +155,17 @@ impl MaintenanceRepository for SeaOrmStore {
             .await
             .map_err(db_err)
     }
+
+    // @impl SPEC_OPS_HOUSEKEEPING, SPEC_JOB_OUTBOX
+    async fn purge_outbox(&self, before: DateTime<Utc>) -> PortResult<u64> {
+        let res = outbox::Entity::delete_many()
+            .filter(outbox::Column::Status.eq(OutboxStatus::Done.as_str()))
+            .filter(outbox::Column::FinishedAt.lt(before))
+            .exec(&self.db)
+            .await
+            .map_err(db_err)?;
+        Ok(res.rows_affected)
+    }
 }
 
 struct SeaOrmUow {
@@ -169,6 +191,18 @@ impl UnitOfWork for SeaOrmUow {
         self
     }
     fn drafts(&mut self) -> &mut dyn DraftRepository {
+        self
+    }
+    fn invitations(&mut self) -> &mut dyn InvitationRepository {
+        self
+    }
+    fn revisions(&mut self) -> &mut dyn RevisionRepository {
+        self
+    }
+    fn outbox(&mut self) -> &mut dyn OutboxRepository {
+        self
+    }
+    fn notification_settings(&mut self) -> &mut dyn NotificationSettingsRepository {
         self
     }
     async fn commit(self: Box<Self>) -> PortResult<()> {
@@ -212,15 +246,30 @@ fn to_meter(m: meter::Model) -> PortResult<Meter> {
             name: m.name,
             kind: m.kind.parse().map_err(data_err)?,
             unit: m.unit,
-            reading_interval_days: m
-                .reading_interval_days
-                .map(u16::try_from)
-                .transpose()
-                .map_err(data_err)?,
+            schedule: schedule_from_columns(
+                m.schedule_kind.as_deref(),
+                m.schedule_value.map(i64::from),
+                m.reading_interval_days.map(i64::from),
+            ),
             max_daily_rate: m.max_daily_rate_milli.map(fixed::quantity_from_db),
             billing_start,
+            purpose: m.purpose.parse().map_err(data_err)?,
+            targets: MeterTargets {
+                season_weights: m
+                    .season_weights
+                    .as_deref()
+                    .map(|w| season_weights_from_json(w).ok_or_else(|| data_err("season_weights")))
+                    .transpose()?,
+                annual_target: m.annual_target_milli.map(fixed::quantity_from_db),
+                tolerance_pct: m
+                    .target_tolerance_pct
+                    .map(u8::try_from)
+                    .transpose()
+                    .map_err(data_err)?,
+            },
         },
         archived: m.archived,
+        archived_at: m.archived_at,
         created_at: m.created_at,
     })
 }
@@ -237,6 +286,7 @@ fn to_device(m: meter_device::Model) -> PortResult<Device> {
                 .transpose()
                 .map_err(data_err)?,
             decimal_places: u8::try_from(m.decimal_places).map_err(data_err)?,
+            parent_meter_id: m.parent_meter_id.map(MeterId),
         },
         removed_at: m.removed_at,
     })
@@ -273,8 +323,19 @@ fn to_reading(m: reading::Model) -> PortResult<Reading> {
     })
 }
 
-/// Spalten einer Messstelle: Tagesrate (milli), Abrechnungsmonat, -tag, Ableseturnus.
-type MeterColumns = (Option<i64>, Option<i16>, Option<i16>, Option<i32>);
+/// Spalten einer Messstelle, die aus `MeterData` abgeleitet werden.
+struct MeterColumns {
+    rate: Option<i64>,
+    month: Option<i16>,
+    day: Option<i16>,
+    /// Turnus für ältere Programmversionen (nur `EveryDays`)
+    interval: Option<i32>,
+    schedule_kind: Option<String>,
+    schedule_value: Option<i16>,
+    season_weights: Option<String>,
+    annual_target: Option<i64>,
+    tolerance: Option<i16>,
+}
 
 fn meter_columns(data: &MeterData) -> PortResult<MeterColumns> {
     let rate = data
@@ -285,7 +346,27 @@ fn meter_columns(data: &MeterData) -> PortResult<MeterColumns> {
     let (month, day) = data.billing_start.map_or((None, None), |md| {
         (Some(i16::from(md.month)), Some(i16::from(md.day)))
     });
-    Ok((rate, month, day, data.reading_interval_days.map(i32::from)))
+    let (kind, value, legacy) = schedule_columns(data.schedule);
+    Ok(MeterColumns {
+        rate,
+        month,
+        day,
+        interval: legacy.map(i32::from),
+        schedule_kind: kind.map(str::to_owned),
+        schedule_value: value.map(i16::try_from).transpose().map_err(data_err)?,
+        season_weights: data
+            .targets
+            .season_weights
+            .as_ref()
+            .map(season_weights_to_json),
+        annual_target: data
+            .targets
+            .annual_target
+            .map(fixed::quantity_to_db)
+            .transpose()
+            .map_err(data_err)?,
+        tolerance: data.targets.tolerance_pct.map(i16::from),
+    })
 }
 
 // ------------------------------------------------------------- Hilfsabfragen
@@ -391,6 +472,217 @@ impl MembershipRepository for SeaOrmUow {
                 })
             })
             .collect()
+    }
+
+    async fn list(&mut self, t: &Tenant) -> PortResult<Vec<Member>> {
+        let memberships = membership::Entity::find()
+            .filter(membership::Column::HouseholdId.eq(t.household_id().0))
+            .all(&self.txn)
+            .await
+            .map_err(db_err)?;
+        let names: HashMap<Uuid, String> = user::Entity::find()
+            .filter(user::Column::Id.is_in(memberships.iter().map(|m| m.user_id)))
+            .all(&self.txn)
+            .await
+            .map_err(db_err)?
+            .into_iter()
+            .map(|u| (u.id, u.display_name))
+            .collect();
+        let mut out = memberships
+            .into_iter()
+            .map(|m| {
+                Ok(Member {
+                    user_id: UserId(m.user_id),
+                    display_name: names.get(&m.user_id).cloned().unwrap_or_default(),
+                    role: m.role.parse::<Role>().map_err(data_err)?,
+                })
+            })
+            .collect::<PortResult<Vec<_>>>()?;
+        out.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+                .then(a.user_id.cmp(&b.user_id))
+        });
+        Ok(out)
+    }
+
+    // @impl SPEC_TEN_ROLES
+    async fn lock_household(&mut self, t: &Tenant) -> PortResult<()> {
+        // SQLite serialisiert schreibende Transaktionen ohnehin
+        if self.txn.get_database_backend() == DbBackend::Postgres {
+            membership::Entity::find()
+                .filter(membership::Column::HouseholdId.eq(t.household_id().0))
+                .lock_exclusive()
+                .all(&self.txn)
+                .await
+                .map_err(db_err)?;
+        }
+        Ok(())
+    }
+
+    async fn set_role(&mut self, t: &Tenant, user: UserId, role: Role) -> PortResult<()> {
+        let res = membership::Entity::update_many()
+            .col_expr(membership::Column::Role, Expr::value(role.as_str()))
+            .filter(membership::Column::HouseholdId.eq(t.household_id().0))
+            .filter(membership::Column::UserId.eq(user.0))
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        if res.rows_affected == 0 {
+            return Err(PortError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn remove(&mut self, t: &Tenant, user: UserId) -> PortResult<()> {
+        let res = membership::Entity::delete_many()
+            .filter(membership::Column::HouseholdId.eq(t.household_id().0))
+            .filter(membership::Column::UserId.eq(user.0))
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        if res.rows_affected == 0 {
+            return Err(PortError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn add(&mut self, household: HouseholdId, user: UserId, role: Role) -> PortResult<()> {
+        match MembershipRepository::role(self, user, household).await? {
+            Some(existing) if existing >= role => Ok(()),
+            Some(_) => {
+                membership::Entity::update_many()
+                    .col_expr(membership::Column::Role, Expr::value(role.as_str()))
+                    .filter(membership::Column::HouseholdId.eq(household.0))
+                    .filter(membership::Column::UserId.eq(user.0))
+                    .exec(&self.txn)
+                    .await
+                    .map_err(db_err)?;
+                Ok(())
+            }
+            None => {
+                membership::Entity::insert(membership::ActiveModel {
+                    household_id: Set(household.0),
+                    user_id: Set(user.0),
+                    role: Set(role.as_str().to_owned()),
+                })
+                .exec_without_returning(&self.txn)
+                .await
+                .map_err(db_err)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+fn to_invitation(m: invitation::Model, household_name: String) -> PortResult<Invitation> {
+    Ok(Invitation {
+        id: InvitationId(m.id),
+        household_id: HouseholdId(m.household_id),
+        household_name,
+        role: m.role.parse().map_err(data_err)?,
+        email: m.email,
+        created_by: UserId(m.created_by),
+        created_at: m.created_at,
+        expires_at: m.expires_at,
+        accepted_by: m.accepted_by.map(UserId),
+        accepted_at: m.accepted_at,
+        revoked_at: m.revoked_at,
+    })
+}
+
+// @impl SPEC_TEN_INVITES, SPEC_SEC_TENANT_SCOPE
+#[async_trait]
+impl InvitationRepository for SeaOrmUow {
+    async fn create(&mut self, t: &Tenant, i: &NewInvitation) -> PortResult<()> {
+        invitation::Entity::insert(invitation::ActiveModel {
+            id: Set(i.id.0),
+            household_id: Set(t.household_id().0),
+            role: Set(i.role.as_str().to_owned()),
+            token_hash: Set(secret::to_hex(&i.token_hash)),
+            email: Set(i.email.clone()),
+            created_by: Set(i.created_by.0),
+            created_at: Set(i.created_at),
+            expires_at: Set(i.expires_at),
+            accepted_by: Set(None),
+            accepted_at: Set(None),
+            revoked_at: Set(None),
+        })
+        .exec_without_returning(&self.txn)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn find_by_hash(&mut self, hash: &[u8; 32]) -> PortResult<Option<Invitation>> {
+        let Some(m) = invitation::Entity::find()
+            .filter(invitation::Column::TokenHash.eq(secret::to_hex(hash)))
+            .one(&self.txn)
+            .await
+            .map_err(db_err)?
+        else {
+            return Ok(None);
+        };
+        let name = household::Entity::find_by_id(m.household_id)
+            .one(&self.txn)
+            .await
+            .map_err(db_err)?
+            .map(|h| h.name)
+            .unwrap_or_default();
+        to_invitation(m, name).map(Some)
+    }
+
+    async fn mark_accepted(
+        &mut self,
+        id: InvitationId,
+        user: UserId,
+        at: DateTime<Utc>,
+    ) -> PortResult<bool> {
+        // Bedingtes Update: von parallelen Einlösungen ändert nur eine die Zeile
+        let res = invitation::Entity::update_many()
+            .col_expr(invitation::Column::AcceptedBy, Expr::value(Some(user.0)))
+            .col_expr(invitation::Column::AcceptedAt, Expr::value(Some(at)))
+            .filter(invitation::Column::Id.eq(id.0))
+            .filter(invitation::Column::AcceptedAt.is_null())
+            .filter(invitation::Column::RevokedAt.is_null())
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        Ok(res.rows_affected == 1)
+    }
+
+    async fn list_open(&mut self, t: &Tenant, now: DateTime<Utc>) -> PortResult<Vec<Invitation>> {
+        let name = HouseholdRepository::get(self, t).await?.data.name;
+        invitation::Entity::find()
+            .filter(invitation::Column::HouseholdId.eq(t.household_id().0))
+            .filter(invitation::Column::AcceptedAt.is_null())
+            .filter(invitation::Column::RevokedAt.is_null())
+            .filter(invitation::Column::ExpiresAt.gt(now))
+            .order_by_desc(invitation::Column::CreatedAt)
+            .order_by_desc(invitation::Column::Id)
+            .all(&self.txn)
+            .await
+            .map_err(db_err)?
+            .into_iter()
+            .map(|m| to_invitation(m, name.clone()))
+            .collect()
+    }
+
+    async fn revoke(&mut self, t: &Tenant, id: InvitationId, at: DateTime<Utc>) -> PortResult<()> {
+        let res = invitation::Entity::update_many()
+            .col_expr(invitation::Column::RevokedAt, Expr::value(Some(at)))
+            .filter(invitation::Column::Id.eq(id.0))
+            .filter(invitation::Column::HouseholdId.eq(t.household_id().0))
+            .filter(invitation::Column::AcceptedAt.is_null())
+            .filter(invitation::Column::RevokedAt.is_null())
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        if res.rows_affected == 0 {
+            return Err(PortError::NotFound);
+        }
+        Ok(())
     }
 }
 
@@ -613,19 +905,26 @@ impl MeterRepository for SeaOrmUow {
         data: &MeterData,
         now: DateTime<Utc>,
     ) -> PortResult<()> {
-        let (rate, month, day, interval) = meter_columns(data)?;
+        let c = meter_columns(data)?;
         meter::Entity::insert(meter::ActiveModel {
             id: Set(id.0),
             household_id: Set(t.household_id().0),
             name: Set(data.name.clone()),
             kind: Set(data.kind.as_str().to_owned()),
             unit: Set(data.unit.clone()),
-            reading_interval_days: Set(interval),
-            max_daily_rate_milli: Set(rate),
-            billing_start_month: Set(month),
-            billing_start_day: Set(day),
+            reading_interval_days: Set(c.interval),
+            max_daily_rate_milli: Set(c.rate),
+            billing_start_month: Set(c.month),
+            billing_start_day: Set(c.day),
             archived: Set(false),
             created_at: Set(now),
+            purpose: Set(data.purpose.as_str().to_owned()),
+            schedule_kind: Set(c.schedule_kind),
+            schedule_value: Set(c.schedule_value),
+            archived_at: Set(None),
+            season_weights: Set(c.season_weights),
+            annual_target_milli: Set(c.annual_target),
+            target_tolerance_pct: Set(c.tolerance),
         })
         .exec_without_returning(&self.txn)
         .await
@@ -634,7 +933,7 @@ impl MeterRepository for SeaOrmUow {
     }
 
     async fn update(&mut self, t: &Tenant, id: MeterId, data: &MeterData) -> PortResult<()> {
-        let (rate, month, day, interval) = meter_columns(data)?;
+        let c = meter_columns(data)?;
         let result = meter::Entity::update_many()
             .col_expr(meter::Column::Name, Expr::value(data.name.clone()))
             .col_expr(
@@ -642,10 +941,22 @@ impl MeterRepository for SeaOrmUow {
                 Expr::value(data.kind.as_str().to_owned()),
             )
             .col_expr(meter::Column::Unit, Expr::value(data.unit.clone()))
-            .col_expr(meter::Column::ReadingIntervalDays, Expr::value(interval))
-            .col_expr(meter::Column::MaxDailyRateMilli, Expr::value(rate))
-            .col_expr(meter::Column::BillingStartMonth, Expr::value(month))
-            .col_expr(meter::Column::BillingStartDay, Expr::value(day))
+            .col_expr(meter::Column::ReadingIntervalDays, Expr::value(c.interval))
+            .col_expr(meter::Column::MaxDailyRateMilli, Expr::value(c.rate))
+            .col_expr(meter::Column::BillingStartMonth, Expr::value(c.month))
+            .col_expr(meter::Column::BillingStartDay, Expr::value(c.day))
+            .col_expr(
+                meter::Column::Purpose,
+                Expr::value(data.purpose.as_str().to_owned()),
+            )
+            .col_expr(meter::Column::ScheduleKind, Expr::value(c.schedule_kind))
+            .col_expr(meter::Column::ScheduleValue, Expr::value(c.schedule_value))
+            .col_expr(meter::Column::SeasonWeights, Expr::value(c.season_weights))
+            .col_expr(
+                meter::Column::AnnualTargetMilli,
+                Expr::value(c.annual_target),
+            )
+            .col_expr(meter::Column::TargetTolerancePct, Expr::value(c.tolerance))
             .filter(meter::Column::Id.eq(id.0))
             .filter(meter::Column::HouseholdId.eq(t.household_id().0))
             .exec(&self.txn)
@@ -708,6 +1019,7 @@ impl MeterRepository for SeaOrmUow {
             removed_at: Set(None),
             rollover_digits: Set(data.rollover_digits.map(i16::from)),
             decimal_places: Set(i16::from(data.decimal_places)),
+            parent_meter_id: Set(data.parent_meter_id.map(|m| m.0)),
         })
         .exec_without_returning(&self.txn)
         .await
@@ -738,6 +1050,10 @@ impl MeterRepository for SeaOrmUow {
             .col_expr(
                 meter_device::Column::DecimalPlaces,
                 Expr::value(i16::from(data.decimal_places)),
+            )
+            .col_expr(
+                meter_device::Column::ParentMeterId,
+                Expr::value(data.parent_meter_id.map(|m| m.0)),
             )
             .filter(meter_device::Column::Id.eq(id.0))
             .exec(&self.txn)
@@ -783,6 +1099,51 @@ impl MeterRepository for SeaOrmUow {
             .await
             .map_err(db_err)?
             .map(|d| (MeterId(d.meter_id), DeviceId(d.id))))
+    }
+
+    // @impl SPEC_MTR_SUBMETER
+    async fn submeters_of(&mut self, t: &Tenant, parent: MeterId) -> PortResult<Vec<MeterId>> {
+        if !self.owns_meter(t, parent.0).await? {
+            return Ok(Vec::new());
+        }
+        let mut ids: Vec<Uuid> = meter_device::Entity::find()
+            .select_only()
+            .column(meter_device::Column::MeterId)
+            .filter(meter_device::Column::ParentMeterId.eq(parent.0))
+            .into_tuple()
+            .all(&self.txn)
+            .await
+            .map_err(db_err)?;
+        ids.sort();
+        ids.dedup();
+        let mut out = Vec::new();
+        for id in ids {
+            if self.owns_meter(t, id).await? {
+                out.push(MeterId(id));
+            }
+        }
+        Ok(out)
+    }
+
+    // @impl SPEC_MTR_ARCHIVE
+    async fn set_archived(
+        &mut self,
+        t: &Tenant,
+        id: MeterId,
+        at: Option<DateTime<Utc>>,
+    ) -> PortResult<()> {
+        let result = meter::Entity::update_many()
+            .col_expr(meter::Column::Archived, Expr::value(at.is_some()))
+            .col_expr(meter::Column::ArchivedAt, Expr::value(at))
+            .filter(meter::Column::Id.eq(id.0))
+            .filter(meter::Column::HouseholdId.eq(t.household_id().0))
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        if result.rows_affected == 0 {
+            return Err(PortError::NotFound);
+        }
+        Ok(())
     }
 
     async fn find_by_name(&mut self, t: &Tenant, name: &str) -> PortResult<Option<MeterId>> {
@@ -847,6 +1208,7 @@ impl ReadingRepository for SeaOrmUow {
                 note: Set(r.note.clone()),
                 created_by: Set(r.created_by.map(|u| u.0)),
                 created_at: Set(Utc::now()),
+                updated_at: Set(None),
             })
             .exec_without_returning(&self.txn)
             .await
@@ -881,6 +1243,166 @@ impl ReadingRepository for SeaOrmUow {
             .await
             .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn update(&mut self, t: &Tenant, id: ReadingId, u: &ReadingUpdate) -> PortResult<()> {
+        if ReadingRepository::get(self, t, id).await?.is_none() {
+            return Err(PortError::NotFound);
+        }
+        reading::Entity::update_many()
+            .col_expr(reading::Column::ReadAt, Expr::value(u.read_at))
+            .col_expr(
+                reading::Column::ValueMilli,
+                Expr::value(fixed::quantity_to_db(u.value).map_err(data_err)?),
+            )
+            .col_expr(reading::Column::Note, Expr::value(u.note.clone()))
+            .col_expr(reading::Column::UpdatedAt, Expr::value(Some(u.updated_at)))
+            .filter(reading::Column::Id.eq(id.0))
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+}
+
+// @impl SPEC_JOB_OUTBOX
+#[async_trait]
+impl OutboxRepository for SeaOrmUow {
+    async fn enqueue(
+        &mut self,
+        t: &Tenant,
+        id: OutboxId,
+        event: &OutboxEvent,
+        now: DateTime<Utc>,
+    ) -> PortResult<()> {
+        outbox::Entity::insert(outbox::ActiveModel {
+            id: Set(id.0),
+            household_id: Set(t.household_id().0),
+            kind: Set(event.kind().to_owned()),
+            payload: Set(serde_json::to_string(event).map_err(data_err)?),
+            status: Set(OutboxStatus::Pending.as_str().to_owned()),
+            attempts: Set(0),
+            next_attempt_at: Set(now),
+            created_at: Set(now),
+            finished_at: Set(None),
+        })
+        .exec_without_returning(&self.txn)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+}
+
+// @impl SPEC_NTF_EMAIL
+#[async_trait]
+impl NotificationSettingsRepository for SeaOrmUow {
+    async fn get(&mut self, user: UserId) -> PortResult<Option<NotificationSettings>> {
+        Ok(notification_settings::Entity::find_by_id(user.0)
+            .one(&self.txn)
+            .await
+            .map_err(db_err)?
+            .map(|m| NotificationSettings {
+                email: m.email,
+                reminder: m.reminder,
+                alarm: m.alarm,
+            }))
+    }
+
+    async fn set(
+        &mut self,
+        user: UserId,
+        settings: &NotificationSettings,
+        now: DateTime<Utc>,
+    ) -> PortResult<()> {
+        notification_settings::Entity::insert(notification_settings::ActiveModel {
+            user_id: Set(user.0),
+            email: Set(settings.email.clone()),
+            reminder: Set(settings.reminder),
+            alarm: Set(settings.alarm),
+            updated_at: Set(now),
+        })
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::column(notification_settings::Column::UserId)
+                .update_columns([
+                    notification_settings::Column::Email,
+                    notification_settings::Column::Reminder,
+                    notification_settings::Column::Alarm,
+                    notification_settings::Column::UpdatedAt,
+                ])
+                .to_owned(),
+        )
+        .exec_without_returning(&self.txn)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+}
+
+fn to_revision(m: reading_revision::Model) -> PortResult<Revision> {
+    Ok(Revision {
+        id: RevisionId(m.id),
+        reading_id: ReadingId(m.reading_id),
+        meter_id: MeterId(m.meter_id),
+        register_id: RegisterId(m.register_id),
+        action: m.action.parse().map_err(data_err)?,
+        changed_by: UserId(m.changed_by),
+        changed_at: m.changed_at,
+        old_read_at: m.old_read_at,
+        old_value: fixed::quantity_from_db(m.old_value_milli),
+        old_note: m.old_note,
+        new_read_at: m.new_read_at,
+        new_value: m.new_value_milli.map(fixed::quantity_from_db),
+        new_note: m.new_note,
+    })
+}
+
+// @impl SPEC_RDG_HISTORY, SPEC_SEC_TENANT_SCOPE
+#[async_trait]
+impl RevisionRepository for SeaOrmUow {
+    async fn append(&mut self, t: &Tenant, r: &Revision) -> PortResult<()> {
+        if !self.owns_meter(t, r.meter_id.0).await?
+            || self.meter_of_register(r.register_id.0).await? != Some(r.meter_id.0)
+        {
+            return Err(PortError::NotFound);
+        }
+        reading_revision::Entity::insert(reading_revision::ActiveModel {
+            id: Set(r.id.0),
+            household_id: Set(t.household_id().0),
+            reading_id: Set(r.reading_id.0),
+            meter_id: Set(r.meter_id.0),
+            register_id: Set(r.register_id.0),
+            action: Set(r.action.as_str().to_owned()),
+            changed_by: Set(r.changed_by.0),
+            changed_at: Set(r.changed_at),
+            old_read_at: Set(r.old_read_at),
+            old_value_milli: Set(fixed::quantity_to_db(r.old_value).map_err(data_err)?),
+            old_note: Set(r.old_note.clone()),
+            new_read_at: Set(r.new_read_at),
+            new_value_milli: Set(r
+                .new_value
+                .map(fixed::quantity_to_db)
+                .transpose()
+                .map_err(data_err)?),
+            new_note: Set(r.new_note.clone()),
+        })
+        .exec_without_returning(&self.txn)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn for_meter(&mut self, t: &Tenant, meter: MeterId) -> PortResult<Vec<Revision>> {
+        reading_revision::Entity::find()
+            .filter(reading_revision::Column::HouseholdId.eq(t.household_id().0))
+            .filter(reading_revision::Column::MeterId.eq(meter.0))
+            .order_by_desc(reading_revision::Column::ChangedAt)
+            .order_by_desc(reading_revision::Column::Id)
+            .all(&self.txn)
+            .await
+            .map_err(db_err)?
+            .into_iter()
+            .map(to_revision)
+            .collect()
     }
 }
 

@@ -22,6 +22,18 @@
   </form>
 </section>
 
+<section class="card" id="members">
+  <h2>{{ ctx.lang.t("settings-members") }}</h2>
+  <p>{{ ctx.lang.t("settings-members-hint") }}</p>
+  <p><a class="button secondary" href="/settings/members">{{ ctx.lang.t("settings-members-link") }}</a></p>
+</section>
+
+<section class="card" id="notifications">
+  <h2>{{ ctx.lang.t("notifications-title") }}</h2>
+  <p>{{ ctx.lang.t("settings-notifications-hint") }}</p>
+  <p><a class="button secondary" href="/settings/notifications">{{ ctx.lang.t("settings-notifications-link") }}</a></p>
+</section>
+
 <section class="card">
   <h2>{{ ctx.lang.t("settings-language") }}</h2>
   <form method="post" action="/settings/locale" class="form">

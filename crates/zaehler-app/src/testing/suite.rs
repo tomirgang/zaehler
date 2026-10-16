@@ -11,20 +11,23 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 use zaehler_domain::{
-    meter::{Direction, MeterKind},
+    meter::{Direction, MeterKind, MeterPurpose},
     reading::ReadingSource,
+    schedule::ReadingSchedule,
 };
 
 use crate::{
     PortError, Role, Tenant,
     ids::{
-        BlobKey, BlobKind, DeviceId, DraftId, HouseholdId, MeterId, ReadingId, RegisterId, UserId,
+        BlobKey, BlobKind, DeviceId, DraftId, HouseholdId, InvitationId, MeterId, OutboxId,
+        ReadingId, RegisterId, RevisionId, UserId,
     },
     model::{
         DeviceData, Draft, DraftAnalysis, DraftOutcome, DraftStatus, HouseholdData, Identity,
-        MeterData, Reading, Recognition, RegisterData,
+        JobRun, MeterData, NewInvitation, OutboxEntry, OutboxEvent, OutboxResult, Reading,
+        ReadingUpdate, Recognition, RegisterData, Revision, RevisionAction,
     },
-    port::{BlobStore, MaintenanceRepository, UnitOfWorkFactory},
+    port::{BlobStore, JobRepository, MaintenanceRepository, UnitOfWorkFactory},
 };
 
 fn t0() -> DateTime<Utc> {
@@ -78,7 +81,9 @@ async fn meter(
         name: name.into(),
         kind: MeterKind::Electricity,
         unit: "kWh".into(),
-        reading_interval_days: Some(30),
+        schedule: Some(ReadingSchedule::EveryDays(30)),
+        purpose: MeterPurpose::General,
+        targets: crate::model::MeterTargets::default(),
         max_daily_rate: Some(Decimal::new(25_500, 3)),
         billing_start: None,
     };
@@ -88,6 +93,7 @@ async fn meter(
         installed_at: t0(),
         rollover_digits: Some(6),
         decimal_places: 1,
+        parent_meter_id: None,
     };
     uow.meters()
         .add_device(t, m, d, &device)
@@ -130,6 +136,355 @@ pub async fn run(f: &dyn UnitOfWorkFactory) {
     readings(f).await;
     devices(f).await;
     household_delete_cascades(f).await;
+    members(f).await;
+    invitations(f).await;
+    revisions(f).await;
+}
+
+/// Korrektur und Revisionen: Tenant-Isolation, Eindeutigkeit, Erhalt nach
+/// dem Löschen der Ablesung.
+// @test SPEC_RDG_HISTORY, SPEC_SEC_TENANT_SCOPE
+#[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
+async fn revisions(f: &dyn UnitOfWorkFactory) {
+    let t = tenant(f, "Revisionen").await;
+    let other = tenant(f, "Fremd R").await;
+    let (m, d, r) = meter(f, &t, "Strom R").await;
+    let first = reading(&t, r, d, 1, 100);
+    let second = reading(&t, r, d, 2, 200);
+    let mut uow = f.begin().await.expect("begin");
+    uow.readings()
+        .insert(&t, &[first.clone(), second.clone()])
+        .await
+        .expect("insert");
+    uow.commit().await.expect("commit");
+
+    let update = ReadingUpdate {
+        read_at: first.read_at + Duration::hours(1),
+        value: Decimal::new(105, 1),
+        note: None,
+        updated_at: t0() + Duration::days(3),
+    };
+    let revision = Revision {
+        id: RevisionId(id()),
+        reading_id: first.id,
+        meter_id: m,
+        register_id: r,
+        action: RevisionAction::Update,
+        changed_by: t.user_id(),
+        changed_at: update.updated_at,
+        old_read_at: first.read_at,
+        old_value: first.value,
+        old_note: first.note.clone(),
+        new_read_at: Some(update.read_at),
+        new_value: Some(update.value),
+        new_note: None,
+    };
+    // fremder Tenant: weder ändern noch Revision schreiben
+    let mut uow = f.begin().await.expect("begin");
+    assert!(matches!(
+        uow.readings().update(&other, first.id, &update).await,
+        Err(PortError::NotFound)
+    ));
+    drop(uow);
+    let mut uow = f.begin().await.expect("begin");
+    assert!(uow.revisions().append(&other, &revision).await.is_err());
+    drop(uow);
+    // gleicher Zeitpunkt wie eine andere Ablesung ist ein Konflikt
+    let mut uow = f.begin().await.expect("begin");
+    let clash = ReadingUpdate {
+        read_at: second.read_at,
+        ..update.clone()
+    };
+    assert!(matches!(
+        uow.readings().update(&t, first.id, &clash).await,
+        Err(PortError::Conflict(_))
+    ));
+    drop(uow);
+
+    let mut uow = f.begin().await.expect("begin");
+    uow.readings()
+        .update(&t, first.id, &update)
+        .await
+        .expect("update");
+    uow.revisions()
+        .append(&t, &revision)
+        .await
+        .expect("revision");
+    uow.readings().delete(&t, first.id).await.expect("delete");
+    let deleted = Revision {
+        id: RevisionId(id()),
+        action: RevisionAction::Delete,
+        changed_at: update.updated_at + Duration::hours(1),
+        old_read_at: update.read_at,
+        old_value: update.value,
+        old_note: None,
+        new_read_at: None,
+        new_value: None,
+        ..revision.clone()
+    };
+    uow.revisions()
+        .append(&t, &deleted)
+        .await
+        .expect("revision");
+    uow.commit().await.expect("commit");
+
+    let mut uow = f.begin().await.expect("begin");
+    let history = uow.revisions().for_meter(&t, m).await.expect("history");
+    assert_eq!(
+        history,
+        [deleted, revision],
+        "neueste zuerst, nach dem Löschen erhalten"
+    );
+    assert!(
+        uow.revisions()
+            .for_meter(&other, m)
+            .await
+            .expect("history")
+            .is_empty()
+    );
+    let left = uow.readings().list_for_meter(&t, m).await.expect("list");
+    assert_eq!(left.len(), 1);
+    // Löschen des Haushalts entfernt die Revisionen
+    uow.households().delete(&t).await.expect("delete");
+    uow.commit().await.expect("commit");
+    let mut uow = f.begin().await.expect("begin");
+    assert!(
+        uow.revisions()
+            .for_meter(&t, m)
+            .await
+            .expect("history")
+            .is_empty()
+    );
+}
+
+async fn user(f: &dyn UnitOfWorkFactory, name: &str) -> UserId {
+    let mut uow = f.begin().await.expect("begin");
+    let u = uow
+        .users()
+        .upsert_oidc(UserId(id()), &identity(name), t0())
+        .await
+        .expect("user");
+    uow.commit().await.expect("commit");
+    u.id
+}
+
+// @test SPEC_TEN_ROLES, SPEC_SEC_TENANT_SCOPE
+async fn members(f: &dyn UnitOfWorkFactory) {
+    let t = tenant(f, "Mitglieder").await;
+    let other = tenant(f, "Fremd").await;
+    let bea = user(f, "Bea").await;
+    let mut uow = f.begin().await.expect("begin");
+    uow.memberships()
+        .add(t.household_id(), bea, Role::Viewer)
+        .await
+        .expect("add");
+    // erneutes Hinzufügen mit niedrigerer Rolle behält die höhere
+    uow.memberships()
+        .add(t.household_id(), bea, Role::Member)
+        .await
+        .expect("add");
+    uow.memberships()
+        .add(t.household_id(), bea, Role::Viewer)
+        .await
+        .expect("add");
+    uow.memberships().lock_household(&t).await.expect("lock");
+    let list = uow.memberships().list(&t).await.expect("list");
+    assert_eq!(
+        list.iter()
+            .map(|m| (m.display_name.as_str(), m.role))
+            .collect::<Vec<_>>(),
+        [("Bea", Role::Member), ("Mitglieder", Role::Owner)]
+    );
+    uow.commit().await.expect("commit");
+
+    let mut uow = f.begin().await.expect("begin");
+    // fremder Tenant sieht und ändert nichts
+    assert_eq!(uow.memberships().list(&other).await.expect("list").len(), 1);
+    assert!(matches!(
+        uow.memberships().set_role(&other, bea, Role::Owner).await,
+        Err(PortError::NotFound)
+    ));
+    assert!(matches!(
+        uow.memberships().remove(&other, bea).await,
+        Err(PortError::NotFound)
+    ));
+    uow.memberships()
+        .set_role(&t, bea, Role::Owner)
+        .await
+        .expect("role");
+    assert_eq!(
+        uow.memberships()
+            .role(bea, t.household_id())
+            .await
+            .expect("role"),
+        Some(Role::Owner)
+    );
+    uow.memberships().remove(&t, bea).await.expect("remove");
+    assert_eq!(
+        uow.memberships()
+            .role(bea, t.household_id())
+            .await
+            .expect("role"),
+        None
+    );
+    assert!(matches!(
+        uow.memberships().remove(&t, bea).await,
+        Err(PortError::NotFound)
+    ));
+    uow.commit().await.expect("commit");
+}
+
+fn new_invitation(t: &Tenant, expires_in: Duration) -> NewInvitation {
+    NewInvitation {
+        id: InvitationId(id()),
+        role: Role::Member,
+        token_hash: crate::secret::generate().hash,
+        email: Some("bea@example.test".into()),
+        created_by: t.user_id(),
+        created_at: t0(),
+        expires_at: t0() + expires_in,
+    }
+}
+
+/// Einladungen: Tenant-Isolation, Ablauf, Widerruf und einmaliges Einlösen
+/// auch bei zwei gleichzeitigen Transaktionen.
+// @test SPEC_TEN_INVITES, SPEC_SEC_TENANT_SCOPE
+async fn invitations(f: &dyn UnitOfWorkFactory) {
+    let t = tenant(f, "Einladend").await;
+    let other = tenant(f, "Andere").await;
+    let open = new_invitation(&t, Duration::days(7));
+    let hash = open.token_hash;
+    let expired = new_invitation(&t, Duration::hours(-1));
+    let revoked = new_invitation(&t, Duration::days(7));
+    let mut uow = f.begin().await.expect("begin");
+    for i in [&open, &expired, &revoked] {
+        uow.invitations().create(&t, i).await.expect("create");
+    }
+    uow.commit().await.expect("commit");
+    // gleicher Hash ist ein Konflikt
+    let mut uow = f.begin().await.expect("begin");
+    let duplicate = NewInvitation {
+        id: InvitationId(id()),
+        ..open.clone()
+    };
+    assert!(uow.invitations().create(&t, &duplicate).await.is_err());
+    drop(uow);
+
+    let mut uow = f.begin().await.expect("begin");
+    assert!(matches!(
+        uow.invitations().revoke(&other, revoked.id, t0()).await,
+        Err(PortError::NotFound)
+    ));
+    uow.invitations()
+        .revoke(&t, revoked.id, t0())
+        .await
+        .expect("revoke");
+    let listed = uow.invitations().list_open(&t, t0()).await.expect("list");
+    assert_eq!(
+        listed.iter().map(|i| i.id).collect::<Vec<_>>(),
+        [open.id],
+        "nur offene"
+    );
+    assert_eq!(listed[0].household_name, "Einladend");
+    assert!(
+        uow.invitations()
+            .list_open(&other, t0())
+            .await
+            .expect("list")
+            .is_empty()
+    );
+    let found = uow
+        .invitations()
+        .find_by_hash(&hash)
+        .await
+        .expect("find")
+        .expect("vorhanden");
+    assert_eq!(found.household_id, t.household_id());
+    assert_eq!(found.email.as_deref(), Some("bea@example.test"));
+    assert!(
+        uow.invitations()
+            .find_by_hash(&[0; 32])
+            .await
+            .expect("find")
+            .is_none()
+    );
+    assert!(
+        !uow.invitations()
+            .mark_accepted(revoked.id, other.user_id(), t0())
+            .await
+            .expect("mark"),
+        "widerrufen"
+    );
+    uow.commit().await.expect("commit");
+    accept_once_concurrently(f, &t, hash, open.id).await;
+}
+
+/// Zwei Transaktionen lösen gleichzeitig ein: genau eine gelingt; danach
+/// entfernt das Löschen des Haushalts die Einladung.
+async fn accept_once_concurrently(
+    f: &dyn UnitOfWorkFactory,
+    t: &Tenant,
+    hash: [u8; 32],
+    open: InvitationId,
+) {
+    let (a, b) = (user(f, "A").await, user(f, "B").await);
+    let mut first = f.begin().await.expect("begin");
+    let mut second = f.begin().await.expect("begin");
+    for uow in [&mut first, &mut second] {
+        assert!(
+            uow.invitations()
+                .find_by_hash(&hash)
+                .await
+                .expect("find")
+                .is_some()
+        );
+    }
+    assert!(
+        first
+            .invitations()
+            .mark_accepted(open, a, t0())
+            .await
+            .expect("mark")
+    );
+    first
+        .memberships()
+        .add(t.household_id(), a, Role::Member)
+        .await
+        .expect("add");
+    first.commit().await.expect("commit");
+    let second_ok = match second.invitations().mark_accepted(open, b, t0()).await {
+        Ok(true) => second.commit().await.is_ok(),
+        // SQLite: veralteter Lesestand kann nicht schreiben
+        Ok(false) | Err(_) => false,
+    };
+    assert!(!second_ok, "zweites Einlösen gelingt nicht");
+    let mut uow = f.begin().await.expect("begin");
+    let accepted = uow
+        .invitations()
+        .find_by_hash(&hash)
+        .await
+        .expect("find")
+        .expect("vorhanden");
+    assert_eq!(accepted.accepted_by, Some(a));
+    assert!(!accepted.is_open(t0()));
+    assert_eq!(
+        uow.memberships()
+            .role(a, t.household_id())
+            .await
+            .expect("role"),
+        Some(Role::Member)
+    );
+    // Löschen des Haushalts entfernt die Einladungen
+    uow.households().delete(t).await.expect("delete");
+    uow.commit().await.expect("commit");
+    let mut uow = f.begin().await.expect("begin");
+    assert!(
+        uow.invitations()
+            .find_by_hash(&hash)
+            .await
+            .expect("find")
+            .is_none()
+    );
 }
 
 async fn users(f: &dyn UnitOfWorkFactory) {
@@ -205,7 +560,9 @@ async fn rollback_without_commit(f: &dyn UnitOfWorkFactory) {
             name: "verworfen".into(),
             kind: MeterKind::Water,
             unit: "m³".into(),
-            reading_interval_days: None,
+            schedule: None,
+            purpose: MeterPurpose::General,
+            targets: crate::model::MeterTargets::default(),
             max_daily_rate: None,
             billing_start: None,
         };
@@ -392,6 +749,7 @@ async fn devices(f: &dyn UnitOfWorkFactory) {
         installed_at: t0() + Duration::days(30),
         rollover_digits: None,
         decimal_places: 3,
+        parent_meter_id: None,
     };
     uow.meters()
         .add_device(&t, m, new_device, &data)
@@ -767,6 +1125,134 @@ pub async fn blob_store(s: &dyn BlobStore) {
     s.delete_household(a).await.expect("delete empty household");
     s.delete_household(b).await.expect("cleanup");
     assert!(matches!(s.get(&tmp_b).await, Err(PortError::NotFound)));
+}
+
+/// Outbox und Job-Protokoll: Eintrag nur mit Commit, Abholen in Reihenfolge,
+/// Wiederholung, Abschluss und Aufräumen (SPEC_JOB_OUTBOX); danach
+/// Empfänger und Versandprotokoll der Benachrichtigungen.
+///
+/// # Panics
+/// Bei jeder verletzten Erwartung.
+// @test SPEC_JOB_OUTBOX, SPEC_JOB_SCHEDULER
+#[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
+pub async fn jobs(f: &dyn UnitOfWorkFactory, j: &dyn JobRepository, m: &dyn MaintenanceRepository) {
+    let t = tenant(f, "Outbox").await;
+    let (meter_id, _, _) = meter(f, &t, "Strom O").await;
+    let event = OutboxEvent::ReadingsRecorded {
+        meter_id,
+        reading_ids: vec![ReadingId(id())],
+    };
+    let now = Utc::now();
+    // ohne Commit kein Eintrag
+    {
+        let mut uow = f.begin().await.expect("begin");
+        uow.outbox()
+            .enqueue(&t, OutboxId(id()), &event, now)
+            .await
+            .expect("enqueue");
+    }
+    let before = j.claim_outbox(now, 1000).await.expect("claim").len();
+    let (first, second) = (OutboxId(id()), OutboxId(id()));
+    let mut uow = f.begin().await.expect("begin");
+    uow.outbox()
+        .enqueue(&t, first, &event, now - Duration::seconds(2))
+        .await
+        .expect("enqueue");
+    uow.outbox()
+        .enqueue(&t, second, &event, now - Duration::seconds(1))
+        .await
+        .expect("enqueue");
+    uow.commit().await.expect("commit");
+    let ids = |v: Vec<OutboxEntry>| v.into_iter().map(|e| e.id).collect::<Vec<_>>();
+    let claimed: Vec<OutboxId> = ids(j.claim_outbox(now, 1000).await.expect("claim"))
+        .into_iter()
+        .filter(|e| *e == first || *e == second)
+        .collect();
+    assert_eq!(claimed, [first, second], "älteste zuerst");
+    assert_eq!(
+        j.claim_outbox(now, 1000).await.expect("claim").len(),
+        before + 2
+    );
+    let entry = j
+        .claim_outbox(now, 1000)
+        .await
+        .expect("claim")
+        .into_iter()
+        .find(|e| e.id == first)
+        .expect("erster");
+    assert_eq!(entry.kind, "readings_recorded");
+    assert_eq!(entry.household_id, t.household_id());
+    assert_eq!(
+        serde_json::from_str::<OutboxEvent>(&entry.payload).expect("json"),
+        event
+    );
+
+    // Wiederholung später, Abschluss, Fehlschlag
+    j.finish_outbox(
+        first,
+        OutboxResult::Retry {
+            attempts: 1,
+            next_attempt_at: now + Duration::minutes(1),
+        },
+    )
+    .await
+    .expect("retry");
+    assert!(!ids(j.claim_outbox(now, 1000).await.expect("claim")).contains(&first));
+    let later = j
+        .claim_outbox(now + Duration::minutes(1), 1000)
+        .await
+        .expect("claim");
+    assert_eq!(
+        later.iter().find(|e| e.id == first).map(|e| e.attempts),
+        Some(1)
+    );
+    j.finish_outbox(first, OutboxResult::Done { at: now })
+        .await
+        .expect("done");
+    j.finish_outbox(
+        second,
+        OutboxResult::Failed {
+            attempts: 10,
+            at: now,
+        },
+    )
+    .await
+    .expect("failed");
+    let open = ids(j
+        .claim_outbox(now + Duration::days(1), 1000)
+        .await
+        .expect("claim"));
+    assert!(!open.contains(&first) && !open.contains(&second));
+    // erledigte Einträge nach der Aufbewahrung entfernen, fehlgeschlagene nicht
+    assert!(
+        m.purge_outbox(now + Duration::seconds(1))
+            .await
+            .expect("purge")
+            >= 1
+    );
+    assert_eq!(
+        m.purge_outbox(now + Duration::seconds(1))
+            .await
+            .expect("purge"),
+        0
+    );
+
+    // Protokoll der Läufe
+    let run = JobRun {
+        started_at: now,
+        finished_at: now + Duration::seconds(1),
+        outcome: "ok".into(),
+    };
+    j.record_run("suite", &run).await.expect("run");
+    let again = JobRun {
+        outcome: "error".into(),
+        ..run.clone()
+    };
+    j.record_run("suite", &again).await.expect("run");
+    let last = j.last_run("suite").await.expect("last").expect("vorhanden");
+    assert_eq!(last.outcome, "error");
+    assert!((last.started_at - now).num_milliseconds().abs() < 1);
+    assert!(j.last_run("unbekannt").await.expect("last").is_none());
 }
 
 /// Führt zwei Futures nebenläufig aus, ohne Abhängigkeit zu einer Runtime.

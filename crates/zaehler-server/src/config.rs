@@ -38,6 +38,23 @@ pub struct Config {
     pub ai: Option<zaehler_ai::OpenRouterConfig>,
     #[serde(default)]
     pub notify: NotifyConfig,
+    #[serde(default)]
+    pub invitations: InvitationsConfig,
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
+}
+
+/// Einladungen (SPEC_TEN_INVITES).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvitationsConfig {
+    /// Gültigkeit eines Einladungslinks in Tagen.
+    pub ttl_days: u16,
+}
+
+impl Default for InvitationsConfig {
+    fn default() -> Self {
+        Self { ttl_days: 7 }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +71,24 @@ pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
     pub auto_migrate: bool,
+    /// Eigene Verbindung für den Leader-Lock, direkt zur Datenbank und nicht
+    /// über einen Pooler im Transaktionsmodus; ohne Angabe `url`
+    /// (SPEC_OPS_REPLICAS).
+    #[serde(default)]
+    pub lock_url: Option<String>,
+}
+
+/// Scheduler der Jobs (SPEC_JOB_SCHEDULER).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerConfig {
+    /// Takt in Sekunden; Outbox je Takt, längere Intervalle je Job.
+    pub tick_seconds: u64,
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self { tick_seconds: 60 }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -264,8 +299,9 @@ impl Default for SessionConfig {
     }
 }
 
+/// E-Mail-Versand; ohne `smtp` sind Benachrichtigungen deaktiviert
+/// (SPEC_NTF_EMAIL).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[allow(dead_code)] // genutzt ab REQ_NTF_001 (Scheduler)
 pub struct NotifyConfig {
     #[serde(skip_serializing)]
     pub smtp: Option<zaehler_notify::SmtpConfig>,
@@ -283,6 +319,7 @@ impl Default for Config {
                 url: "sqlite://data/zaehler.db?mode=rwc".into(),
                 max_connections: 10,
                 auto_migrate: true,
+                lock_url: None,
             },
             log: LogConfig {
                 format: LogFormat::Json,
@@ -301,6 +338,8 @@ impl Default for Config {
             otel: OtelConfig::default(),
             ai: None,
             notify: NotifyConfig::default(),
+            invitations: InvitationsConfig::default(),
+            scheduler: SchedulerConfig::default(),
         }
     }
 }
@@ -322,6 +361,7 @@ impl Config {
     pub fn redacted(&self) -> String {
         let mut c = self.clone();
         c.database.url = redact_url(&c.database.url);
+        c.database.lock_url = c.database.lock_url.as_deref().map(redact_url);
         c.otel.endpoint = c.otel.endpoint.as_deref().map(redact_url);
         serde_json::to_string_pretty(&c).unwrap_or_default()
     }
@@ -387,6 +427,15 @@ impl Config {
         }
         if self.upload.max_backup_bytes == 0 {
             return Err("upload.max_backup_bytes muss größer 0 sein".into());
+        }
+        if self.scheduler.tick_seconds == 0 {
+            return Err("scheduler.tick_seconds muss größer 0 sein".into());
+        }
+        if self.invitations.ttl_days == 0 {
+            return Err("invitations.ttl_days muss größer 0 sein".into());
+        }
+        if let Some(smtp) = &self.notify.smtp {
+            smtp.validate()?;
         }
         if self.backup.keep == 0 {
             return Err("backup.keep muss mindestens 1 sein".into());

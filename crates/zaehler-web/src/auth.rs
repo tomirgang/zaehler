@@ -19,7 +19,9 @@ use tower_sessions::Session;
 use zaehler_app::model::Identity;
 
 use crate::{
-    extract::{AnonLang, SESSION_CSRF, SESSION_HOUSEHOLD, SESSION_OIDC, SESSION_USER},
+    extract::{
+        AnonLang, SESSION_CSRF, SESSION_HOUSEHOLD, SESSION_INVITE, SESSION_OIDC, SESSION_USER,
+    },
     i18n::Lang,
     pages::render,
     security,
@@ -289,7 +291,14 @@ async fn complete_sign_in(
         return auth_error(state, lang, e);
     }
     tracing::info!(user = %signed.user.id, issuer = %identity.issuer, "signed in");
-    (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response()
+    // Rücksprung zur Einladung, die vor der Anmeldung geöffnet wurde
+    let target = match session.remove::<String>(SESSION_INVITE).await {
+        Ok(Some(token)) if token.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            format!("/invite/{token}")
+        }
+        _ => "/".to_owned(),
+    };
+    (StatusCode::SEE_OTHER, [(header::LOCATION, target)]).into_response()
 }
 
 #[derive(Deserialize)]

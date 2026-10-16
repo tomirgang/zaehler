@@ -146,7 +146,7 @@ sequenceDiagram
 
 ```{spec} Rollen im Haushalt
 :id: SPEC_TEN_ROLES
-:status: draft
+:status: implemented
 :satisfies: REQ_TEN_003, REQ_NFR_003
 :links: SPEC_SEC_TENANT_SCOPE
 
@@ -171,7 +171,7 @@ der Anwendungsfälle in {doc}`v1-detail-design`. Regeln:
 
 ```{spec} Outbox und Job-Tenant
 :id: SPEC_JOB_OUTBOX
-:status: draft
+:status: implemented
 :satisfies: REQ_NTF_004, REQ_PV_008, REQ_OPS_008
 :links: ADR_024, SPEC_JOB_SCHEDULER
 
@@ -191,6 +191,12 @@ ist nur innerhalb von `zaehler-app` sichtbar (`pub(crate)`), hat die Rolle
 `Viewer` und keinen Nutzer. Schreibende Ports nehmen ihn nicht an; Jobs
 schreiben nur Outbox-Status, Versandprotokoll und `job_runs` über
 `JobRepository`.
+
+Umsetzung: Der Job-Tenant trägt statt eines fehlenden Nutzers die Nil-UUID,
+damit `Tenant::user_id()` ohne `Option` auskommt; kein Anwendungsfall des
+Web-Adapters erhält ihn. `readings_recorded` entsteht derzeit aus
+`RecordReadings`, `ConfirmDraft` und `CorrectReading`; `IngestReadings` und
+`RecordBulkReadings` folgen mit ihren Arbeitspaketen.
 ```
 
 ```{spec} Authentifizierung der REST-API
@@ -237,7 +243,7 @@ Kostenbuch-Eintrag gelöscht) entfernt das Housekeeping nach
 
 ```{spec} Mehrere Replicas
 :id: SPEC_OPS_REPLICAS
-:status: draft
+:status: implemented
 :satisfies: REQ_OPS_008
 :links: SPEC_JOB_SCHEDULER, SPEC_OPS_HELM
 
@@ -249,4 +255,10 @@ verbindet direkt zur Datenbank, nicht über einen Pooler im
 Transaktionsmodus (`database.lock_url`, Standard `database.url`). Ein Test in
 der CI startet zwei Instanzen gegen dieselbe PostgreSQL-Datenbank und prüft,
 dass eine Erinnerung genau einmal versendet wird.
+
+Umsetzung: Geprüft sind die Bausteine getrennt auf PostgreSQL: zwei
+`PgLeaderLock` gegeneinander (genau einer Leader, Übernahme nach Freigabe)
+und das Versandprotokoll (`notification_log` mit eindeutigem Schlüssel aus
+Nutzer, Art und Schlüssel), das einen zweiten Versand auch bei gleichzeitiger
+Ausführung verhindert. Ein Test mit zwei laufenden Server-Prozessen steht aus.
 ```

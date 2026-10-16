@@ -1,0 +1,34 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("notifications-title") }}</h1>
+  <div class="actions"><a class="button secondary" href="/settings">{{ ctx.lang.t("nav-settings") }}</a></div>
+</div>
+
+{% if !enabled %}
+<div class="callout" role="status">
+  <p>{{ ctx.lang.t("notifications-disabled") }}</p>
+</div>
+{% endif %}
+
+<section class="card">
+  <form method="post" action="/settings/notifications" class="form">
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="field">
+      <label for="email">{{ ctx.lang.t("notifications-email") }}</label>
+      <input id="email" name="email" type="email" value="{{ email }}" maxlength="254" autocomplete="email"{% if !login_email.is_empty() %} placeholder="{{ login_email }}"{% endif %}{% if self.has_errs("email") %} aria-invalid="true" aria-describedby="email-error"{% endif %}>
+      <p class="hint">{{ email_hint }}</p>
+      {% for e in self.errs("email") %}<p class="field-error" id="email-error">{{ e }}</p>{% endfor %}
+    </div>
+    <fieldset class="field">
+      <legend>{{ ctx.lang.t("notifications-events") }}</legend>
+      <label><input type="checkbox" name="reminder" value="true"{% if reminder %} checked{% endif %}> {{ ctx.lang.t("notifications-reminder") }}</label>
+      <p class="hint">{{ ctx.lang.t("notifications-reminder-hint") }}</p>
+      <label><input type="checkbox" name="alarm" value="true"{% if alarm %} checked{% endif %}> {{ ctx.lang.t("notifications-alarm") }}</label>
+      <p class="hint">{{ ctx.lang.t("notifications-alarm-hint") }}</p>
+    </fieldset>
+    <button type="submit">{{ ctx.lang.t("action-save") }}</button>
+  </form>
+</section>
+{% endblock %}

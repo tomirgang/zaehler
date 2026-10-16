@@ -18,14 +18,18 @@ use sea_orm::{
 use zaehler_app::{
     PortError,
     backup::{
-        BackupData, DeviceRecord, DraftRecord, HouseholdRecord, MembershipRecord, MeterRecord,
-        ReadingRecord, RegisterRecord, UserRecord,
+        BackupData, DeviceRecord, DraftRecord, HouseholdRecord, InvitationRecord, MembershipRecord,
+        MeterRecord, NotificationSettingRecord, ReadingRecord, RegisterRecord, RevisionRecord,
+        UserRecord,
     },
     port::{BackupRepository, PortResult},
 };
 
 use crate::{
-    entity::{ai_draft, household, membership, meter, meter_device, reading, register, user},
+    entity::{
+        ai_draft, household, invitation, membership, meter, meter_device, notification_settings,
+        reading, reading_revision, register, user,
+    },
     uow::SeaOrmStore,
 };
 
@@ -179,6 +183,13 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
                 billing_start_day: r.opt("billing_start_day")?,
                 archived: r.get("archived")?,
                 created_at: r.get("created_at")?,
+                purpose: r.or("purpose", "general".to_owned())?,
+                schedule_kind: r.opt("schedule_kind")?,
+                schedule_value: r.opt("schedule_value")?,
+                archived_at: r.opt("archived_at")?,
+                season_weights: r.opt("season_weights")?,
+                annual_target_milli: r.opt("annual_target_milli")?,
+                target_tolerance_pct: r.opt("target_tolerance_pct")?,
             })
         })
         .await?,
@@ -191,6 +202,7 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
                 removed_at: r.get("removed_at")?,
                 rollover_digits: r.get("rollover_digits")?,
                 decimal_places: r.or("decimal_places", 0)?,
+                parent_meter_id: r.opt("parent_meter_id")?,
             })
         })
         .await?,
@@ -216,6 +228,7 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
                 note: r.get("note")?,
                 created_by: r.get("created_by")?,
                 created_at: r.get("created_at")?,
+                updated_at: r.opt("updated_at")?,
             })
         })
         .await?,
@@ -239,6 +252,51 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
             })
         })
         .await?,
+        invitations: records(db, "invitations", |r| {
+            Ok(InvitationRecord {
+                id: r.get("id")?,
+                household_id: r.get("household_id")?,
+                role: r.get("role")?,
+                token_hash: r.get("token_hash")?,
+                email: r.get("email")?,
+                created_by: r.get("created_by")?,
+                created_at: r.get("created_at")?,
+                expires_at: r.get("expires_at")?,
+                accepted_by: r.get("accepted_by")?,
+                accepted_at: r.get("accepted_at")?,
+                revoked_at: r.get("revoked_at")?,
+            })
+        })
+        .await?,
+        revisions: records(db, "reading_revisions", |r| {
+            Ok(RevisionRecord {
+                id: r.get("id")?,
+                household_id: r.get("household_id")?,
+                reading_id: r.get("reading_id")?,
+                meter_id: r.get("meter_id")?,
+                register_id: r.get("register_id")?,
+                action: r.get("action")?,
+                changed_by: r.get("changed_by")?,
+                changed_at: r.get("changed_at")?,
+                old_read_at: r.get("old_read_at")?,
+                old_value_milli: r.get("old_value_milli")?,
+                old_note: r.get("old_note")?,
+                new_read_at: r.get("new_read_at")?,
+                new_value_milli: r.get("new_value_milli")?,
+                new_note: r.get("new_note")?,
+            })
+        })
+        .await?,
+        notification_settings: records(db, "notification_settings", |r| {
+            Ok(NotificationSettingRecord {
+                user_id: r.get("user_id")?,
+                email: r.get("email")?,
+                reminder: r.get("reminder")?,
+                alarm: r.get("alarm")?,
+                updated_at: r.get("updated_at")?,
+            })
+        })
+        .await?,
     };
     // feste Reihenfolge, damit gleiche Daten gleiche Archive ergeben
     data.users.sort_by_key(|x| x.id);
@@ -250,6 +308,9 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
     data.registers.sort_by_key(|x| x.id);
     data.readings.sort_by_key(|x| x.id);
     data.drafts.sort_by_key(|x| x.id);
+    data.invitations.sort_by_key(|x| x.id);
+    data.revisions.sort_by_key(|x| x.id);
+    data.notification_settings.sort_by_key(|x| x.user_id);
     Ok(data)
 }
 
@@ -329,6 +390,13 @@ async fn write_all(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> 
                 billing_start_day: Set(m.billing_start_day),
                 archived: Set(m.archived),
                 created_at: Set(m.created_at),
+                purpose: Set(m.purpose.clone()),
+                schedule_kind: Set(m.schedule_kind.clone()),
+                schedule_value: Set(m.schedule_value),
+                archived_at: Set(m.archived_at),
+                season_weights: Set(m.season_weights.clone()),
+                annual_target_milli: Set(m.annual_target_milli),
+                target_tolerance_pct: Set(m.target_tolerance_pct),
             })
             .collect(),
     )
@@ -345,6 +413,7 @@ async fn write_all(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> 
                 removed_at: Set(x.removed_at),
                 rollover_digits: Set(x.rollover_digits),
                 decimal_places: Set(x.decimal_places),
+                parent_meter_id: Set(x.parent_meter_id),
             })
             .collect(),
     )
@@ -378,6 +447,7 @@ async fn write_all(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> 
                 note: Set(r.note.clone()),
                 created_by: Set(r.created_by),
                 created_at: Set(r.created_at),
+                updated_at: Set(r.updated_at),
             })
             .collect(),
     )
@@ -402,6 +472,63 @@ async fn write_all(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> 
                 finished_at: Set(x.finished_at),
                 taken_at: Set(x.taken_at),
                 analysis_started_at: Set(x.analysis_started_at),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.invitations
+            .iter()
+            .map(|x| invitation::ActiveModel {
+                id: Set(x.id),
+                household_id: Set(x.household_id),
+                role: Set(x.role.clone()),
+                token_hash: Set(x.token_hash.clone()),
+                email: Set(x.email.clone()),
+                created_by: Set(x.created_by),
+                created_at: Set(x.created_at),
+                expires_at: Set(x.expires_at),
+                accepted_by: Set(x.accepted_by),
+                accepted_at: Set(x.accepted_at),
+                revoked_at: Set(x.revoked_at),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.revisions
+            .iter()
+            .map(|x| reading_revision::ActiveModel {
+                id: Set(x.id),
+                household_id: Set(x.household_id),
+                reading_id: Set(x.reading_id),
+                meter_id: Set(x.meter_id),
+                register_id: Set(x.register_id),
+                action: Set(x.action.clone()),
+                changed_by: Set(x.changed_by),
+                changed_at: Set(x.changed_at),
+                old_read_at: Set(x.old_read_at),
+                old_value_milli: Set(x.old_value_milli),
+                old_note: Set(x.old_note.clone()),
+                new_read_at: Set(x.new_read_at),
+                new_value_milli: Set(x.new_value_milli),
+                new_note: Set(x.new_note.clone()),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.notification_settings
+            .iter()
+            .map(|x| notification_settings::ActiveModel {
+                user_id: Set(x.user_id),
+                email: Set(x.email.clone()),
+                reminder: Set(x.reminder),
+                alarm: Set(x.alarm),
+                updated_at: Set(x.updated_at),
             })
             .collect(),
     )

@@ -1,0 +1,132 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("members-title") }}</h1>
+  <div class="actions"><a class="button secondary" href="/settings">{{ ctx.lang.t("nav-settings") }}</a></div>
+</div>
+
+{% if let Some(link) = created_link %}
+<section class="card" role="status" aria-labelledby="invite-created-title">
+  <h2 id="invite-created-title">{{ ctx.lang.t("invite-created-title") }}</h2>
+  <p>{{ ctx.lang.t("invite-created-hint") }}</p>
+  {% if created_emailed %}<p>{{ ctx.lang.t("invite-emailed") }}</p>{% endif %}
+  <div class="field">
+    <label for="invite-link">{{ ctx.lang.t("invite-link") }}</label>
+    <input id="invite-link" value="{{ link }}" readonly>
+  </div>
+</section>
+{% endif %}
+
+<section class="card" aria-labelledby="members-list-title">
+  <h2 id="members-list-title">{{ ctx.lang.t("members-list") }}</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("member-name") }}</th>
+        <th>{{ ctx.lang.t("member-role") }}</th>
+        {% if ctx.is_owner %}<th><span class="visually-hidden">{{ ctx.lang.t("member-actions") }}</span></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in members %}
+      <tr>
+        <td>{{ m.name }}{% if m.is_self %} <span class="tag">{{ ctx.lang.t("member-self") }}</span>{% endif %}</td>
+        <td>
+          {% if ctx.is_owner %}
+          <form method="post" action="/settings/members/{{ m.user_id }}/role" class="inline">
+            <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+            <label class="visually-hidden" for="role-{{ m.user_id }}">{{ ctx.lang.t("member-role") }}</label>
+            <select id="role-{{ m.user_id }}" name="role">
+              {% for (value, label) in roles %}
+              <option value="{{ value }}"{% if self.same(value, m.role) %} selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="secondary">{{ ctx.lang.t("member-change-role") }}</button>
+          </form>
+          {% else %}{{ m.role_label }}{% endif %}
+        </td>
+        {% if ctx.is_owner %}
+        <td>
+          {% if !m.is_self %}
+          <form method="post" action="/settings/members/{{ m.user_id }}/remove" class="inline" hx-confirm="{{ ctx.lang.t("member-remove-confirm") }}">
+            <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+            <button type="submit" class="link danger">{{ ctx.lang.t("member-remove") }}</button>
+          </form>
+          {% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint">{{ ctx.lang.t("members-roles-hint") }}</p>
+</section>
+
+{% if ctx.is_owner %}
+<section class="card" aria-labelledby="invite-title">
+  <h2 id="invite-title">{{ ctx.lang.t("invite-title") }}</h2>
+  <form method="post" action="/settings/invitations" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="grid">
+      <div class="field{% if self.has_errs("role") %} has-error{% endif %}">
+        <label for="invite-role">{{ ctx.lang.t("member-role") }}</label>
+        <select id="invite-role" name="role">
+          {% for (value, label) in roles %}
+          <option value="{{ value }}"{% if self.same(value, invite_role) %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% for e in self.errs("role") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field{% if self.has_errs("email") %} has-error{% endif %}">
+        <label for="invite-email">{{ ctx.lang.t("invite-email") }}</label>
+        <input id="invite-email" name="email" type="email" value="{{ invite_email }}" maxlength="254" autocomplete="off">
+        <p class="hint">{{ ctx.lang.t("invite-email-hint") }}</p>
+        {% for e in self.errs("email") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    <button type="submit">{{ ctx.lang.t("invite-create") }}</button>
+  </form>
+
+  <h3>{{ ctx.lang.t("invite-open") }}</h3>
+  {% if invitations.is_empty() %}
+  <p class="muted">{{ ctx.lang.t("invite-none") }}</p>
+  {% else %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("member-role") }}</th>
+        <th>{{ ctx.lang.t("invite-email") }}</th>
+        <th>{{ ctx.lang.t("invite-expires") }}</th>
+        <th><span class="visually-hidden">{{ ctx.lang.t("member-actions") }}</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in invitations %}
+      <tr>
+        <td>{{ i.role_label }}</td>
+        <td>{{ i.email }}</td>
+        <td>{{ i.expires }}</td>
+        <td>
+          <form method="post" action="/settings/invitations/{{ i.id }}/revoke" class="inline">
+            <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+            <button type="submit" class="link danger">{{ ctx.lang.t("invite-revoke") }}</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card danger-zone" aria-labelledby="leave-title">
+  <h2 id="leave-title">{{ ctx.lang.t("member-leave") }}</h2>
+  <p>{{ ctx.lang.t("member-leave-hint") }}</p>
+  <form method="post" action="/settings/leave" class="inline" hx-confirm="{{ ctx.lang.t("member-leave-confirm") }}">
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <button type="submit" class="danger">{{ ctx.lang.t("member-leave") }}</button>
+  </form>
+</section>
+{% endblock %}

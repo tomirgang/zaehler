@@ -5,7 +5,8 @@
 #   docker compose -f compose.yaml -f compose.postgres.yaml up -d   # PostgreSQL statt SQLite
 #
 # Weitere Overrides: compose.s3.yaml (S3-Objektspeicher), compose.otel.yaml
-# (OpenTelemetry-Collector), compose.keycloak.yaml (OIDC mit Keycloak).
+# (OpenTelemetry-Collector), compose.keycloak.yaml (OIDC mit Keycloak),
+# compose.mail.yaml (Mailpit für E-Mails).
 #
 # Geheimnisse (OpenRouter-Key, OIDC, SMTP) in .env ablegen, siehe .env.example.
 # COMPOSE_HTTP_PORT ändert den Port auf dem Host, COMPOSE_APP_ENV_FILE die

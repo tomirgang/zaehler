@@ -13,6 +13,7 @@ pub mod error;
 pub mod ids;
 pub mod model;
 pub mod port;
+pub mod secret;
 pub mod tenant;
 pub mod usecase;
 

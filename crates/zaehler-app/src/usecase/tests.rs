@@ -5,8 +5,9 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use zaehler_domain::{
     consumption,
-    meter::{Direction, MeterKind},
+    meter::{Direction, MeterKind, MeterPurpose},
     reading::{Plausibility, Reading as DomainReading, ReadingSource},
+    schedule::ReadingSchedule,
 };
 
 use std::sync::Arc;
@@ -50,7 +51,10 @@ fn meter_input(name: &str) -> MeterInput {
         name: name.into(),
         kind: MeterKind::Electricity,
         unit: String::new(),
-        reading_interval_days: Some(30),
+        schedule: Some(ReadingSchedule::EveryDays(30)),
+        purpose: MeterPurpose::General,
+        targets: crate::model::MeterTargets::default(),
+        parent_meter_id: None,
         max_daily_rate: Some(dec!(50)),
         billing_start: None,
         serial_number: Some("1 emh-001".into()),
@@ -448,6 +452,7 @@ async fn reading_before_installation_moves_first_device_but_not_a_later_one() {
                 rollover_digits: None,
                 decimal_places: 1,
                 start_values: vec![(reg, dec!(0))],
+                parent_meter_id: None,
             },
         )
         .await
@@ -482,6 +487,7 @@ async fn device_swap_keeps_consumption_series_and_locks_swap_readings() {
         rollover_digits: None,
         decimal_places: 3,
         start_values: vec![(reg, dec!(0))],
+        parent_meter_id: None,
     };
     uc.swap_device
         .execute(&tenant, id, swap.clone())
@@ -1129,6 +1135,7 @@ async fn analysis_setup() -> (UseCases, Tenant, MeterId) {
                 rollover_digits: Some(5),
                 decimal_places: 1,
                 start_values: vec![(ht, dec!(0)), (nt, dec!(0))],
+                parent_meter_id: None,
             },
         )
         .await
@@ -1150,7 +1157,7 @@ async fn analysis_setup() -> (UseCases, Tenant, MeterId) {
 async fn meter_analysis_sums_registers_across_a_device_swap() {
     use chrono::Datelike;
     use zaehler_domain::analysis::PeriodForecast;
-    let (uc, tenant, id) = analysis_setup().await;
+    let (uc, tenant, id) = Box::pin(analysis_setup()).await;
     let a = uc.meter_analysis.execute(&tenant, id, None).await.unwrap();
     assert_eq!(a.primary, Direction::Import);
     assert!(a.export.is_empty());
@@ -1339,11 +1346,11 @@ async fn charts_project_partial_months_and_estimate_the_start_of_the_year() {
 async fn dashboard_lists_overdue_meters_first() {
     use chrono::Datelike;
     use zaehler_domain::analysis::PeriodForecast;
-    let (uc, tenant, _) = analysis_setup().await;
+    let (uc, tenant, _) = Box::pin(analysis_setup()).await;
     let mut water = meter_input("Wasser");
     water.kind = MeterKind::Water;
     water.serial_number = None;
-    water.reading_interval_days = Some(7);
+    water.schedule = Some(ReadingSchedule::EveryDays(7));
     water.registers.truncate(1);
     water.start_at = berlin_day(2026, 5, 1);
     uc.create_meter.execute(&tenant, water).await.unwrap();
@@ -1351,7 +1358,7 @@ async fn dashboard_lists_overdue_meters_first() {
     let cards = uc.dashboard.execute(&tenant).await.unwrap();
     let names: Vec<&str> = cards.iter().map(|c| c.meter.data.name.as_str()).collect();
     assert_eq!(names, ["Wasser", "Strom"]);
-    assert!(cards[0].overdue && !cards[1].overdue);
+    assert!(cards[0].overdue() && !cards[1].overdue());
     let strom = &cards[1];
     assert_eq!(strom.last_values.len(), 2);
     assert_eq!(strom.last_values[0].value, dec!(200));

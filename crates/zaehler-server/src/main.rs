@@ -143,13 +143,12 @@ async fn serve(config: Config, traces: bool) -> anyhow::Result<()> {
     let metrics = telemetry::init_metrics()?;
     let wiring::App {
         router: app,
-        housekeeping,
+        scheduler,
         ..
     } = wiring::build(&config, traces).await?;
-    let housekeeping_task = scheduler::spawn_housekeeping(
-        housekeeping,
-        std::time::Duration::from_secs(config.housekeeping.interval_minutes * 60),
-    );
+    let scheduler_task = scheduler.spawn(std::time::Duration::from_secs(
+        config.scheduler.tick_seconds,
+    ));
     // Separater Listener, damit /metrics nicht über den Ingress erreichbar ist.
     let metrics_app = Router::new().route(
         "/metrics",
@@ -166,7 +165,7 @@ async fn serve(config: Config, traces: bool) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     metrics_task.abort();
-    housekeeping_task.abort();
+    scheduler_task.abort();
     Ok(())
 }
 
