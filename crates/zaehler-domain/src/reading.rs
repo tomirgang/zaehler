@@ -57,7 +57,7 @@ pub enum Plausibility {
     Decreasing,
     /// Tagesverbrauch liegt über dem konfigurierten Maximum.
     RateTooHigh,
-    /// Zeitpunkt liegt vor der letzten Ablesung.
+    /// Zeitpunkt liegt vor dem Vergleichsstand oder vor dem Einbau des Geräts.
     OutOfOrder,
 }
 
@@ -107,6 +107,26 @@ pub fn check_plausibility(
     Plausibility::Ok
 }
 
+/// Prüft einen Stand gegen seine zeitlichen Nachbarn desselben Geräts: zuerst
+/// gegen den Vorgänger, bei `Ok` den Nachfolger gegen den Stand. Damit lassen
+/// sich auch nachgetragene Zwischenstände prüfen.
+// @impl SPEC_RDG_PLAUSIBILITY
+#[must_use]
+pub fn check_in_sequence(
+    previous: Option<&Reading>,
+    candidate: &Reading,
+    next: Option<&Reading>,
+    max_daily_rate: Option<Decimal>,
+) -> Plausibility {
+    let p = check_plausibility(previous, candidate, max_daily_rate);
+    match next {
+        Some(next) if p == Plausibility::Ok => {
+            check_plausibility(Some(candidate), next, max_daily_rate)
+        }
+        _ => p,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +161,28 @@ mod tests {
         assert_eq!(
             check_plausibility(None, &r(3, dec!(1)), None),
             Plausibility::Ok
+        );
+    }
+
+    // @test SPEC_RDG_PLAUSIBILITY
+    #[test]
+    fn intermediate_reading_is_checked_against_both_neighbours() {
+        let (prev, next) = (r(1, dec!(100)), r(10, dec!(200)));
+        assert_eq!(
+            check_in_sequence(Some(&prev), &r(5, dec!(150)), Some(&next), None),
+            Plausibility::Ok
+        );
+        assert_eq!(
+            check_in_sequence(Some(&prev), &r(5, dec!(90)), Some(&next), None),
+            Plausibility::Decreasing
+        );
+        assert_eq!(
+            check_in_sequence(Some(&prev), &r(5, dec!(250)), Some(&next), None),
+            Plausibility::Decreasing
+        );
+        assert_eq!(
+            check_in_sequence(None, &r(5, dec!(150)), Some(&next), Some(dec!(5))),
+            Plausibility::RateTooHigh
         );
     }
 

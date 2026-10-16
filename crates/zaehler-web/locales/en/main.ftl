@@ -94,9 +94,9 @@ readings-last = Last reading { $value } on { $date }
 readings-none = No reading recorded yet
 readings-confirm = Save anyway
 readings-warnings = The check reports anomalies. Confirm to save.
-plaus-decreasing = Value is lower than the previous one.
+plaus-decreasing = Value does not fit between the readings before and after.
 plaus-rate_too_high = Daily consumption exceeds the maximum of the meter.
-plaus-out_of_order = Time is before the last reading or before installation.
+plaus-out_of_order = Time is before the meter was installed.
 
 # Analysis
 analysis-title = Analysis

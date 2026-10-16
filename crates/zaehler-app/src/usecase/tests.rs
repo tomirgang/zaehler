@@ -357,6 +357,22 @@ async fn record_readings_with_plausibility_and_confirmation() {
         RecordOutcome::Saved(_)
     ));
 
+    // nachgetragener Zwischenstand: Prüfung gegen die Nachbarn zum Datum,
+    // nicht gegen die letzte Ablesung
+    let between = ReadingsInput {
+        at: at - Duration::days(5),
+        values: values(&detail, &[dec!(1040)]),
+        ..ok.clone()
+    };
+    let checks = uc.check_readings.execute(&tenant, &between).await.unwrap();
+    assert_eq!(checks[0].plausibility, Plausibility::Ok);
+    let too_high = ReadingsInput {
+        values: values(&detail, &[dec!(1120)]),
+        ..between.clone()
+    };
+    let checks = uc.check_readings.execute(&tenant, &too_high).await.unwrap();
+    assert_eq!(checks[0].plausibility, Plausibility::Decreasing);
+
     // zu hohe Tagesrate (max 50/Tag) wird gemeldet, ohne zu speichern
     let high = ReadingsInput {
         at: at + Duration::days(2),

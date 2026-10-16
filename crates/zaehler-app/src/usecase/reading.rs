@@ -4,7 +4,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
 use zaehler_domain::reading::{
-    Plausibility, Reading as DomainReading, ReadingSource, check_plausibility,
+    Plausibility, Reading as DomainReading, ReadingSource, check_in_sequence,
 };
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     port::UnitOfWork,
     usecase::{
         Ports,
-        meter::{last_of, to_domain},
+        meter::{neighbours, to_domain},
         use_case, validate,
     },
 };
@@ -51,8 +51,8 @@ use_case!(
     GetReadingPhoto
 );
 
-/// Formale Prüfung und Plausibilität aller Werte gegen die letzte Ablesung
-/// des aktiven Geräts.
+/// Formale Prüfung und Plausibilität aller Werte gegen die zeitlich
+/// benachbarten Ablesungen des aktiven Geräts.
 // @impl SPEC_RDG_FORM, SPEC_RDG_PLAUSIBILITY
 pub(crate) fn check_all(
     agg: &MeterAggregate,
@@ -76,7 +76,11 @@ pub(crate) fn check_all(
             device.data.decimal_places,
             device.data.rollover_digits,
         );
-        let prev = last_of(readings, *register_id, device.id).map(|r| to_domain(r, device));
+        let (prev, next) = neighbours(readings, *register_id, device.id, input.at);
+        let (prev, next) = (
+            prev.map(|r| to_domain(r, device)),
+            next.map(|r| to_domain(r, device)),
+        );
         let candidate = DomainReading {
             at: input.at,
             value: *value,
@@ -86,7 +90,12 @@ pub(crate) fn check_all(
         let plausibility = if input.at < device.data.installed_at {
             Plausibility::OutOfOrder
         } else {
-            check_plausibility(prev.as_ref(), &candidate, agg.meter.data.max_daily_rate)
+            check_in_sequence(
+                prev.as_ref(),
+                &candidate,
+                next.as_ref(),
+                agg.meter.data.max_daily_rate,
+            )
         };
         checks.push(RegisterCheck {
             register_id: *register_id,

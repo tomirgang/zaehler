@@ -54,8 +54,11 @@ Intervalls folgt mit {need}`SPEC_FC_SEASON_PROFILE` (v1).
 :status: implemented
 :satisfies: REQ_RDG_002, REQ_AI_003
 
-Prüfung gegen den letzten Stand desselben Geräts in dieser Reihenfolge:
-`OutOfOrder` (Zeitpunkt früher oder vor dem Einbau des Geräts),
+Prüfung gegen die zeitlichen Nachbarn desselben Geräts zum Zeitpunkt des
+neuen Stands: zuerst der neue Stand gegen den Vorgänger, danach der
+Nachfolger gegen den neuen Stand. Nachgetragene Zwischenstände werden so wie
+beim CSV-Import geprüft. Je Paar gilt diese Reihenfolge:
+`OutOfOrder` (Zeitpunkt vor dem Einbau des Geräts),
 `Decreasing` (Wert kleiner und kein Überlauf möglich; mit Vorkommastellen *n*
 gilt ein Überlauf nur als plausibel, wenn er weniger als 10ⁿ/2 Einheiten
 ergibt), `RateTooHigh` (Tagesrate des Verbrauchs, bei Überlauf inklusive

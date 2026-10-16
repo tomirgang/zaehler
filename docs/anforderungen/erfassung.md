@@ -22,9 +22,13 @@ Zähler wählen, Datum/Uhrzeit (Vorgabe: jetzt), Wert je Register, optionale Not
 :release: MVP
 
 Das System muss neue Stände vor dem Speichern prüfen und warnen, wenn
-- der Stand kleiner als der vorherige ist (ohne möglichen Überlauf/Wechsel),
+- der Stand kleiner als der zeitlich vorherige oder größer als der zeitlich
+  folgende ist (ohne möglichen Überlauf/Wechsel),
 - der Tagesverbrauch einen konfigurierbaren Maximalwert übersteigt,
-- der Zeitpunkt vor der letzten Ablesung liegt.
+- der Zeitpunkt vor dem Einbau des Geräts liegt.
+
+Maßgeblich ist das Datum des Stands: ein nachgetragener Zwischenstand wird
+gegen die Ablesungen davor und danach geprüft, nicht gegen die letzte.
 
 Der Nutzer kann nach expliziter Bestätigung trotzdem speichern.
 ```

@@ -8,7 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
 use zaehler_domain::{
     calendar::Calendar,
-    reading::{Plausibility, Reading as DomainReading, ReadingSource, check_plausibility},
+    reading::{Plausibility, Reading as DomainReading, ReadingSource, check_in_sequence},
 };
 
 use crate::{
@@ -21,7 +21,7 @@ use crate::{
     port::{NormalizedJpeg, PhotoTime, UnitOfWork},
     usecase::{
         Ports,
-        meter::{MeterDetail, last_of, to_domain},
+        meter::{MeterDetail, neighbours, to_domain},
         reading::{ReadingExtras, ReadingsInput, RecordOutcome, check_all, record_in},
         use_case,
     },
@@ -93,9 +93,13 @@ fn value_fits(
         rollover_digits: device.data.rollover_digits,
     };
     agg.registers.iter().any(|r| {
-        let prev = last_of(readings, r.id, device.id).map(|x| to_domain(x, device));
-        check_plausibility(prev.as_ref(), &candidate, agg.meter.data.max_daily_rate)
-            == Plausibility::Ok
+        let (prev, next) = neighbours(readings, r.id, device.id, at);
+        check_in_sequence(
+            prev.map(|x| to_domain(x, device)).as_ref(),
+            &candidate,
+            next.map(|x| to_domain(x, device)).as_ref(),
+            agg.meter.data.max_daily_rate,
+        ) == Plausibility::Ok
     })
 }
 

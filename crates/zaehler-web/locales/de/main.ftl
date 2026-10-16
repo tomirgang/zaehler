@@ -94,9 +94,9 @@ readings-last = Letzter Stand { $value } am { $date }
 readings-none = Noch kein Stand erfasst
 readings-confirm = Trotzdem speichern
 readings-warnings = Die Prüfung meldet Auffälligkeiten. Zum Speichern bestätigen.
-plaus-decreasing = Stand ist kleiner als der vorherige.
+plaus-decreasing = Stand passt nicht zwischen die Ablesungen davor und danach.
 plaus-rate_too_high = Tagesverbrauch liegt über dem Maximum der Messstelle.
-plaus-out_of_order = Zeitpunkt liegt vor der letzten Ablesung oder vor dem Einbau.
+plaus-out_of_order = Zeitpunkt liegt vor dem Einbau des Zählers.
 
 # Auswertung
 analysis-title = Auswertung

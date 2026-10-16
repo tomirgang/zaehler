@@ -1197,7 +1197,7 @@ async fn meter_and_reading_workflow() {
     assert!(
         text(check)
             .await
-            .contains("Stand ist kleiner als der vorherige.")
+            .contains("Stand passt nicht zwischen die Ablesungen davor und danach.")
     );
 
     let lower = [

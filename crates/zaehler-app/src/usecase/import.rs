@@ -11,7 +11,7 @@ use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use rust_decimal::Decimal;
 use zaehler_domain::{
     calendar::Calendar,
-    reading::{Plausibility, Reading as DomainReading, ReadingSource, check_plausibility},
+    reading::{Plausibility, Reading as DomainReading, ReadingSource, check_in_sequence},
 };
 
 use crate::{
@@ -657,12 +657,8 @@ fn mark_plausibility(
             let Some(index) = merged[k].0 else { continue };
             let current = &merged[k].1;
             let before = k.checked_sub(1).map(|j| &merged[j].1);
-            let mut p = check_plausibility(before, current, max_rate);
-            if p == Plausibility::Ok
-                && let Some((_, next)) = merged.get(k + 1)
-            {
-                p = check_plausibility(Some(current), next, max_rate);
-            }
+            let next = merged.get(k + 1).map(|(_, r)| r);
+            let p = check_in_sequence(before, current, next, max_rate);
             if p != Plausibility::Ok {
                 results[index].status = RowStatus::Warning(p);
             }

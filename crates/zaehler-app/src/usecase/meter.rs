@@ -605,6 +605,25 @@ pub(crate) fn last_of(
         .max_by_key(|r| r.read_at)
 }
 
+/// Zeitliche Nachbarn eines Zeitpunkts: letzte Ablesung davor und erste
+/// danach, je Register und Gerät.
+pub(crate) fn neighbours(
+    readings: &[Reading],
+    register: RegisterId,
+    device: DeviceId,
+    at: DateTime<Utc>,
+) -> (Option<&Reading>, Option<&Reading>) {
+    let same = || {
+        readings
+            .iter()
+            .filter(move |r| r.register_id == register && r.device_id == device)
+    };
+    (
+        same().filter(|r| r.read_at < at).max_by_key(|r| r.read_at),
+        same().filter(|r| r.read_at > at).min_by_key(|r| r.read_at),
+    )
+}
+
 pub(crate) fn to_domain(r: &Reading, device: &crate::model::Device) -> DomainReading {
     DomainReading {
         at: r.read_at,
