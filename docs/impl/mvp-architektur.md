@@ -232,9 +232,12 @@ CSRF-Token (32 Byte, Base64URL). Alle Requests außer `GET`, `HEAD`, `OPTIONS`
 müssen das Token im Header `X-CSRF-Token` (HTMX, gesetzt über `hx-headers` am
 `body`) oder im Formularfeld `_csrf` enthalten; Vergleich in konstanter Zeit.
 Zusätzlich wird der `Origin`-Header, falls vorhanden, gegen
-`server.public_url` geprüft. Multipart-Bodies werden in der Middleware nicht
+`server.public_url` geprüft (Schema, Host, Port). Ist die öffentliche URL
+lokal, gelten `localhost`, `127.0.0.1` und `[::1]` bei gleichem Schema und
+Port als gleichwertig. Bei Abweichung protokolliert der Server den erhaltenen
+und den erwarteten Origin. Multipart-Bodies werden in der Middleware nicht
 gepuffert: sie sind nur für ausdrücklich genannte Routen zugelassen (MVP:
-`POST /capture`), deren Handler das Feld `_csrf` selbst prüft; auf allen
+`POST /capture`, `POST /import/upload`), deren Handler das Feld `_csrf` selbst prüft; auf allen
 anderen Routen ergibt Multipart 403.
 ```
 

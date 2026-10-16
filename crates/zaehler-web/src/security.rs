@@ -60,6 +60,50 @@ pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
 
 const MAX_FORM_BYTES: usize = 1024 * 1024;
 
+/// Schema, Host und Port eines Origins (`scheme://host[:port]`); ohne Port
+/// gilt der Standardport des Schemas.
+fn split_origin(origin: &str) -> Option<(&str, &str, u16)> {
+    let (scheme, rest) = origin.split_once("://")?;
+    let (host, port) = if rest.starts_with('[') {
+        let end = rest.find(']')?;
+        (&rest[..=end], rest[end + 1..].strip_prefix(':'))
+    } else {
+        match rest.split_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (rest, None),
+        }
+    };
+    let port = match port {
+        Some(p) => p.parse().ok()?,
+        None => match scheme {
+            "http" => 80,
+            "https" => 443,
+            _ => return None,
+        },
+    };
+    Some((scheme, host, port))
+}
+
+fn is_loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "[::1]"
+}
+
+/// Origin entspricht der öffentlichen URL. Ist diese lokal, gelten
+/// `localhost`, `127.0.0.1` und `[::1]` mit gleichem Schema und Port als
+/// gleichwertig.
+// @impl SPEC_SEC_SESSION_CSRF
+fn origin_allowed(origin: &str, public_origin: &str) -> bool {
+    if origin == public_origin {
+        return true;
+    }
+    match (split_origin(origin), split_origin(public_origin)) {
+        (Some((scheme, host, port)), Some((p_scheme, p_host, p_port))) => {
+            scheme == p_scheme && port == p_port && is_loopback(host) && is_loopback(p_host)
+        }
+        _ => false,
+    }
+}
+
 /// Routen mit Multipart-Body; ihre Handler prüfen das Feld `_csrf` selbst.
 const MULTIPART_ROUTES: [&str; 2] = ["/capture", "/import/upload"];
 
@@ -83,9 +127,13 @@ pub async fn csrf_guard(
         .headers()
         .get(header::ORIGIN)
         .and_then(|v| v.to_str().ok())
-        && origin != state.cfg.public_origin
+        && !origin_allowed(origin, &state.cfg.public_origin)
     {
-        tracing::warn!(origin, "origin mismatch");
+        tracing::warn!(
+            origin,
+            expected = %state.cfg.public_origin,
+            "origin mismatch"
+        );
         return forbidden();
     }
     let Ok(Some(expected)) = session.get::<String>(SESSION_CSRF).await else {
@@ -153,5 +201,30 @@ mod tests {
         assert!(constant_time_eq(&a, &a.clone()));
         assert!(!constant_time_eq(&a, &b));
         assert!(!constant_time_eq(&a, &a[..42]));
+    }
+
+    // @test SPEC_SEC_SESSION_CSRF
+    #[test]
+    fn loopback_origins_are_equivalent_only_for_local_public_url() {
+        let local = "http://localhost:8081";
+        assert!(origin_allowed("http://localhost:8081", local));
+        assert!(origin_allowed("http://127.0.0.1:8081", local));
+        assert!(origin_allowed("http://[::1]:8081", local));
+        assert!(origin_allowed(
+            "http://localhost:8081",
+            "http://127.0.0.1:8081"
+        ));
+        assert!(origin_allowed("http://127.0.0.1", "http://localhost:80"));
+        // anderer Port, anderes Schema, fremder Host
+        assert!(!origin_allowed("http://127.0.0.1:9999", local));
+        assert!(!origin_allowed("https://127.0.0.1:8081", local));
+        assert!(!origin_allowed("http://evil.example:8081", local));
+        assert!(!origin_allowed("http://localhost.evil.example:8081", local));
+        assert!(!origin_allowed("null", local));
+        // nicht lokale öffentliche URL: nur exakt
+        let public = "https://zaehler.example.com";
+        assert!(origin_allowed(public, public));
+        assert!(!origin_allowed("https://localhost", public));
+        assert!(!origin_allowed("https://127.0.0.1:443", public));
     }
 }

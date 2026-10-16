@@ -812,7 +812,18 @@ async fn csrf_and_origin_are_enforced() {
     );
     let req = Request::post("/auth/logout")
         .header("x-csrf-token", csrf.as_str())
-        .header(header::ORIGIN, "http://localhost:8080")
+        .header(header::ORIGIN, "http://127.0.0.1:9999")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        c.send(req).await.status(),
+        StatusCode::FORBIDDEN,
+        "lokale Adresse mit anderem Port"
+    );
+    // öffentliche URL ist http://localhost:8080: 127.0.0.1 gilt als gleichwertig
+    let req = Request::post("/auth/logout")
+        .header("x-csrf-token", csrf.as_str())
+        .header(header::ORIGIN, "http://127.0.0.1:8080")
         .body(Body::empty())
         .unwrap();
     assert_eq!(
