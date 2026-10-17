@@ -148,6 +148,9 @@ fn validate_input(input: &MeterInput, creating: bool) -> FieldErrors {
             vec![("max", MAX_UNIT.to_string())],
         );
     }
+    if validate::has_control(&input.unit) {
+        e.add("unit", "meter.unit_control");
+    }
     if input.schedule.is_some_and(|s| !s.is_valid()) {
         e.add("schedule", "meter.schedule_invalid");
     }
@@ -537,7 +540,8 @@ impl UpdateMeter {
             if data.kind != agg.meter.data.kind {
                 e.add("kind", "meter.kind_locked");
             }
-            if data.unit != agg.meter.data.unit {
+            // eine Einheit mit Steuerzeichen bleibt korrigierbar
+            if data.unit != agg.meter.data.unit && !validate::has_control(&agg.meter.data.unit) {
                 e.add("unit", "meter.unit_locked");
             }
         }

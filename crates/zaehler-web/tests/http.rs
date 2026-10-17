@@ -1698,10 +1698,11 @@ async fn reading_correction_with_confirmation_and_history() {
     assert_eq!(c.get(&path).await.status(), StatusCode::NOT_FOUND);
 }
 
-/// Einheiten mit Hochzahl erscheinen als HTML-Entität.
+/// Einheiten mit Hochzahl erscheinen als hochgestellte Ziffer, auch in
+/// Tabellenköpfen mit tabellarischen Ziffern.
 // @test SPEC_I18N
 #[tokio::test]
-async fn water_unit_rendered_with_sup3_entity() {
+async fn water_unit_rendered_with_superscript() {
     let app = test_app(true);
     let mut c = Client::new(&app);
     c.login("anna").await;
@@ -1725,9 +1726,13 @@ async fn water_unit_rendered_with_sup3_entity() {
         .await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
     let detail = text(c.get(&location(&res)).await).await;
-    assert!(detail.contains("<dd>m&sup3;</dd>"), "{detail}");
+    assert!(detail.contains("<dd>m<sup>3</sup></dd>"), "{detail}");
+    // jede Klammer mit Einheit enthält die Hochzahl, nie nur „(m)“
+    assert!(!detail.contains("(m)"));
+    assert!(detail.contains("(m<sup>3</sup>)"));
+    assert!(!detail.contains("&sup3;") && !detail.contains("m³<"));
     let list = text(c.get("/meters").await).await;
-    assert!(list.contains("<td>m&sup3;</td>"));
+    assert!(list.contains("<td>m<sup>3</sup></td>"));
     assert!(!list.contains("<td>m³</td>"));
 }
 

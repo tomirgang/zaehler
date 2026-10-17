@@ -888,3 +888,5 @@ err-asset-recurrence_invalid = Turnus von 1 bis { $max } Monaten.
 err-asset-until_before_booking = Das Ende liegt vor dem ersten Buchungstag.
 err-receipt-vehicle_required = Ein Fahrzeug wählen.
 vehicle-chart = Kosten je Jahr
+meter-unit-fix = Die gespeicherte Einheit enthält ein unsichtbares Steuerzeichen und wird deshalb unvollständig angezeigt. Bitte korrigieren, z.B. „m³“, oder leer lassen für die Standardeinheit.
+err-meter-unit_control = Die Einheit enthält ein ungültiges Steuerzeichen.

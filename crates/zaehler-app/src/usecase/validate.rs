@@ -53,6 +53,13 @@ pub fn normalize_serial(serial: &str) -> String {
         .collect()
 }
 
+/// Steuerzeichen (z.B. U+0017) sind in Namen und Einheiten unsichtbar und
+/// entstehen nur durch fehlerhafte Eingaben.
+#[must_use]
+pub fn has_control(value: &str) -> bool {
+    value.chars().any(char::is_control)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

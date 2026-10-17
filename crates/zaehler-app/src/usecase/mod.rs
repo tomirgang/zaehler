@@ -39,6 +39,8 @@ mod jobs_tests;
 #[cfg(test)]
 mod member_tests;
 #[cfg(test)]
+mod meter_unit_tests;
+#[cfg(test)]
 mod meter_v1_tests;
 #[cfg(test)]
 mod notify_tests;

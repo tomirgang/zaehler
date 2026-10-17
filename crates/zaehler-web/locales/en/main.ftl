@@ -888,3 +888,5 @@ err-asset-recurrence_invalid = Interval from 1 to { $max } months.
 err-asset-until_before_booking = The end is before the first booking day.
 err-receipt-vehicle_required = Choose a vehicle.
 vehicle-chart = Costs per year
+meter-unit-fix = The stored unit contains an invisible control character and is therefore shown incompletely. Please correct it, e.g. “m³”, or leave it empty for the default unit.
+err-meter-unit_control = The unit contains an invalid control character.

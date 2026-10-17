@@ -10,6 +10,7 @@
   <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
   <input type="hidden" name="register_count" value="{{ form.registers.len() }}">
   <input type="hidden" name="locked" value="{{ form.locked }}">
+  <input type="hidden" name="unit_fixable" value="{{ form.unit_fixable }}">
   {% if !form.draft.is_empty() %}
   <input type="hidden" name="draft" value="{{ form.draft }}">
   <div class="field">
@@ -41,7 +42,8 @@
     </div>
     <div class="field{% if self.has_errs("unit") %} has-error{% endif %}">
       <label for="unit">{{ ctx.lang.t("meter-unit") }}</label>
-      <input id="unit" name="unit" value="{{ form.unit }}" maxlength="16"{% if form.locked %} readonly{% endif %}>
+      <input id="unit" name="unit" value="{{ form.unit }}" maxlength="16"{% if form.locked && !form.unit_fixable %} readonly{% endif %}>
+      {% if form.unit_fixable %}<p class="callout warning">{{ ctx.lang.t("meter-unit-fix") }}</p>{% endif %}
       <p class="hint">{{ ctx.lang.t("meter-unit-hint") }}</p>
       {% for e in self.errs("unit") %}<p class="field-error">{{ e }}</p>{% endfor %}
     </div>

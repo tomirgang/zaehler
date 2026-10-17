@@ -52,6 +52,9 @@ pub struct MeterFormView {
     pub action: String,
     pub is_new: bool,
     pub locked: bool,
+    /// Gespeicherte Einheit enthält Steuerzeichen und bleibt trotz Ablesungen
+    /// korrigierbar
+    pub unit_fixable: bool,
     pub name: String,
     pub kind: String,
     pub unit: String,
@@ -289,6 +292,7 @@ fn view_from_form(form: &FormData, action: String, is_new: bool, locked: bool) -
         name: form.get("name").to_owned(),
         kind: form.get("kind").to_owned(),
         unit: form.get("unit").to_owned(),
+        unit_fixable: form.get("unit_fixable") == "true",
         serial: form.get("serial_number").to_owned(),
         digits: form.get("rollover_digits").to_owned(),
         decimals: form.get("decimal_places").to_owned(),
@@ -575,6 +579,7 @@ fn empty_form(tz: chrono_tz::Tz) -> MeterFormView {
         action: "/meters".into(),
         is_new: true,
         locked: false,
+        unit_fixable: false,
         name: String::new(),
         kind: MeterKind::Electricity.as_str().into(),
         unit: String::new(),
@@ -623,6 +628,7 @@ fn view_from_draft(lang: Lang, tz: chrono_tz::Tz, view: &DraftView) -> MeterForm
     form.unit = s
         .unit
         .clone()
+        .map(|u| u.chars().filter(|c| !c.is_control()).collect::<String>())
         .filter(|u| u.trim() != kind.default_unit())
         .unwrap_or_default();
     form.serial = s.serial_number.clone().unwrap_or_default();
@@ -895,7 +901,10 @@ fn view_from_aggregate(agg: &MeterAggregate, lang: Lang, locked: bool) -> MeterF
         locked,
         name: data.name.clone(),
         kind: data.kind.as_str().into(),
-        unit: data.unit.clone(),
+        // Steuerzeichen nicht ins Formular übernehmen; die Einheit ist dann
+        // korrigierbar (siehe `UpdateMeter`)
+        unit: data.unit.chars().filter(|c| !c.is_control()).collect(),
+        unit_fixable: data.unit.chars().any(char::is_control),
         serial: device
             .and_then(|d| d.data.serial_number.clone())
             .unwrap_or_default(),

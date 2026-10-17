@@ -148,6 +148,7 @@ form.inline select { width: auto; }
 .table { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; }
 .table th, .table td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+sup { line-height: 0; font-variant-numeric: normal; }
 
 .facts { display: grid; grid-template-columns: fit-content(50%) minmax(0, 1fr); gap: 0.25rem 1rem; }
 .facts dt, .facts dd { overflow-wrap: anywhere; }

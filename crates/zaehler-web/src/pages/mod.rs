@@ -157,8 +157,10 @@ impl FormData {
     }
 }
 
-/// Einheit als HTML: maskiert, Hochzahlen als benannte Entität (`m&sup3;`),
-/// damit sie unabhängig von Schrift und Zeichensatz korrekt erscheinen.
+/// Einheit als HTML: maskiert, Hochzahlen als `<sup>`-Element (`m<sup>3</sup>`).
+/// Die Zeichen ² und ³ fehlen in manchen Schriften mit
+/// `font-variant-numeric: tabular-nums` (Tabellenköpfe `th.num`) und blieben
+/// dort unsichtbar; eine hochgestellte normale Ziffer erscheint in jeder Schrift.
 // @impl SPEC_I18N
 #[must_use]
 pub fn unit_html(unit: impl AsRef<str>) -> String {
@@ -170,8 +172,10 @@ pub fn unit_html(unit: impl AsRef<str>) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#39;"),
-            '\u{b2}' => out.push_str("&sup2;"),
-            '\u{b3}' => out.push_str("&sup3;"),
+            '\u{b2}' => out.push_str("<sup>2</sup>"),
+            '\u{b3}' => out.push_str("<sup>3</sup>"),
+            // Steuerzeichen sind unsichtbar und nie Teil einer Einheit
+            c if c.is_control() => {}
             c => out.push(c),
         }
     }
@@ -212,10 +216,11 @@ mod tests {
 
     // @test SPEC_I18N
     #[test]
-    fn unit_with_superscript_entities() {
-        assert_eq!(unit_html("m³"), "m&sup3;");
-        assert_eq!(unit_html(String::from("m²")), "m&sup2;");
+    fn unit_with_superscript_elements() {
+        assert_eq!(unit_html("m³"), "m<sup>3</sup>");
+        assert_eq!(unit_html(String::from("m²")), "m<sup>2</sup>");
         assert_eq!(unit_html("kWh"), "kWh");
+        assert_eq!(unit_html("m\u{17}"), "m");
         assert_eq!(unit_html("<b>&"), "&lt;b&gt;&amp;");
     }
 }
