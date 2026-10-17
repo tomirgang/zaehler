@@ -76,6 +76,8 @@ id_type!(
     AssetCostId,
     /// PV-Anlage
     PvSystemId,
+    /// API-Token eines Nutzers (SPEC_API_AUTH)
+    ApiTokenId,
 );
 
 /// Schlüssel im Objektspeicher, immer unter `households/{household_id}/`.

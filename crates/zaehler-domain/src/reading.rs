@@ -13,6 +13,8 @@ pub enum ReadingSource {
     Photo,
     CsvImport,
     Invoice,
+    /// Automatisch über die REST-API (SPEC_API_DAILY_READINGS)
+    Api,
 }
 
 impl ReadingSource {
@@ -23,6 +25,7 @@ impl ReadingSource {
             Self::Photo => "photo",
             Self::CsvImport => "csv_import",
             Self::Invoice => "invoice",
+            Self::Api => "api",
         }
     }
 }
@@ -31,10 +34,16 @@ impl std::str::FromStr for ReadingSource {
     type Err = crate::meter::UnknownVariant;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        [Self::Manual, Self::Photo, Self::CsvImport, Self::Invoice]
-            .into_iter()
-            .find(|v| v.as_str() == s)
-            .ok_or_else(|| crate::meter::UnknownVariant(s.to_owned()))
+        [
+            Self::Manual,
+            Self::Photo,
+            Self::CsvImport,
+            Self::Invoice,
+            Self::Api,
+        ]
+        .into_iter()
+        .find(|v| v.as_str() == s)
+        .ok_or_else(|| crate::meter::UnknownVariant(s.to_owned()))
     }
 }
 

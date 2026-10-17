@@ -79,8 +79,36 @@ database:
       enabled: true
 ```
 
-Wiederherstellung über einen neuen Cluster mit `bootstrap.recovery` gemäß
-CNPG-Dokumentation. Neuere CNPG-Versionen sichern über das
+Wiederherstellung in einen neuen Cluster (gleiche CNPG-Version, gleiche
+Zugangsdaten zum Objektspeicher):
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: zaehler-db-restore
+spec:
+  instances: 2
+  storage: { size: 5Gi }
+  bootstrap:
+    recovery:
+      source: zaehler-db
+      # optional Point-in-Time: recoveryTarget: { targetTime: "2026-10-17 02:00:00+00" }
+  externalClusters:
+    - name: zaehler-db
+      barmanObjectStore:
+        destinationPath: s3://backup/zaehler
+        endpointURL: https://s3.example.com
+        s3Credentials:
+          accessKeyId: { name: zaehler-backup-s3, key: ACCESS_KEY_ID }
+          secretAccessKey: { name: zaehler-backup-s3, key: ACCESS_SECRET_KEY }
+```
+
+Danach die Anwendung mit `database.type=existing` auf das Secret
+`zaehler-db-restore-app` (Key `uri`) zeigen lassen und zur Kontrolle
+`zaehler export` vor und nach der Wiederherstellung vergleichen (Prüfsumme
+`data_sha256` im Manifest). Der Ablauf ist in einem Test-Cluster noch nicht
+durchgespielt. Neuere CNPG-Versionen sichern über das
 Barman-Cloud-Plugin; dessen Konfiguration (`plugins`) ist nicht Teil des
 Charts.
 
@@ -89,6 +117,15 @@ Charts.
 - Konsistente Kopie im laufenden Betrieb:
   `sqlite3 /var/lib/zaehler/data/zaehler.db "VACUUM INTO '/backup/zaehler-$(date +%F).db'"`
 - Kontinuierlich: [Litestream](https://litestream.io/) als Sidecar repliziert in S3.
+
+Wiederherstellung: Server stoppen, Kopie als `zaehler.db` ablegen (ohne
+alte `-wal`- und `-shm`-Dateien), Verzeichnis `files` aus derselben
+Sicherung zurückspielen, Server starten.
+
+Probe (2026-10-17): Kopie per `VACUUM INTO` aus einer laufenden Instanz,
+danach `zaehler export` gegen Original und Kopie. Beide Archive enthalten
+3 Haushalte, 12 Messstellen und 267 Ablesungen; `data.json` ist
+byte-identisch (gleicher SHA-256). Litestream ist nicht durchgespielt.
 
 ## Fotos und Dokumente
 

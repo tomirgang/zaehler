@@ -50,7 +50,7 @@ zugleich ist unzulässig.
 | `session.cookie_secure` | `ZAEHLER_SESSION__COOKIE_SECURE` | aus dem Schema von `public_url` |
 | `ai.api_key`, `ai.model`, `ai.base_url`, `ai.timeout_secs` | `ZAEHLER_AI__…` | Base-URL `https://openrouter.ai/api/v1`, 60 s |
 | `ai.document_model` | `ZAEHLER_AI__DOCUMENT_MODEL` | ohne Angabe `ai.model`; Modell für Rechnungen (PDF als `file`-Part) |
-| `notify.smtp.host`, `port`, `security`, `username`, `password`, `from` | `ZAEHLER_NOTIFY__SMTP__…` | ohne `host` kein Versand; Port `587`, `security` `starttls` (`tls`, `none` nur mit `localhost`) |
+| `notify.smtp.host`, `port`, `security`, `username`, `password`, `from` | `ZAEHLER_NOTIFY__SMTP__…` | ohne `host` kein Versand; Port `587`, `security` `starttls` (`tls`, `none` nur mit `localhost` oder mit `allow_insecure = true` ohne Zugangsdaten, etwa für Mailpit) |
 | `otel.endpoint` | `ZAEHLER_OTEL__ENDPOINT` | leer; ohne Angabe `OTEL_EXPORTER_OTLP_ENDPOINT`, sonst kein Trace-Export |
 | `otel.service_name` | `ZAEHLER_OTEL__SERVICE_NAME` | `zaehler` |
 

@@ -24,6 +24,24 @@ database:
       storageClass: ""
     # Wird unverändert als spec.backup in den Cluster übernommen, z.B.
     # barmanObjectStore (siehe docs/betrieb/backup.md und CNPG-Doku).
+    # Beispiel Barman Cloud gegen S3 (Secret mit ACCESS_KEY_ID und
+    # ACCESS_SECRET_KEY):
+    #   backup:
+    #     retentionPolicy: 30d
+    #     barmanObjectStore:
+    #       destinationPath: s3://zaehler-backup/cnpg
+    #       endpointURL: https://s3.example.com
+    #       s3Credentials:
+    #         accessKeyId:
+    #           name: zaehler-backup-s3
+    #           key: ACCESS_KEY_ID
+    #         secretAccessKey:
+    #           name: zaehler-backup-s3
+    #           key: ACCESS_SECRET_KEY
+    #       wal:
+    #         compression: gzip
+    #       data:
+    #         compression: gzip
     backup: {}
     # Optional: regelmäßige Sicherung (CNPG ScheduledBackup); setzt
     # database.cnpg.backup voraus.
@@ -32,6 +50,13 @@ database:
       # Cron-Ausdruck mit Sekunden (CNPG), Standard täglich 02:00 UTC
       schedule: "0 0 2 * * *"
   existing:
+    secretName: ""
+    secretKey: uri
+  # Eigene Verbindung für den Leader-Lock (database.lock_url), nötig, wenn
+  # database.existing über einen Pooler im Transaktionsmodus (PgBouncer)
+  # verbindet; sie muss direkt zur Datenbank führen. Leer: dieselbe URL wie
+  # die Anwendung.
+  lockUrl:
     secretName: ""
     secretKey: uri
   sqlite:

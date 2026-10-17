@@ -108,6 +108,15 @@ spec:
             - name: ZAEHLER_DATABASE__URL
               value: sqlite:///var/lib/zaehler/data/zaehler.db?mode=rwc
             {{- end }}
+            {{- with .Values.database.lockUrl.secretName }}
+            # Leader-Lock direkt zur Datenbank, nicht über einen Pooler im
+            # Transaktionsmodus (SPEC_OPS_REPLICAS)
+            - name: ZAEHLER_DATABASE__LOCK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.database.lockUrl.secretKey }}
+            {{- end }}
             - name: ZAEHLER_STORAGE__KIND
               value: {{ .Values.storage.kind | quote }}
             {{- if eq .Values.storage.kind "s3" }}

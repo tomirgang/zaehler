@@ -68,6 +68,9 @@ struct State {
     charging: Vec<crate::model::ChargingSession>,
     asset_costs: Vec<(HouseholdId, crate::model::AssetCost)>,
     pv_systems: Vec<(HouseholdId, crate::model::PvSystem)>,
+    api_tokens: Vec<api_impl::StoredToken>,
+    /// Token automatisch gelieferter Ablesungen (SPEC_API_DAILY_READINGS)
+    reading_tokens: BTreeMap<ReadingId, crate::ids::ApiTokenId>,
 }
 
 /// Outbox-Eintrag mit Zustand (nur für Tests einsehbar).
@@ -755,6 +758,9 @@ impl UnitOfWork for MemoryUow {
     fn documents(&mut self) -> &mut dyn crate::port::DocumentRepository {
         self
     }
+    fn api_tokens(&mut self) -> &mut dyn crate::port::ApiTokenRepository {
+        self
+    }
     async fn commit(self: Box<Self>) -> PortResult<()> {
         let mut shared = self.shared.lock().map_err(poisoned)?;
         // Einlösen wie das bedingte Update der Datenbank: eine parallel
@@ -1023,6 +1029,7 @@ impl HouseholdRepository for MemoryUow {
         self.state.documents.retain(|(h, _)| *h != hid);
         vehicles_impl::delete_household(&mut self.state, hid, &meters);
         pv_impl::delete_household(&mut self.state, hid);
+        api_impl::delete_household(&mut self.state, hid);
         self.state.invitations.retain(|i| i.household != hid);
         self.state.revisions.retain(|(h, _)| *h != hid);
         self.state.outbox.retain(|o| o.entry.household_id != hid);
@@ -1388,6 +1395,7 @@ impl ReadingRepository for MemoryUow {
             return Err(PortError::NotFound);
         };
         self.state.readings.retain(|r| r.id != id);
+        self.state.reading_tokens.remove(&id);
         Ok(())
     }
 
@@ -1410,6 +1418,26 @@ impl ReadingRepository for MemoryUow {
             r.note.clone_from(&u.note);
         }
         Ok(())
+    }
+
+    async fn upsert_daily(
+        &mut self,
+        t: &Tenant,
+        r: &Reading,
+        token: crate::ids::ApiTokenId,
+        from: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> PortResult<crate::model::DailyOutcome> {
+        let meter = self
+            .state
+            .meter_of_register(r.register_id)
+            .ok_or(PortError::NotFound)?;
+        if !self.state.owns_meter(t, meter)
+            || self.state.meter_of_device(r.device_id) != Some(meter)
+        {
+            return Err(PortError::NotFound);
+        }
+        self.upsert_daily_in(r, token, from, until)
     }
 }
 
@@ -1452,5 +1480,8 @@ mod vehicles_impl;
 
 #[path = "memory_pv.rs"]
 mod pv_impl;
+
+#[path = "memory_api.rs"]
+mod api_impl;
 
 pub use documents_impl::{StubExtractor, StubExtractors};

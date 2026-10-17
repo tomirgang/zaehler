@@ -1,0 +1,99 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("tokens-title") }}</h1>
+  <div class="actions"><a class="button secondary" href="/settings">{{ ctx.lang.t("nav-settings") }}</a></div>
+</div>
+
+{% if let Some(token) = created %}
+<section class="card" role="status" aria-labelledby="token-created-title">
+  <h2 id="token-created-title">{{ ctx.lang.t("token-created-title") }}</h2>
+  <p>{{ ctx.lang.t("token-created-hint") }}</p>
+  <div class="field">
+    <label for="token-value">{{ ctx.lang.t("token-value") }}</label>
+    <input id="token-value" value="{{ token }}" readonly autocomplete="off" spellcheck="false">
+  </div>
+</section>
+{% endif %}
+
+<section class="card" aria-labelledby="token-new-title">
+  <h2 id="token-new-title">{{ ctx.lang.t("token-new") }}</h2>
+  <p>{{ ctx.lang.t("tokens-hint") }} <code>{{ api_url }}</code>, <a href="/api/v1/openapi.json">openapi.json</a></p>
+  <form method="post" action="/settings/tokens" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="grid">
+      <div class="field{% if self.has_errs("name") %} has-error{% endif %}">
+        <label for="token-name">{{ ctx.lang.t("token-name") }}</label>
+        <input id="token-name" name="name" value="{{ name }}" maxlength="{{ max_name }}" required autocomplete="off"{% if self.has_errs("name") %} aria-invalid="true" aria-describedby="token-name-error"{% endif %}>
+        {% for e in self.errs("name") %}<p class="field-error" id="token-name-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field{% if self.has_errs("role") %} has-error{% endif %}">
+        <label for="token-role">{{ ctx.lang.t("member-role") }}</label>
+        <select id="token-role" name="role">
+          {% for (value, label) in roles %}
+          <option value="{{ value }}"{% if self.same(value, role) %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <p class="hint">{{ ctx.lang.t("token-role-hint") }}</p>
+        {% for e in self.errs("role") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field{% if self.has_errs("expires_on") || self.has_errs("expires_at") %} has-error{% endif %}">
+        <label for="token-expires">{{ ctx.lang.t("token-expires-on") }}</label>
+        <input id="token-expires" name="expires_on" type="date" value="{{ expires_on }}">
+        <p class="hint">{{ ctx.lang.t("token-expires-hint") }}</p>
+        {% for e in self.errs("expires_on") %}<p class="field-error">{{ e }}</p>{% endfor %}
+        {% for e in self.errs("expires_at") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    <button type="submit">{{ ctx.lang.t("token-create") }}</button>
+  </form>
+</section>
+
+<section class="card" aria-labelledby="token-list-title">
+  <h2 id="token-list-title">{{ ctx.lang.t("token-list") }}</h2>
+  {% if tokens.is_empty() %}
+  <p class="muted">{{ ctx.lang.t("token-none") }}</p>
+  {% else %}
+  <div class="table-scroll">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("token-name") }}</th>
+        {% if ctx.is_owner %}<th>{{ ctx.lang.t("member-name") }}</th>{% endif %}
+        <th>{{ ctx.lang.t("member-role") }}</th>
+        <th>{{ ctx.lang.t("token-prefix") }}</th>
+        <th>{{ ctx.lang.t("token-created") }}</th>
+        <th>{{ ctx.lang.t("token-expires") }}</th>
+        <th>{{ ctx.lang.t("token-last-used") }}</th>
+        <th>{{ ctx.lang.t("token-state") }}</th>
+        <th><span class="visually-hidden">{{ ctx.lang.t("member-actions") }}</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tokens %}
+      <tr>
+        <td>{{ t.name }}</td>
+        {% if ctx.is_owner %}<td>{{ t.user }}</td>{% endif %}
+        <td>{{ t.role_label }}</td>
+        <td><code>{{ t.prefix }}…</code></td>
+        <td>{{ t.created }}</td>
+        <td>{{ t.expires }}</td>
+        <td>{{ t.last_used }}</td>
+        <td><span class="tag">{{ t.state_label }}</span></td>
+        <td>
+          {% if t.state == "active" %}
+          <form method="post" action="/settings/tokens/{{ t.id }}/revoke" class="inline" hx-confirm="{{ ctx.lang.t("token-revoke-confirm") }}">
+            <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+            <button type="submit" class="link danger">{{ ctx.lang.t("token-revoke") }}<span class="visually-hidden">: {{ t.name }}</span></button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

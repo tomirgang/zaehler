@@ -18,22 +18,23 @@ use sea_orm::{
 use zaehler_app::{
     PortError,
     backup::{
-        AcquisitionRecord, AdjustmentRecord, AssetCostRecord, BackupData, ChargingSessionRecord,
-        ConsumptionProfileRecord, ContractRecord, CostPositionRecord, DeviceRecord, DocumentRecord,
-        DraftRecord, HouseholdRecord, InstallmentRecord, InvitationRecord, MembershipRecord,
-        MeterRecord, NotificationSettingRecord, PriceComponentRecord, PvSystemMeterRecord,
-        PvSystemRecord, ReadingRecord, RegisterRecord, RevisionRecord, SettlementRecord,
-        UserRecord, VehicleRecord,
+        AcquisitionRecord, AdjustmentRecord, ApiTokenRecord, AssetCostRecord, BackupData,
+        ChargingSessionRecord, ConsumptionProfileRecord, ContractRecord, CostPositionRecord,
+        DeviceRecord, DocumentRecord, DraftRecord, HouseholdRecord, InstallmentRecord,
+        InvitationRecord, MembershipRecord, MeterRecord, NotificationSettingRecord,
+        PriceComponentRecord, PvSystemMeterRecord, PvSystemRecord, ReadingRecord, RegisterRecord,
+        RevisionRecord, SettlementRecord, UserRecord, VehicleRecord,
     },
     port::{BackupRepository, PortResult},
 };
 
 use crate::{
     entity::{
-        adjustment, ai_draft, asset_cost, charging_session, contract, cost_position, document,
-        household, installment, invitation, membership, meter, meter_device, notification_settings,
-        price_component, pv_system, pv_system_meter, reading, reading_revision, register,
-        settlement, user, vehicle, vehicle_acquisition, vehicle_consumption_profile,
+        adjustment, ai_draft, api_token, asset_cost, charging_session, contract, cost_position,
+        document, household, installment, invitation, membership, meter, meter_device,
+        notification_settings, price_component, pv_system, pv_system_meter, reading,
+        reading_revision, register, settlement, user, vehicle, vehicle_acquisition,
+        vehicle_consumption_profile,
     },
     uow::SeaOrmStore,
 };
@@ -234,6 +235,7 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
                 created_by: r.get("created_by")?,
                 created_at: r.get("created_at")?,
                 updated_at: r.opt("updated_at")?,
+                api_token_id: r.opt("api_token_id")?,
             })
         })
         .await?,
@@ -417,6 +419,7 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
     data.documents.sort_by_key(|x| x.id);
     read_vehicles(db, &mut data).await?;
     read_pv(db, &mut data).await?;
+    read_api(db, &mut data).await?;
     Ok(data)
 }
 
@@ -554,6 +557,7 @@ async fn write_all(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> 
                 created_by: Set(r.created_by),
                 created_at: Set(r.created_at),
                 updated_at: Set(r.updated_at),
+                api_token_id: Set(r.api_token_id),
             })
             .collect(),
     )
@@ -665,7 +669,8 @@ async fn write_all(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> 
     .await?;
     write_contracts(txn, d).await?;
     write_vehicles(txn, d).await?;
-    write_pv(txn, d).await
+    write_pv(txn, d).await?;
+    write_api(txn, d).await
 }
 
 /// Verträge mit Positionen, Preisständen und Einträgen (ab
@@ -1006,6 +1011,52 @@ async fn write_pv(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> {
                 pv_system_id: Set(x.pv_system_id),
                 meter_id: Set(x.meter_id),
                 role: Set(x.role.clone()),
+            })
+            .collect(),
+    )
+    .await
+}
+
+/// API-Tokens lesen (ab `m20261019_000015_api`).
+async fn read_api(db: &DatabaseTransaction, data: &mut BackupData) -> PortResult<()> {
+    data.api_tokens = records(db, "api_tokens", |r| {
+        Ok(ApiTokenRecord {
+            id: r.get("id")?,
+            household_id: r.get("household_id")?,
+            user_id: r.get("user_id")?,
+            name: r.get("name")?,
+            role: r.get("role")?,
+            token_hash: r.get("token_hash")?,
+            prefix: r.get("prefix")?,
+            created_at: r.get("created_at")?,
+            expires_at: r.get("expires_at")?,
+            revoked_at: r.get("revoked_at")?,
+            last_used_at: r.get("last_used_at")?,
+        })
+    })
+    .await?;
+    data.api_tokens.sort_by_key(|x| x.id);
+    Ok(())
+}
+
+/// API-Tokens schreiben (ab `m20261019_000015_api`).
+async fn write_api(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> {
+    insert(
+        txn,
+        d.api_tokens
+            .iter()
+            .map(|x| api_token::ActiveModel {
+                id: Set(x.id),
+                household_id: Set(x.household_id),
+                user_id: Set(x.user_id),
+                name: Set(x.name.clone()),
+                role: Set(x.role.clone()),
+                token_hash: Set(x.token_hash.clone()),
+                prefix: Set(x.prefix.clone()),
+                created_at: Set(x.created_at),
+                expires_at: Set(x.expires_at),
+                revoked_at: Set(x.revoked_at),
+                last_used_at: Set(x.last_used_at),
             })
             .collect(),
     )

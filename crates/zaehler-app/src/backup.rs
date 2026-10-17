@@ -146,6 +146,10 @@ pub struct ReadingRecord {
     /// Letzte Korrektur (ab `m20261016_000007_reading_revisions`)
     #[serde(default)]
     pub updated_at: Option<DateTime<Utc>>,
+    /// Token einer automatisch gelieferten Ablesung (ab `m20261019_000015_api`);
+    /// im Haushaltsarchiv leer
+    #[serde(default)]
+    pub api_token_id: Option<Uuid>,
 }
 
 /// Revision einer Ablesung (ab `m20261016_000007_reading_revisions`).
@@ -206,6 +210,23 @@ pub struct InvitationRecord {
     pub accepted_by: Option<Uuid>,
     pub accepted_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// API-Token (ab `m20261019_000015_api`); nur im Installationsarchiv.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiTokenRecord {
+    pub id: Uuid,
+    pub household_id: Uuid,
+    pub user_id: Uuid,
+    pub name: String,
+    pub role: String,
+    /// SHA-256 des Tokens, hexadezimal
+    pub token_hash: String,
+    pub prefix: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub last_used_at: Option<DateTime<Utc>>,
 }
 
 /// Benachrichtigungseinstellungen eines Nutzers (ab `m20261016_000009_jobs`);
@@ -473,6 +494,8 @@ pub struct BackupData {
     pub pv_systems: Vec<PvSystemRecord>,
     #[serde(default)]
     pub pv_system_meters: Vec<PvSystemMeterRecord>,
+    #[serde(default)]
+    pub api_tokens: Vec<ApiTokenRecord>,
 }
 
 impl BackupData {
@@ -501,8 +524,8 @@ impl BackupData {
         keys.into_iter().collect()
     }
 
-    /// Nur die Daten eines Haushalts; Nutzerkonten, Einladungen und
-    /// Benachrichtigungseinstellungen entfallen.
+    /// Nur die Daten eines Haushalts; Nutzerkonten, Einladungen, API-Tokens
+    /// und Benachrichtigungseinstellungen entfallen.
     #[must_use]
     #[allow(clippy::too_many_lines)] // ein Filter je Tabelle
     pub fn household(self, id: Uuid) -> Self {
@@ -587,6 +610,10 @@ impl BackupData {
                 .readings
                 .into_iter()
                 .filter(|r| registers.contains(&r.register_id))
+                .map(|r| ReadingRecord {
+                    api_token_id: None,
+                    ..r
+                })
                 .collect(),
             drafts: self
                 .drafts
@@ -599,6 +626,7 @@ impl BackupData {
                 .filter(|d| d.household_id == id)
                 .collect(),
             invitations: Vec::new(),
+            api_tokens: Vec::new(),
             revisions: self
                 .revisions
                 .into_iter()

@@ -3,6 +3,7 @@
 //! Handler parsen Eingaben, rufen Anwendungsfälle aus `zaehler-app` auf und
 //! rendern View-Modelle; sie greifen nie direkt auf Adapter zu.
 
+pub mod api;
 pub mod assets;
 pub mod auth;
 pub mod extract;
@@ -255,6 +256,11 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
             "/invite/{token}/accept",
             post(pages::members::accept_invitation),
         )
+        .route(
+            "/settings/tokens",
+            get(pages::tokens::show).post(pages::tokens::create),
+        )
+        .route("/settings/tokens/{id}/revoke", post(pages::tokens::revoke))
         .route("/settings/export", get(pages::backup::export))
         .route(
             "/settings/import",
@@ -290,6 +296,8 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
         .route("/sw.js", get(pages::pwa::service_worker))
         .route("/healthz", get(pages::live))
         .route("/readyz", get(pages::ready))
+        // REST-API ohne Sitzung und CSRF; nur Bearer-Token (ADR_023)
+        .merge(api::router().0)
         .merge(app)
         .layer(middleware::from_fn(security::security_headers))
         .layer(middleware::from_fn(track_metrics))
@@ -346,6 +354,7 @@ fn request_span(req: &Request, trace_parent: Option<state::TraceParent>) -> Span
         request_id,
         household = Empty,
         user = Empty,
+        api_token = Empty,
     );
     if let Some(set_parent) = trace_parent {
         set_parent(req.headers(), &span);

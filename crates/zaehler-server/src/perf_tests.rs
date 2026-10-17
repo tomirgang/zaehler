@@ -45,7 +45,15 @@ const BUDGET: Duration = Duration::from_millis(300);
 /// Ein Haushalt, 20 Messstellen mit je 2 Registern, 10 Jahre monatliche
 /// Ablesungen (4 800 Ablesungen) und je ein Vertrag mit zwei Preiswechseln
 /// je Jahr.
-async fn seed(uc: &UseCases, name: &str) -> (MeterId, MeterId) {
+struct Seeded {
+    meter: MeterId,
+    vehicle: MeterId,
+    grid: MeterId,
+    pv: zaehler_app::ids::PvSystemId,
+    token: String,
+}
+
+async fn seed(uc: &UseCases, name: &str) -> Seeded {
     let identity = Identity {
         issuer: "dev".into(),
         subject: name.into(),
@@ -110,7 +118,189 @@ async fn seed(uc: &UseCases, name: &str) -> (MeterId, MeterId) {
         first.get_or_insert(id);
     }
     let house = first.unwrap();
-    (house, seed_vehicle(uc, &tenant, house).await)
+    let vehicle = seed_vehicle(uc, &tenant, house).await;
+    let (grid, pv) = seed_pv(uc, &tenant, start).await;
+    let token = uc
+        .create_api_token
+        .execute(
+            &tenant,
+            zaehler_app::usecase::api::ApiTokenInput {
+                name: "Perf".into(),
+                role: zaehler_app::Role::Member,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap()
+        .token;
+    Seeded {
+        meter: house,
+        vehicle,
+        grid,
+        pv,
+        token,
+    }
+}
+
+/// Hausanschluss mit Erzeugungszähler und Speicher, 10 Jahre monatliche
+/// Sammelerfassung, Anlage mit Investition (SPEC_PERF_BUDGET, SPEC_PV_CHARTS).
+#[allow(clippy::too_many_lines)] // vollständiger Datensatz
+async fn seed_pv(
+    uc: &UseCases,
+    tenant: &zaehler_app::Tenant,
+    start: DateTime<Utc>,
+) -> (MeterId, zaehler_app::ids::PvSystemId) {
+    use zaehler_app::{
+        model::AssetRef,
+        usecase::{
+            asset_cost::AssetCostInput,
+            pv::{BulkInput, PvSystemInput},
+        },
+    };
+    use zaehler_domain::{
+        assets::{AssetCategory, PvCostCategory},
+        pv::{PvKind, PvRole, PvSystemData},
+    };
+
+    let meter = |name: &str, registers: &[(&str, Direction)]| MeterInput {
+        name: name.into(),
+        kind: MeterKind::Electricity,
+        unit: "kWh".into(),
+        schedule: None,
+        purpose: zaehler_domain::meter::MeterPurpose::General,
+        targets: zaehler_app::model::MeterTargets::default(),
+        parent_meter_id: None,
+        max_daily_rate: None,
+        billing_start: None,
+        serial_number: None,
+        rollover_digits: None,
+        decimal_places: 1,
+        registers: registers
+            .iter()
+            .map(|(code, direction)| RegisterInput {
+                id: None,
+                code: (*code).into(),
+                direction: *direction,
+                start_value: Some(Decimal::ZERO),
+            })
+            .collect(),
+        start_at: start,
+    };
+    let mut ids = Vec::new();
+    for (name, registers) in [
+        (
+            "PV Hausanschluss",
+            vec![("1.8.0", Direction::Import), ("2.8.0", Direction::Export)],
+        ),
+        ("PV Erzeugung", vec![("2.8.0", Direction::Export)]),
+        (
+            "PV Speicher",
+            vec![
+                ("charge", Direction::Import),
+                ("discharge", Direction::Export),
+            ],
+        ),
+    ] {
+        let id = uc
+            .create_meter
+            .execute(tenant, meter(name, &registers))
+            .await
+            .unwrap();
+        let regs: Vec<_> = uc
+            .get_meter
+            .execute(tenant, id)
+            .await
+            .unwrap()
+            .aggregate
+            .registers
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        ids.push((id, regs));
+    }
+    let system = uc
+        .create_pv_system
+        .execute(
+            tenant,
+            PvSystemInput {
+                data: PvSystemData {
+                    name: "Dach".into(),
+                    kind: PvKind::Surplus,
+                    kwp: Decimal::from(10),
+                    commissioned_on: start.date_naive(),
+                    azimuth: Some(180),
+                    tilt: Some(30),
+                    inverter: None,
+                    battery_kwh: Some(Decimal::from(10)),
+                    specific_yield: Decimal::from(950),
+                    degradation_pct: Decimal::new(5, 1),
+                    month_shares: None,
+                    alarm_threshold_pct: 50,
+                },
+                meters: vec![
+                    (ids[0].0, PvRole::Grid),
+                    (ids[1].0, PvRole::Generation),
+                    (ids[2].0, PvRole::Battery),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    let mut totals = [Decimal::ZERO; 5];
+    for k in 1..=MONTHS {
+        let season = Decimal::from(40 + (k % 12) * 15);
+        let deltas = [
+            Decimal::from(250) - season,
+            season * Decimal::from(2),
+            season * Decimal::from(4),
+            Decimal::from(120),
+            Decimal::from(110),
+        ];
+        for (t, d) in totals.iter_mut().zip(deltas) {
+            *t += d;
+        }
+        let values = vec![
+            (ids[0].0, ids[0].1[0], totals[0]),
+            (ids[0].0, ids[0].1[1], totals[1]),
+            (ids[1].0, ids[1].1[0], totals[2]),
+            (ids[2].0, ids[2].1[0], totals[3]),
+            (ids[2].0, ids[2].1[1], totals[4]),
+        ];
+        uc.record_bulk_readings
+            .execute(
+                tenant,
+                ids[0].0,
+                BulkInput {
+                    at: start + Months::new(k),
+                    values,
+                    note: None,
+                    confirm_warnings: true,
+                    drafts: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    uc.add_asset_cost
+        .execute(
+            tenant,
+            AssetRef::pv(system),
+            AssetCostInput {
+                booked_on: start.date_naive(),
+                category: AssetCategory::Pv(PvCostCategory::Investment),
+                amount: Decimal::from(14_500),
+                quantity: None,
+                odometer: None,
+                full_tank: false,
+                recurrence: None,
+                note: None,
+                odometer_as_reading: false,
+                confirm_warnings: false,
+            },
+        )
+        .await
+        .unwrap();
+    (ids[0].0, system)
 }
 
 /// Vertrag HT/NT ab 2016 mit zwei Preiswechseln je Jahr und jährlich neuem
@@ -307,11 +497,15 @@ async fn seed_vehicle(uc: &UseCases, tenant: &zaehler_app::Tenant, house: MeterI
     car
 }
 
-async fn get(app: &Router, path: &str, cookie: &str) -> (StatusCode, Duration) {
-    let req = Request::get(path)
-        .header(header::COOKIE, cookie)
-        .body(Body::empty())
-        .unwrap();
+/// `auth`: Cookie der Sitzung, unter `/api/` das Bearer-Token.
+async fn get(app: &Router, path: &str, auth: &str) -> (StatusCode, Duration) {
+    let req = if path.starts_with("/api/") {
+        Request::get(path).header(header::AUTHORIZATION, format!("Bearer {auth}"))
+    } else {
+        Request::get(path).header(header::COOKIE, auth)
+    }
+    .body(Body::empty())
+    .unwrap();
     let start = Instant::now();
     let res = app.clone().oneshot(req).await.unwrap();
     let status = res.status();
@@ -340,7 +534,13 @@ async fn measure(database_url: &str, backend: &str) {
     // eigener Nutzer je Lauf, damit eine geteilte Test-Datenbank genügt
     let name = format!("perf-{}", uuid::Uuid::now_v7().simple());
     let seeded = Instant::now();
-    let (meter, vehicle) = seed(&app.uc, &name).await;
+    let Seeded {
+        meter,
+        vehicle,
+        grid,
+        pv,
+        token,
+    } = seed(&app.uc, &name).await;
     println!("{backend}: Seed in {:?}", seeded.elapsed());
 
     let login = app
@@ -371,13 +571,29 @@ async fn measure(database_url: &str, backend: &str) {
         ("Haushaltskosten", "/costs".to_owned()),
         ("Fahrzeug", format!("/vehicles/{vehicle}")),
         ("Kostenbuch", format!("/vehicles/{vehicle}/costs?year=2020")),
+        ("Hausanschluss PV", format!("/pv/grid/{grid}")),
+        ("PV-Anlage", format!("/pv/{pv}")),
+        ("PV-Bilanz", format!("/pv/{pv}/balance.json")),
+        ("Sammelerfassung", format!("/pv/grid/{grid}/readings")),
+        ("API Messstellen", "/api/v1/meters".to_owned()),
+        (
+            "API Ablesungen",
+            format!("/api/v1/meters/{meter}/readings?limit=1000"),
+        ),
+        ("API Auswertung", format!("/api/v1/meters/{meter}/analysis")),
+        ("API Kosten", format!("/api/v1/meters/{meter}/costs")),
     ] {
+        let auth = if path.starts_with("/api/") {
+            token.as_str()
+        } else {
+            cookie.as_str()
+        };
         for _ in 0..WARMUP {
-            get(&app.router, &path, &cookie).await;
+            get(&app.router, &path, auth).await;
         }
         let mut samples = Vec::with_capacity(REQUESTS);
         for _ in 0..REQUESTS {
-            let (status, elapsed) = get(&app.router, &path, &cookie).await;
+            let (status, elapsed) = get(&app.router, &path, auth).await;
             assert_eq!(status, StatusCode::OK, "{path}");
             samples.push(elapsed);
         }

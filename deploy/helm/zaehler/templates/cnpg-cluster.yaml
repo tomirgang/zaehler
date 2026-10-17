@@ -26,6 +26,7 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 {{- if .Values.database.cnpg.scheduledBackup.enabled }}
+# @impl SPEC_OPS_BACKUP_CNPG
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup

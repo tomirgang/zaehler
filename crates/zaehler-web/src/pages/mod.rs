@@ -20,6 +20,7 @@ pub mod pwa;
 pub mod readings;
 pub mod receipts;
 pub mod settings;
+pub mod tokens;
 pub mod vehicles;
 
 use std::collections::HashMap;

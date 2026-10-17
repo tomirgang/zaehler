@@ -11,6 +11,8 @@ services:
       ZAEHLER_NOTIFY__SMTP__HOST: mailpit
       ZAEHLER_NOTIFY__SMTP__PORT: "1025"
       ZAEHLER_NOTIFY__SMTP__SECURITY: none
+      # Mailpit im Compose-Netz ohne TLS und ohne Zugangsdaten
+      ZAEHLER_NOTIFY__SMTP__ALLOW_INSECURE: "true"
       ZAEHLER_NOTIFY__SMTP__FROM: Zähler <zaehler@localhost>
     depends_on:
       mailpit:

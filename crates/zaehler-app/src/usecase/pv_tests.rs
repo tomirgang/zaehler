@@ -270,6 +270,7 @@ async fn january(uc: &UseCases, t: &Tenant, grid: MeterId, generation: MeterId, 
                 values,
                 note: None,
                 confirm_warnings: false,
+                drafts: Vec::new(),
             },
         )
         .await
@@ -322,6 +323,7 @@ async fn bulk_capture_and_grid_kpis() {
                 ],
                 note: None,
                 confirm_warnings: false,
+                drafts: Vec::new(),
             },
         )
         .await
@@ -659,4 +661,136 @@ async fn charging_price_with_pv_is_estimated() {
     assert!(cost.estimated, "Mischpreis ist eine Schätzung");
     // ohne Einspeisevertrag v_ein = 0: halber Arbeitspreis
     assert_eq!(cost.value, (kwh.value * dec!(0.15)).round_dp(2));
+}
+
+/// Fotos in der Sammelerfassung: Entwurf je Messstelle, Belegfoto je
+/// Ablesung, Entwurf abgeschlossen, Alarmprüfung über die Outbox.
+// @test SPEC_PV_BULK_CAPTURE
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
+async fn bulk_capture_with_photos() {
+    use bytes::Bytes;
+    use zaehler_domain::reading::ReadingSource;
+
+    use crate::{
+        model::{OutboxEvent, Recognition},
+        testing::{StubRecognizer, memory_ports_with_blobs},
+    };
+
+    let (mut ports, store, _, blobs) = memory_ports_with_blobs();
+    ports.recognizer = Some(Arc::new(StubRecognizer(Ok(Recognition {
+        value: Some(dec!(1000)),
+        serial_number: None,
+        register: Some("2.8.0".into()),
+        unit: Some("kWh".into()),
+        meter_kind: Some(MeterKind::Electricity),
+        confidence: dec!(0.9),
+    }))));
+    let uc = UseCases::new(&ports);
+    let signed = uc
+        .sign_in
+        .execute(&Identity {
+            issuer: "dev".into(),
+            subject: "anna".into(),
+            email: None,
+            display_name: "Anna".into(),
+            locale: "de".into(),
+        })
+        .await
+        .unwrap();
+    let t = uc
+        .resolve_tenant
+        .execute(signed.user.id, None)
+        .await
+        .unwrap()
+        .tenant;
+    let (grid, generation, _, _) = pv_site(&uc, &t).await;
+    let jpeg = Bytes::from_static(b"\xFF\xD8\xFFfoto");
+    let draft = uc.analyse_photo.execute(&t, jpeg.clone()).await.unwrap();
+    let listed = uc.record_bulk_readings.drafts(&t, grid).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].draft.id, draft);
+    assert!(
+        listed[0].meter.is_none(),
+        "ohne Zählernummer keine Zuordnung"
+    );
+
+    let g = registers(&uc, &t, grid).await;
+    let gen_register = registers(&uc, &t, generation).await[0];
+    let other = electricity(
+        &uc,
+        &t,
+        "Garage",
+        &[("1.8.0", Direction::Import)],
+        berlin(2025, 1, 1),
+    )
+    .await;
+    let input = |drafts: Vec<(crate::ids::DraftId, MeterId)>| BulkInput {
+        at: berlin(2025, 2, 1),
+        values: vec![
+            (grid, g[0], dec!(200)),
+            (grid, g[1], dec!(400)),
+            (generation, gen_register, dec!(1000)),
+        ],
+        note: None,
+        confirm_warnings: false,
+        drafts,
+    };
+    // Entwurf für eine Messstelle außerhalb des Hausanschlusses
+    assert!(matches!(
+        uc.record_bulk_readings
+            .execute(&t, grid, input(vec![(draft, other)]))
+            .await,
+        Err(crate::AppError::NotFound)
+    ));
+    let before = store.outbox().len();
+    let out = uc
+        .record_bulk_readings
+        .execute(&t, grid, input(vec![(draft, generation)]))
+        .await
+        .unwrap();
+    assert_eq!(out, BulkOutcome::Saved(3));
+
+    let readings = uc.get_meter.execute(&t, generation).await.unwrap().readings;
+    let photo = readings
+        .iter()
+        .find(|r| r.read_at == berlin(2025, 2, 1))
+        .unwrap();
+    assert_eq!(photo.source, ReadingSource::Photo);
+    let key = photo.photo_key.clone().expect("Belegfoto");
+    assert!(blobs.keys().contains(&key.to_string()));
+    assert_eq!(
+        uc.get_reading_photo.execute(&t, photo.id).await.unwrap(),
+        jpeg
+    );
+    let grid_readings = uc.get_meter.execute(&t, grid).await.unwrap().readings;
+    assert!(
+        grid_readings
+            .iter()
+            .filter(|r| r.read_at == berlin(2025, 2, 1))
+            .all(|r| r.source == ReadingSource::Manual && r.photo_key.is_none())
+    );
+    // Entwurf abgeschlossen, Entwurfsfoto gelöscht
+    assert!(
+        uc.record_bulk_readings
+            .drafts(&t, grid)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !blobs.keys().iter().any(|k| k.contains("/drafts/")),
+        "{:?}",
+        blobs.keys()
+    );
+    // Alarmprüfung je Messstelle
+    let events: Vec<OutboxEvent> = store.outbox()[before..]
+        .iter()
+        .map(|o| serde_json::from_str(&o.entry.payload).unwrap())
+        .collect();
+    assert_eq!(events.len(), 2, "Hausanschluss und Erzeugung");
+    assert!(events.iter().any(|e| matches!(
+        e,
+        OutboxEvent::ReadingsRecorded { meter_id, reading_ids } if *meter_id == generation && reading_ids == &vec![photo.id]
+    )));
 }

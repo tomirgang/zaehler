@@ -16,7 +16,7 @@ use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use zaehler_app::{
     AppError, FieldErrors,
-    ids::{MeterId, PvSystemId, RegisterId},
+    ids::{DraftId, MeterId, PvSystemId, RegisterId},
     model::PvSystem,
     usecase::pv::{BulkInput, BulkOutcome, GridPeriod, PvReport, PvSystemInput},
 };
@@ -910,15 +910,88 @@ struct BulkPage {
     id: String,
     name: String,
     rows: Vec<BulkRow>,
+    /// Offene Foto-Entwürfe (SPEC_PV_BULK_CAPTURE)
+    drafts: Vec<BulkDraftRow>,
+    /// Messstellen des Hausanschlusses: ID und Name
+    meters: Vec<(String, String)>,
     values: HashMap<String, String>,
     warnings: Vec<String>,
     messages: Vec<String>,
+}
+
+/// Foto-Entwurf mit Zuordnung zu einer Messstelle.
+pub struct BulkDraftRow {
+    pub id: String,
+    /// Feldname der Zuordnung
+    pub key: String,
+    /// Analyse abgeschlossen
+    pub ready: bool,
+    /// gewählte Messstelle (leer: nicht verwenden)
+    pub selected: String,
+    pub suggestion: String,
 }
 
 impl BulkPage {
     fn val(&self, field: &str) -> String {
         self.values.get(field).cloned().unwrap_or_default()
     }
+
+    #[allow(clippy::unused_self)] // Askama ruft Hilfen über `self` auf
+    fn same(&self, a: &str, b: &str) -> bool {
+        a == b
+    }
+}
+
+/// Zeilen der Foto-Entwürfe; beim ersten Aufruf übernimmt das Formular
+/// Messstelle, Wert und Aufnahmezeit aus den Vorschlägen.
+fn draft_rows(
+    lang: Lang,
+    tz: chrono_tz::Tz,
+    open: &[zaehler_app::usecase::pv::BulkDraft],
+    values: &mut HashMap<String, String>,
+    first_visit: bool,
+) -> Vec<BulkDraftRow> {
+    let mut rows = Vec::new();
+    for d in open {
+        let key = format!("draft_{}", d.draft.id);
+        if first_visit {
+            if let Some(m) = d.meter {
+                values.insert(key.clone(), m.to_string());
+                if let (Some(r), Some(v)) = (
+                    d.register,
+                    d.draft.suggestion.as_ref().and_then(|s| s.value),
+                ) {
+                    values
+                        .entry(format!("v_{m}_{r}"))
+                        .or_insert_with(|| format::decimal_plain(lang, v));
+                }
+            }
+            if let Some(taken) = d.draft.taken_at {
+                values.entry("at".into()).or_insert_with(|| {
+                    format::datetime_input(taken.with_timezone(&tz).naive_local())
+                });
+            }
+        }
+        let suggestion = d.draft.suggestion.as_ref().map_or_else(String::new, |s| {
+            [
+                s.value.map(|v| format::decimal_plain(lang, v)),
+                s.register.clone(),
+                s.serial_number.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ")
+        });
+        rows.push(BulkDraftRow {
+            id: d.draft.id.to_string(),
+            ready: d.draft.status.is_ready(),
+            selected: values.get(&key).cloned().unwrap_or_default(),
+            key,
+            suggestion,
+        });
+    }
+    rows
 }
 
 async fn bulk_page(
@@ -965,13 +1038,26 @@ async fn bulk_page(
             });
         }
     }
+    let first_visit = values.is_empty();
     let mut values = values;
+    let open = state
+        .uc
+        .record_bulk_readings
+        .drafts(&ctx.tenant, id)
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    let drafts = draft_rows(lang, ctx.page.tz, &open, &mut values, first_visit);
     values.entry("at".into()).or_insert_with(|| {
         format::datetime_input(Utc::now().with_timezone(&ctx.page.tz).naive_local())
     });
     Ok(BulkPage {
         id: id.to_string(),
         name,
+        drafts,
+        meters: meters
+            .iter()
+            .map(|(a, _)| (a.meter.id.to_string(), a.meter.data.name.clone()))
+            .collect(),
         rows,
         values,
         messages: errors.0.iter().map(|e| lang.err(e)).collect(),
@@ -1052,6 +1138,14 @@ pub async fn bulk(
                         values,
                         note: form.opt("note"),
                         confirm_warnings: form.get("confirm_warnings") == "true",
+                        drafts: form
+                            .0
+                            .iter()
+                            .filter_map(|(k, v)| {
+                                let draft = k.strip_prefix("draft_")?.parse::<DraftId>().ok()?;
+                                Some((draft, v.parse::<MeterId>().ok()?))
+                            })
+                            .collect(),
                     },
                 )
                 .await

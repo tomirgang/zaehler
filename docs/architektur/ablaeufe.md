@@ -94,7 +94,7 @@ Duplikate = gleiches Register, gleicher Zeitpunkt, gleicher Wert.
 
 ```{spec} Sammelerfassung je Hausanschluss
 :id: SPEC_PV_BULK_CAPTURE
-:status: draft
+:status: implemented
 :satisfies: REQ_PV_003
 :links: SPEC_RDG_FORM, SPEC_AI_DRAFTS
 
@@ -106,9 +106,15 @@ erkannt und zugeordnet ({need}`SPEC_AI_DRAFTS`), die Ergebnisse erscheinen in
 einem gemeinsamen Bestätigungsformular mit einem Zeitpunkt. Fotos ohne
 eindeutige Zuordnung erhalten eine Auswahl der Messstellen des Hausanschlusses.
 
-Umsetzung: Das Formular unter `/pv/grid/{meter}/readings`
-(`RecordBulkReadings`) ist umgesetzt; Warnungen erfordern eine Bestätigung,
-gespeichert wird in einer Transaktion. Die Erfassung per Fotos ist offen.
+Umsetzung: Formular unter `/pv/grid/{meter}/readings`
+(`RecordBulkReadings`); Warnungen erfordern eine Bestätigung, gespeichert
+wird in einer Transaktion mit `readings_recorded` je Messstelle. Fotos
+laufen über die Mehrfach-Erfassung (`/capture` mit Feld `grid`, Analyse im
+Hintergrund) und erscheinen als offene Entwürfe im selben Formular; erkannte
+Messstelle, Register, Wert und Aufnahmezeit werden vorbelegt, die Zuordnung
+ist je Foto wählbar („nicht verwenden“ möglich). Beim Speichern erhält jede
+Ablesung der zugeordneten Messstelle eine Kopie des Fotos
+(`source = photo`), der Entwurf wird abgeschlossen.
 ```
 
 ```{spec} PV-Darstellung
@@ -130,7 +136,7 @@ Tabellenalternative und Umsetzung gemäß {need}`SPEC_ANA_CHARTS`.
 
 ```{spec} Tägliche Verdichtung von API-Zählerständen
 :id: SPEC_API_DAILY_READINGS
-:status: draft
+:status: implemented
 :satisfies: REQ_API_003
 
 Zählerstände über die REST-API werden mit `source = api` und der ID des
@@ -140,3 +146,11 @@ Tages ersetzt die vorhandene, wenn ihr Zeitpunkt später ist, sonst wird sie
 verworfen. Manuelle Ablesungen und Importe sind davon nicht betroffen.
 Plausibilitätswarnungen führen bei API-Ablesungen nicht zur Ablehnung,
 sondern zu einem Eintrag im Log und einer Metrik.
+
+Umsetzung: `IngestReadings` mit `ReadingRepository::upsert_daily` (Spalte
+`readings.api_token_id`, Index über Token, Register und Zeitpunkt). Ein
+ersetzter Stand behält seine ID. Ein Stand mit dem Zeitpunkt einer anderen
+Ablesung desselben Geräts ergibt bei gleichem Wert `ignored`, sonst einen
+Fehler je Eintrag. Metriken `zaehler_api_readings_total{result}` und
+`zaehler_api_reading_warnings_total{kind}`; Beispiel für Home Assistant in
+{doc}`../betrieb/api`.

@@ -119,6 +119,8 @@ use_case!(
     GetContract,
     /// Verträge einer Messstelle (Viewer).
     MeterContracts,
+    /// Alle Verträge des Haushalts (Viewer).
+    ListContracts,
     /// Neuer Preisstand einer Position (Owner).
     AddPriceComponent,
     /// Neuer Abschlagsstand (Owner).
@@ -551,6 +553,15 @@ impl MeterContracts {
         let mut uow = self.p.uow.begin().await?;
         load_meter(uow.as_mut(), t, meter).await?;
         Ok(uow.contracts().for_meter(t, meter).await?)
+    }
+}
+
+impl ListContracts {
+    #[tracing::instrument(name = "ListContracts", skip_all)]
+    pub async fn execute(&self, t: &Tenant) -> Result<Vec<Contract>, AppError> {
+        t.require(Role::Viewer)?;
+        let mut uow = self.p.uow.begin().await?;
+        Ok(uow.contracts().list(t).await?)
     }
 }
 

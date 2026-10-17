@@ -194,14 +194,15 @@ schreiben nur Outbox-Status, Versandprotokoll und `job_runs` über
 
 Umsetzung: Der Job-Tenant trägt statt eines fehlenden Nutzers die Nil-UUID,
 damit `Tenant::user_id()` ohne `Option` auskommt; kein Anwendungsfall des
-Web-Adapters erhält ihn. `readings_recorded` entsteht derzeit aus
-`RecordReadings`, `ConfirmDraft` und `CorrectReading`; `IngestReadings` und
-`RecordBulkReadings` folgen mit ihren Arbeitspaketen.
+Web-Adapters erhält ihn. `readings_recorded` entsteht aus `RecordReadings`,
+`ConfirmDraft`, `CorrectReading`, `IngestReadings` (je Messstelle mit den
+gespeicherten oder ersetzten Ablesungen) und `RecordBulkReadings` (je
+Messstelle der Sammelerfassung).
 ```
 
 ```{spec} Authentifizierung der REST-API
 :id: SPEC_API_AUTH
-:status: draft
+:status: implemented
 :satisfies: REQ_API_002, REQ_TEN_003, REQ_NFR_003
 :links: ADR_023
 
@@ -221,6 +222,16 @@ Web-Adapters erhält ihn. `readings_recorded` entsteht derzeit aus
   jeder Nutzer für sich selbst; `Owner` sehen und widerrufen alle Tokens des
   Haushalts.
 - Logs enthalten die Token-ID, nie das Token.
+
+Umsetzung: Tabelle `api_tokens` (Migration `m20261019_000015_api`),
+Anwendungsfälle in `zaehler-app/src/usecase/api.rs`, Extraktor `ApiCtx` in
+`zaehler-web/src/api/auth.rs`. Das Token besteht aus `zt_` und 43 Zeichen;
+andere Formen werden ohne Datenbankzugriff abgelehnt. Die Rolle eines neuen
+Tokens ist höchstens die eigene Rolle, das Ablaufdatum liegt in der Zukunft.
+Die Token-ID steht im Feld `api_token` des Request-Spans. Seite
+`/settings/tokens` zum Erzeugen, Anzeigen und Widerrufen; das Token
+erscheint dort genau einmal. API-Tokens sind im Installationsarchiv
+enthalten, im Haushaltsarchiv nicht.
 ```
 
 ```{spec} Dokument-Uploads
@@ -269,5 +280,9 @@ Umsetzung: Geprüft sind die Bausteine getrennt auf PostgreSQL: zwei
 `PgLeaderLock` gegeneinander (genau einer Leader, Übernahme nach Freigabe)
 und das Versandprotokoll (`notification_log` mit eindeutigem Schlüssel aus
 Nutzer, Art und Schlüssel), das einen zweiten Versand auch bei gleichzeitiger
-Ausführung verhindert. Ein Test mit zwei laufenden Server-Prozessen steht aus.
+Ausführung verhindert. Zwei laufende Server-Prozesse prüft der Smoke-Test
+mit `compose.replicas.yaml` (PostgreSQL, S3, Mailpit): eine Einladung mit
+E-Mail kommt genau einmal in Mailpit an, genau eine Instanz meldet
+`zaehler_leader 1`. Das Chart setzt `database.lock_url` über
+`database.lockUrl` aus einem Secret.
 ```

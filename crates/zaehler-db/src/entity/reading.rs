@@ -20,6 +20,8 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     /// Letzte Korrektur (`m20261016_000007_reading_revisions`)
     pub updated_at: Option<DateTimeUtc>,
+    /// Token automatisch gelieferter Ablesungen (`m20261019_000015_api`)
+    pub api_token_id: Option<Uuid>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

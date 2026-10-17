@@ -9,6 +9,7 @@ use crate::port::{
 };
 
 pub mod analysis;
+pub mod api;
 pub mod asset_cost;
 pub mod auth;
 pub mod backup;
@@ -16,6 +17,7 @@ pub mod capture;
 pub mod contract;
 pub mod cost;
 pub mod document;
+pub mod export;
 pub mod household;
 pub mod housekeeping;
 pub mod import;
@@ -29,6 +31,8 @@ mod validate;
 pub mod vehicle;
 pub mod vehicle_report;
 
+#[cfg(test)]
+mod api_tests;
 #[cfg(test)]
 mod contract_tests;
 #[cfg(test)]
@@ -216,10 +220,18 @@ pub struct UseCases {
     pub grid_analysis: pv::GridAnalysis,
     pub pv_system_report: pv::PvSystemReport,
     pub pv_dashboard: pv::PvDashboard,
+    pub list_contracts: contract::ListContracts,
+    pub export_household_csv: export::ExportHouseholdCsv,
+    pub create_api_token: api::CreateApiToken,
+    pub list_api_tokens: api::ListApiTokens,
+    pub revoke_api_token: api::RevokeApiToken,
+    pub resolve_api_tenant: api::ResolveApiTenant,
+    pub ingest_readings: api::IngestReadings,
 }
 
 impl UseCases {
     #[must_use]
+    #[allow(clippy::too_many_lines)] // ein Feld je Anwendungsfall
     pub fn new(p: &Ports) -> Self {
         Self {
             sign_in: auth::SignIn::new(p.clone()),
@@ -316,6 +328,13 @@ impl UseCases {
             grid_analysis: pv::GridAnalysis::new(p.clone()),
             pv_system_report: pv::PvSystemReport::new(p.clone()),
             pv_dashboard: pv::PvDashboard::new(p.clone()),
+            list_contracts: contract::ListContracts::new(p.clone()),
+            export_household_csv: export::ExportHouseholdCsv::new(p.clone()),
+            create_api_token: api::CreateApiToken::new(p.clone()),
+            list_api_tokens: api::ListApiTokens::new(p.clone()),
+            revoke_api_token: api::RevokeApiToken::new(p.clone()),
+            resolve_api_tenant: api::ResolveApiTenant::new(p.clone()),
+            ingest_readings: api::IngestReadings::new(p.clone()),
         }
     }
 }

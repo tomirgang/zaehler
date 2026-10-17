@@ -88,6 +88,22 @@ window.addEventListener("pageshow", (e) => {
   }
 });
 
+// @impl SPEC_A11Y
+// Breite Tabellen scrollen waagerecht; nur dann sind sie per Tastatur
+// fokussierbar, damit sich der Bereich mit den Pfeiltasten bewegen lässt.
+function focusableScrollTables() {
+  document.querySelectorAll(".table").forEach((t) => {
+    if (t.scrollWidth > t.clientWidth + 1) {
+      t.setAttribute("tabindex", "0");
+    } else {
+      t.removeAttribute("tabindex");
+    }
+  });
+}
+document.addEventListener("DOMContentLoaded", focusableScrollTables);
+document.addEventListener("htmx:afterSettle", focusableScrollTables);
+window.addEventListener("resize", focusableScrollTables);
+
 // @impl SPEC_UI_PWA
 // Service Worker ohne Offline-Cache; macht die App installierbar.
 if ("serviceWorker" in navigator) {

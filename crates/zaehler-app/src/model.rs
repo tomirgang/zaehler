@@ -17,9 +17,9 @@ use zaehler_domain::{
 
 use crate::{
     ids::{
-        AdjustmentId, BlobKey, ContractId, DeviceId, DraftId, HouseholdId, InstallmentId,
-        InvitationId, MeterId, OutboxId, PositionId, PriceComponentId, ReadingId, RegisterId,
-        RevisionId, SettlementId, UserId,
+        AdjustmentId, ApiTokenId, BlobKey, ContractId, DeviceId, DraftId, HouseholdId,
+        InstallmentId, InvitationId, MeterId, OutboxId, PositionId, PriceComponentId, ReadingId,
+        RegisterId, RevisionId, SettlementId, UserId,
     },
     tenant::Role,
 };
@@ -94,6 +94,56 @@ pub struct NewInvitation {
     pub created_by: UserId,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+}
+
+/// Persönliches API-Token (SPEC_API_AUTH). Gespeichert werden der SHA-256
+/// und die ersten Zeichen zur Anzeige.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiToken {
+    pub id: ApiTokenId,
+    pub household_id: HouseholdId,
+    pub user_id: UserId,
+    /// Anzeigename des Nutzers (Liste für Owner)
+    pub user_name: String,
+    pub name: String,
+    pub role: Role,
+    /// Die ersten 8 Zeichen des Tokens
+    pub prefix: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+impl ApiToken {
+    /// Weder widerrufen noch abgelaufen.
+    #[must_use]
+    pub fn is_active(&self, now: DateTime<Utc>) -> bool {
+        self.revoked_at.is_none() && self.expires_at.is_none_or(|e| e > now)
+    }
+}
+
+/// Neues API-Token; `token_hash` ist der SHA-256 des Tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewApiToken {
+    pub id: ApiTokenId,
+    pub name: String,
+    pub role: Role,
+    pub token_hash: [u8; 32],
+    pub prefix: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// Ergebnis einer täglich verdichteten Ablesung (SPEC_API_DAILY_READINGS).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DailyOutcome {
+    /// Erste Ablesung des Tages für Register und Token
+    Stored(ReadingId),
+    /// Spätere Ablesung ersetzt die vorhandene des Tages
+    Replaced(ReadingId),
+    /// Frühere oder gleich späte Ablesung; nichts geändert
+    Ignored,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -31,6 +31,8 @@ tower-http.workspace = true
 tower-sessions = { workspace = true, features = ["axum-core"] }
 tracing.workspace = true
 uuid.workspace = true
+utoipa = { version = "6", features = ["axum_extras", "chrono", "decimal", "uuid"] }
+utoipa-axum = "0.3"
 
 [dev-dependencies]
 zaehler-app = { workspace = true, features = ["testing"] }
@@ -38,6 +40,7 @@ bytes.workspace = true
 tokio.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tower-sessions = { workspace = true, features = ["axum-core", "memory-store"] }
+tracing-subscriber.workspace = true
 wiremock = "0.6"
 
 [lints]

@@ -225,6 +225,9 @@ impl UnitOfWork for SeaOrmUow {
     fn documents(&mut self) -> &mut dyn zaehler_app::port::DocumentRepository {
         self
     }
+    fn api_tokens(&mut self) -> &mut dyn zaehler_app::port::ApiTokenRepository {
+        self
+    }
     async fn commit(self: Box<Self>) -> PortResult<()> {
         let Self { txn, span } = *self;
         txn.commit().instrument(span).await.map_err(db_err)
@@ -1216,25 +1219,32 @@ impl ReadingRepository for SeaOrmUow {
                 }
                 checked.insert((r.register_id.0, r.device_id.0));
             }
-            reading::Entity::insert(reading::ActiveModel {
-                id: Set(r.id.0),
-                register_id: Set(r.register_id.0),
-                device_id: Set(r.device_id.0),
-                read_at: Set(r.read_at),
-                value_milli: Set(fixed::quantity_to_db(r.value).map_err(data_err)?),
-                source: Set(r.source.as_str().to_owned()),
-                photo_key: Set(r.photo_key.as_ref().map(ToString::to_string)),
-                ai_confidence: Set(r.ai_confidence.and_then(|c| c.to_f64())),
-                note: Set(r.note.clone()),
-                created_by: Set(r.created_by.map(|u| u.0)),
-                created_at: Set(Utc::now()),
-                updated_at: Set(None),
-            })
-            .exec_without_returning(&self.txn)
-            .await
-            .map_err(db_err)?;
+            reading::Entity::insert(reading_model(r, None)?)
+                .exec_without_returning(&self.txn)
+                .await
+                .map_err(db_err)?;
         }
         Ok(())
+    }
+
+    async fn upsert_daily(
+        &mut self,
+        t: &Tenant,
+        r: &Reading,
+        token: zaehler_app::ids::ApiTokenId,
+        from: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> PortResult<zaehler_app::model::DailyOutcome> {
+        let meter_id = self
+            .meter_of_register(r.register_id.0)
+            .await?
+            .ok_or(PortError::NotFound)?;
+        if !self.owns_meter(t, meter_id).await?
+            || self.meter_of_device(r.device_id.0).await? != Some(meter_id)
+        {
+            return Err(PortError::NotFound);
+        }
+        self.upsert_daily_in(r, token, from, until).await
     }
 
     async fn get(&mut self, t: &Tenant, id: ReadingId) -> PortResult<Option<(MeterId, Reading)>> {
@@ -1622,3 +1632,25 @@ mod vehicles;
 
 #[path = "pv.rs"]
 mod pv;
+
+#[path = "api.rs"]
+mod api;
+
+/// Neue Zeile einer Ablesung; `token` bei automatisch gelieferten Ständen.
+fn reading_model(r: &Reading, token: Option<Uuid>) -> PortResult<reading::ActiveModel> {
+    Ok(reading::ActiveModel {
+        id: Set(r.id.0),
+        register_id: Set(r.register_id.0),
+        device_id: Set(r.device_id.0),
+        read_at: Set(r.read_at),
+        value_milli: Set(fixed::quantity_to_db(r.value).map_err(data_err)?),
+        source: Set(r.source.as_str().to_owned()),
+        photo_key: Set(r.photo_key.as_ref().map(ToString::to_string)),
+        ai_confidence: Set(r.ai_confidence.and_then(|c| c.to_f64())),
+        note: Set(r.note.clone()),
+        created_by: Set(r.created_by.map(|u| u.0)),
+        created_at: Set(Utc::now()),
+        updated_at: Set(None),
+        api_token_id: Set(token),
+    })
+}

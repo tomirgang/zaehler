@@ -191,6 +191,13 @@ async fn role_matrix() {
             &at("ExportHousehold"),
         );
         forbidden(
+            uc.export_household_csv
+                .execute(t, std::io::Cursor::new(Vec::new()))
+                .await
+                .map(|_| ()),
+            &at("ExportHouseholdCsv"),
+        );
+        forbidden(
             uc.change_role.execute(t, u, Role::Owner).await,
             &at("ChangeRole"),
         );
@@ -540,10 +547,27 @@ async fn role_matrix() {
                     values: Vec::new(),
                     note: None,
                     confirm_warnings: false,
+                    drafts: Vec::new(),
                 },
             )
             .await,
         "RecordBulkReadings",
+    );
+    forbidden(
+        uc.ingest_readings
+            .execute(
+                t,
+                crate::ids::ApiTokenId(Uuid::now_v7()),
+                &[crate::usecase::api::IngestItem {
+                    target: crate::usecase::api::IngestTarget::Register(crate::ids::RegisterId(
+                        Uuid::now_v7(),
+                    )),
+                    at: Utc::now(),
+                    value: Decimal::ONE,
+                }],
+            )
+            .await,
+        "IngestReadings",
     );
     forbidden(
         uc.upload_csv.execute(t, Bytes::from_static(b"a;b\n")).await,

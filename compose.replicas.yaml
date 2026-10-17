@@ -1,0 +1,16 @@
+# @impl SPEC_OPS_COMPOSE, SPEC_OPS_REPLICAS
+# Override: zwei Instanzen gegen dieselbe Datenbank; setzt PostgreSQL und S3
+# voraus. Ohne Portfreigabe auf dem Host, da sich beide Instanzen den Port
+# teilen würden; Zugriff im Compose-Netz über den Dienstnamen `zaehler`.
+#   docker compose -f compose.yaml -f compose.postgres.yaml -f compose.s3.yaml \
+#     -f compose.replicas.yaml up -d
+# Der Scheduler-Takt ist verkürzt, damit die Outbox im Smoke-Test zügig
+# verarbeitet wird.
+
+services:
+  zaehler:
+    ports: !reset []
+    environment:
+      ZAEHLER_SCHEDULER__TICK_SECONDS: "5"
+    deploy:
+      replicas: 2

@@ -22,14 +22,17 @@ use zaehler_domain::{
 
 use crate::{
     AppError, FieldErrors, Role, Tenant,
-    ids::{MeterId, PvSystemId, RegisterId},
-    model::{AssetCost, AssetRef, MeterAggregate, PvSystem},
+    ids::{BlobKey, DraftId, MeterId, PvSystemId, ReadingId, RegisterId},
+    model::{AssetCost, AssetRef, Draft, DraftOutcome, MeterAggregate, PvSystem},
     port::UnitOfWork,
     usecase::{
         analysis::register_intervals,
+        capture::choose_register,
         contract::{money, text_opt},
         cost::{MeterPricing, calendar_today, load_pricing},
-        reading::{ReadingExtras, ReadingsInput, RecordOutcome, RegisterCheck, record_in},
+        reading::{
+            ReadingExtras, ReadingsInput, RecordOutcome, RegisterCheck, enqueue_readings, record_in,
+        },
         use_case, validate,
     },
 };
@@ -291,6 +294,8 @@ pub struct BulkInput {
     pub values: Vec<(MeterId, RegisterId, Decimal)>,
     pub note: Option<String>,
     pub confirm_warnings: bool,
+    /// Foto-Entwürfe und die Messstelle, deren Stände sie belegen
+    pub drafts: Vec<(DraftId, MeterId)>,
 }
 
 /// Ergebnis der Sammelerfassung.
@@ -365,8 +370,24 @@ impl RecordBulkReadings {
         {
             return Err(AppError::NotFound);
         }
+        // Fotos: offene, analysierte Entwürfe je Messstelle des Hausanschlusses
+        let mut drafts = Vec::new();
+        for (draft, meter) in &input.drafts {
+            if !meters.iter().any(|(a, _)| a.meter.id == *meter) {
+                return Err(AppError::NotFound);
+            }
+            let d = uow
+                .drafts()
+                .get_open(t, *draft)
+                .await?
+                .ok_or(AppError::NotFound)?;
+            if !d.status.is_ready() {
+                return Err(AppError::Conflict("capture.not_ready"));
+            }
+            drafts.push((d, *meter));
+        }
         let mut warnings = Vec::new();
-        let mut saved = 0;
+        let mut saved: Vec<(MeterId, RegisterId, ReadingId)> = Vec::new();
         for (agg, _) in &meters {
             let values: Vec<(RegisterId, Decimal)> = input
                 .values
@@ -377,48 +398,193 @@ impl RecordBulkReadings {
             if values.is_empty() {
                 continue;
             }
-            saved += values.len();
-            let readings = ReadingsInput {
-                meter_id: agg.meter.id,
-                at: input.at,
-                values,
-                note: input.note.clone(),
+            let photo = drafts.iter().any(|(_, m)| *m == agg.meter.id);
+            // mit Foto je Register eine eigene Ablesung mit eigenem Beleg
+            let batches: Vec<Vec<(RegisterId, Decimal)>> = if photo {
+                values.iter().map(|v| vec![*v]).collect()
+            } else {
+                vec![values]
             };
-            match record_in(
-                &self.p,
-                uow.as_mut(),
-                t,
-                &readings,
-                input.confirm_warnings,
-                ReadingSource::Manual,
-                ReadingExtras::default(),
-            )
-            .await
-            {
-                Ok(RecordOutcome::Saved(_)) => {}
-                Ok(RecordOutcome::NeedsConfirmation(checks)) => {
-                    warnings.push((agg.meter.id, checks));
-                }
-                Err(AppError::Validation(e)) => {
-                    // Feldnamen je Messstelle eindeutig machen
-                    let mut out = FieldErrors::default();
-                    for x in e.0 {
-                        out.0.push(crate::FieldError {
-                            field: format!("{}_{}", agg.meter.id, x.field),
-                            ..x
-                        });
+            for batch in batches {
+                match self
+                    .record_batch(uow.as_mut(), t, agg.meter.id, &batch, &input, photo)
+                    .await?
+                {
+                    RecordOutcome::Saved(ids) => saved.extend(
+                        batch
+                            .iter()
+                            .zip(ids)
+                            .map(|((r, _), id)| (agg.meter.id, *r, id)),
+                    ),
+                    RecordOutcome::NeedsConfirmation(checks) => {
+                        warnings.push((agg.meter.id, checks));
                     }
-                    return Err(AppError::Validation(out));
                 }
-                Err(e) => return Err(e),
             }
         }
         if !warnings.is_empty() {
             return Ok(BulkOutcome::NeedsConfirmation(warnings));
         }
+        // Alarme wie bei der Einzelerfassung (E14)
+        for (agg, _) in &meters {
+            let ids: Vec<ReadingId> = saved
+                .iter()
+                .filter(|(m, _, _)| *m == agg.meter.id)
+                .map(|(_, _, id)| *id)
+                .collect();
+            if !ids.is_empty() {
+                enqueue_readings(&self.p, uow.as_mut(), t, agg.meter.id, &ids).await?;
+            }
+        }
+        for (d, meter) in &drafts {
+            self.attach_photo(uow.as_mut(), t, d, *meter, &saved, &input)
+                .await?;
+        }
         uow.commit().await?;
-        Ok(BulkOutcome::Saved(saved))
+        for (d, _) in &drafts {
+            if let Err(e) = self.p.blobs.delete(&d.photo_key).await {
+                tracing::warn!(error = %e, draft = %d.id, "draft photo not deleted");
+            }
+        }
+        Ok(BulkOutcome::Saved(saved.len()))
     }
+
+    /// Stände einer Messstelle; mit Foto als `source = photo` mit eigenem
+    /// Belegschlüssel. Feldfehler erhalten die Messstelle im Feldnamen.
+    async fn record_batch(
+        &self,
+        uow: &mut dyn UnitOfWork,
+        t: &Tenant,
+        meter: MeterId,
+        values: &[(RegisterId, Decimal)],
+        input: &BulkInput,
+        photo: bool,
+    ) -> Result<RecordOutcome, AppError> {
+        let (extras, source) = if photo {
+            let id = ReadingId(self.p.ids.new_uuid());
+            let extras = ReadingExtras {
+                id: Some(id),
+                photo_key: Some(BlobKey::reading_photo(t.household_id(), id)),
+                ai_confidence: None,
+            };
+            (extras, ReadingSource::Photo)
+        } else {
+            (ReadingExtras::default(), ReadingSource::Manual)
+        };
+        let readings = ReadingsInput {
+            meter_id: meter,
+            at: input.at,
+            values: values.to_vec(),
+            note: input.note.clone(),
+        };
+        record_in(
+            &self.p,
+            uow,
+            t,
+            &readings,
+            input.confirm_warnings,
+            source,
+            extras,
+        )
+        .await
+        .map_err(|e| match e {
+            AppError::Validation(e) => AppError::Validation(FieldErrors(
+                e.0.into_iter()
+                    .map(|x| crate::FieldError {
+                        field: format!("{meter}_{}", x.field),
+                        ..x
+                    })
+                    .collect(),
+            )),
+            other => other,
+        })
+    }
+
+    /// Belegfoto je Ablesung der Messstelle, Entwurf abschließen.
+    async fn attach_photo(
+        &self,
+        uow: &mut dyn UnitOfWork,
+        t: &Tenant,
+        d: &Draft,
+        meter: MeterId,
+        saved: &[(MeterId, RegisterId, ReadingId)],
+        input: &BulkInput,
+    ) -> Result<(), AppError> {
+        let mine: Vec<&(MeterId, RegisterId, ReadingId)> =
+            saved.iter().filter(|(m, _, _)| *m == meter).collect();
+        let Some(first) = mine.first() else {
+            return Err(AppError::field("values", "reading.values_required"));
+        };
+        for (_, _, id) in &mine {
+            self.p
+                .blobs
+                .copy(&d.photo_key, &BlobKey::reading_photo(t.household_id(), *id))
+                .await
+                .map_err(AppError::from_storage)?;
+        }
+        let value = input
+            .values
+            .iter()
+            .find(|(m, r, _)| *m == meter && *r == first.1)
+            .map(|(_, _, v)| *v);
+        let corrected = d.suggestion.as_ref().map(|s| s.value != value);
+        uow.drafts()
+            .finish(
+                t,
+                d.id,
+                DraftOutcome::Confirmed {
+                    reading: first.2,
+                    corrected,
+                },
+                self.p.clock.now(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Offene Foto-Entwürfe mit Vorschlag für Messstelle und Register des
+    /// Hausanschlusses (SPEC_PV_BULK_CAPTURE).
+    #[tracing::instrument(name = "RecordBulkReadings::drafts", skip_all)]
+    pub async fn drafts(&self, t: &Tenant, grid: MeterId) -> Result<Vec<BulkDraft>, AppError> {
+        t.require(Role::Member)?;
+        let mut uow = self.p.uow.begin().await?;
+        let meters = grid_meters(uow.as_mut(), t, grid).await?;
+        Ok(uow
+            .drafts()
+            .list_open(t)
+            .await?
+            .into_iter()
+            .map(|draft| {
+                let agg = meters
+                    .iter()
+                    .map(|(a, _)| a)
+                    .find(|a| Some(a.meter.id) == draft.matched_meter_id);
+                let register = agg.and_then(|a| {
+                    choose_register(
+                        a,
+                        draft
+                            .suggestion
+                            .as_ref()
+                            .and_then(|s| s.register.as_deref()),
+                    )
+                });
+                BulkDraft {
+                    meter: agg.map(|a| a.meter.id),
+                    register,
+                    draft,
+                }
+            })
+            .collect())
+    }
+}
+
+/// Offener Foto-Entwurf in der Sammelerfassung.
+#[derive(Debug, Clone)]
+pub struct BulkDraft {
+    pub draft: Draft,
+    /// Erkannte Messstelle, falls sie zum Hausanschluss gehört
+    pub meter: Option<MeterId>,
+    pub register: Option<RegisterId>,
 }
 
 /// Intervalle der Register einer Messstelle, gefiltert.

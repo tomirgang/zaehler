@@ -151,6 +151,7 @@ pub async fn analyse(
 ) -> Result<Response, Response> {
     let lang = ctx.page.lang;
     let mut token = None;
+    let mut grid = None;
     let mut photos = Vec::new();
     // Position im Upload und Dateiname je angenommenem Foto
     let mut origin: Vec<(usize, String)> = Vec::new();
@@ -164,6 +165,14 @@ pub async fn analyse(
         };
         match field.name() {
             Some("_csrf") => token = field.text().await.ok(),
+            // Rückkehr zur Sammelerfassung eines Hausanschlusses (SPEC_PV_BULK_CAPTURE)
+            Some("grid") => {
+                grid = field
+                    .text()
+                    .await
+                    .ok()
+                    .and_then(|g| g.parse::<MeterId>().ok());
+            }
             Some("photo") => {
                 let name = field.file_name().unwrap_or_default().to_owned();
                 match field.bytes().await {
@@ -222,6 +231,9 @@ pub async fn analyse(
     if !errors.is_empty() {
         ctx.flash("flash-photos-rejected").await;
         tracing::info!(rejected = errors.len(), "photos rejected");
+    }
+    if let Some(grid) = grid {
+        return Ok(see_other(&format!("/pv/grid/{grid}/readings")));
     }
     Ok(see_other(&format!("/capture/{first}")))
 }

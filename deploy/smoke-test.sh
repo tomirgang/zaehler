@@ -2,11 +2,15 @@
 # @impl SPEC_OPS_COMPOSE
 # Smoke-Test der Auslieferung mit docker compose: Image bauen, starten,
 # /readyz, Entwicklungs-Login, Messstelle anlegen, Stand erfassen, Anzeige
-# prüfen, Foto hochladen und abrufen; mit compose.otel.yaml zusätzlich
+# prüfen, Foto hochladen und abrufen, Stand über die REST-API; mit
+# compose.mail.yaml eine Einladung genau einmal in Mailpit, mit
+# compose.replicas.yaml genau ein Leader; mit compose.otel.yaml zusätzlich
 # Traces im Collector. Weitere Compose-Dateien als Argumente, z.B.
 #
 #   deploy/smoke-test.sh                      # SQLite, Dateiablage
 #   deploy/smoke-test.sh compose.postgres.yaml compose.s3.yaml
+#   deploy/smoke-test.sh compose.postgres.yaml compose.s3.yaml compose.mail.yaml \
+#     compose.replicas.yaml                   # zwei Instanzen, Mailpit
 #
 # Die HTTP-Aufrufe laufen in einem curl-Container im Compose-Netz; so
 # funktioniert der Test auch in CI-Jobs, die Docker über den Socket nutzen.
@@ -135,6 +139,66 @@ draft=$(location_of "$res")
 http "$base$draft/photo" -o /dev/null
 expect "$res" 200 "Foto abrufen"
 printf '%s' "$res" | grep -qi '^content-type: image/jpeg' || { echo "kein JPEG" >&2; exit 1; }
+
+# REST-API: Token über die Einstellungen, Stand über POST /api/v1/readings
+http "$base/settings/tokens" \
+  --data-urlencode "_csrf=$csrf" -d name=Smoke -d role=member -d expires_on=
+expect "$res" 200 "Token erzeugen"
+token=$(printf '%s' "$res" | grep -o 'value="zt_[A-Za-z0-9_-]*"' | head -1 | sed 's/value="\(.*\)"/\1/')
+[ -n "$token" ] || { echo "kein API-Token" >&2; exit 1; }
+saved_cookie="$cookie"
+cookie=""
+http "$base/api/v1/meters" -H "Authorization: Bearer $token"
+expect "$res" 200 "API: Messstellen"
+register=$(printf '%s' "$res" | grep -o '"registers":\[{"id":"[0-9a-f-]*"' | head -1 | sed 's/.*"id":"\(.*\)"/\1/')
+[ -n "$register" ] || { echo "API: kein Register" >&2; exit 1; }
+http "$base/api/v1/readings" -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+  -d "{\"readings\":[{\"register_id\":\"$register\",\"read_at\":\"2025-03-01T00:00:00Z\",\"value\":\"1300\"}]}"
+expect "$res" 200 "API: Stände"
+printf '%s' "$res" | grep -q '"status":"stored"' || { echo "API: Stand nicht gespeichert" >&2; exit 1; }
+http "$base/api/v1/meters"
+expect "$res" 401 "API ohne Token"
+cookie="$saved_cookie"
+echo "REST-API"
+
+# mit compose.mail.yaml: Einladung per E-Mail genau einmal in Mailpit, auch
+# mit mehreren Instanzen (Leader-Lock und Versandprotokoll)
+if printf '%s\n' "$@" | grep -qx 'compose.mail.yaml'; then
+  http "$base/settings/invitations" \
+    --data-urlencode "_csrf=$csrf" -d role=member --data-urlencode "email=gast@example.org"
+  expect "$res" 200 "Einladung"
+  total=""
+  for i in $(seq 1 30); do
+    http "http://mailpit:8025/api/v1/messages"
+    total=$(printf '%s' "$res" | grep -o '"total":[0-9]*' | head -1 | cut -d: -f2)
+    if [ "${total:-0}" -ge 1 ]; then
+      break
+    fi
+    sleep 2
+  done
+  [ "${total:-0}" -ge 1 ] || { echo "keine E-Mail in Mailpit" >&2; exit 1; }
+  # weitere Takte abwarten; eine zweite Instanz darf nicht erneut senden
+  sleep 15
+  http "http://mailpit:8025/api/v1/messages"
+  total=$(printf '%s' "$res" | grep -o '"total":[0-9]*' | head -1 | cut -d: -f2)
+  [ "$total" = "1" ] || { echo "E-Mails in Mailpit: $total statt 1" >&2; exit 1; }
+  echo "E-Mail genau einmal"
+fi
+
+# mit compose.replicas.yaml: genau eine Instanz ist Leader
+if printf '%s\n' "$@" | grep -qx 'compose.replicas.yaml'; then
+  leaders=0
+  for n in 1 2; do
+    http "http://${project}-zaehler-$n:9090/metrics"
+    expect "$res" 200 "Metriken Instanz $n"
+    value=$(printf '%s' "$res" | sed -n 's/^zaehler_leader \([0-9.]*\)$/\1/p' | head -1)
+    if [ "$value" = "1" ]; then
+      leaders=$((leaders + 1))
+    fi
+  done
+  [ "$leaders" = "1" ] || { echo "Leader: $leaders statt 1" >&2; exit 1; }
+  echo "genau ein Leader"
+fi
 
 # mit compose.otel.yaml: Traces kommen im Collector an
 if printf '%s\n' "$@" | grep -qx 'compose.otel.yaml'; then

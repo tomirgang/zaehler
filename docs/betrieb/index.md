@@ -7,5 +7,6 @@ konfiguration
 docker-compose
 kubernetes
 observability
+api
 backup
 ```

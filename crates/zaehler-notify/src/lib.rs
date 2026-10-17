@@ -61,6 +61,10 @@ pub struct SmtpConfig {
     pub username: Option<String>,
     pub password: Option<String>,
     pub from: String,
+    /// `security = none` auch mit einem anderen Host als localhost, ohne
+    /// Zugangsdaten; nur für Entwicklungs-Mailserver wie Mailpit
+    #[serde(default)]
+    pub allow_insecure: bool,
 }
 
 impl fmt::Debug for SmtpConfig {
@@ -72,6 +76,7 @@ impl fmt::Debug for SmtpConfig {
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "***"))
             .field("from", &self.from)
+            .field("allow_insecure", &self.allow_insecure)
             .finish()
     }
 }
@@ -89,10 +94,17 @@ impl SmtpConfig {
         if self.from.parse::<Mailbox>().is_err() {
             return Err("notify.smtp.from ist keine gültige Adresse".into());
         }
-        if self.security == Security::None
-            && !matches!(self.host.as_str(), "localhost" | "127.0.0.1" | "::1")
-        {
-            return Err("notify.smtp.security = none ist nur mit host = localhost zulässig".into());
+        let local = matches!(self.host.as_str(), "localhost" | "127.0.0.1" | "::1");
+        if self.security == Security::None && !local {
+            if !self.allow_insecure {
+                return Err(
+                    "notify.smtp.security = none ist nur mit host = localhost oder notify.smtp.allow_insecure zulässig"
+                        .into(),
+                );
+            }
+            if self.username.is_some() {
+                return Err("notify.smtp.allow_insecure ist nur ohne Zugangsdaten zulässig".into());
+            }
         }
         if self.username.is_some() != self.password.is_some() {
             return Err("notify.smtp.username und notify.smtp.password nur gemeinsam".into());
@@ -552,12 +564,31 @@ mod tests {
             username: Some("z".into()),
             password: Some("geheim".into()),
             from: "zaehler@example.test".into(),
+            allow_insecure: false,
         };
         assert!(cfg.validate().is_ok());
         assert!(!format!("{cfg:?}").contains("geheim"));
         assert!(SmtpNotifier::new(&cfg).is_ok());
         cfg.security = Security::None;
         assert!(cfg.validate().is_err(), "unverschlüsselt nur lokal");
+        cfg.allow_insecure = true;
+        assert!(
+            cfg.validate().is_err(),
+            "ausdrücklich, aber nie mit Zugangsdaten"
+        );
+        let mut dev = SmtpConfig {
+            username: None,
+            password: None,
+            host: "mailpit".into(),
+            ..cfg.clone()
+        };
+        assert!(
+            dev.validate().is_ok(),
+            "Entwicklungs-Mailserver im Compose-Netz"
+        );
+        dev.allow_insecure = false;
+        assert!(dev.validate().is_err());
+        cfg.allow_insecure = false;
         cfg.host = "localhost".into();
         assert!(cfg.validate().is_ok());
         cfg.password = None;
@@ -582,6 +613,7 @@ mod tests {
             username: None,
             password: None,
             from: "zaehler@example.test".into(),
+            allow_insecure: false,
         };
         SmtpNotifier::new(&cfg)
             .unwrap()

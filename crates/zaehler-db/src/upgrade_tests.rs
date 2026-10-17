@@ -8,11 +8,12 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use zaehler_app::{
     backup::{
-        AcquisitionRecord, AdjustmentRecord, AssetCostRecord, BackupData, ChargingSessionRecord,
-        ConsumptionProfileRecord, ContractRecord, CostPositionRecord, DeviceRecord, DocumentRecord,
-        DraftRecord, HouseholdRecord, InstallmentRecord, InvitationRecord, MembershipRecord,
-        MeterRecord, PriceComponentRecord, PvSystemMeterRecord, PvSystemRecord, ReadingRecord,
-        RegisterRecord, RevisionRecord, SettlementRecord, UserRecord, VehicleRecord,
+        AcquisitionRecord, AdjustmentRecord, ApiTokenRecord, AssetCostRecord, BackupData,
+        ChargingSessionRecord, ConsumptionProfileRecord, ContractRecord, CostPositionRecord,
+        DeviceRecord, DocumentRecord, DraftRecord, HouseholdRecord, InstallmentRecord,
+        InvitationRecord, MembershipRecord, MeterRecord, PriceComponentRecord, PvSystemMeterRecord,
+        PvSystemRecord, ReadingRecord, RegisterRecord, RevisionRecord, SettlementRecord,
+        UserRecord, VehicleRecord,
     },
     port::BackupRepository,
 };
@@ -246,6 +247,7 @@ fn expected_core() -> BackupData {
             created_by: Some(id(1)),
             created_at: at(2, 7),
             updated_at: None,
+            api_token_id: None,
         }],
         ..BackupData::default()
     }
@@ -373,6 +375,7 @@ pub(crate) fn fixture() -> BackupData {
         created_by: None,
         created_at: at(6, 2),
         updated_at: Some(at(7, 3)),
+        api_token_id: None,
     });
     data.revisions.push(RevisionRecord {
         id: id(19),
@@ -439,6 +442,7 @@ pub(crate) fn fixture() -> BackupData {
     contracts_fixture(&mut data);
     vehicles_fixture(&mut data);
     pv_fixture(&mut data);
+    api_fixture(&mut data);
     data
 }
 
@@ -721,5 +725,38 @@ fn pv_fixture(data: &mut BackupData) {
         recurrence_until: None,
         document_id: None,
         note: Some("Anlage mit Speicher".into()),
+    });
+}
+
+/// API-Token mit einer automatisch gelieferten Ablesung (ab
+/// `m20261019_000015_api`).
+fn api_fixture(data: &mut BackupData) {
+    data.api_tokens.push(ApiTokenRecord {
+        id: id(63),
+        household_id: id(2),
+        user_id: id(1),
+        name: "Home Assistant".into(),
+        role: "member".into(),
+        token_hash: "cd".repeat(32),
+        prefix: "zt_AbCdE".into(),
+        created_at: at(3, 2),
+        expires_at: None,
+        revoked_at: Some(at(9, 0)),
+        last_used_at: Some(at(8, 30)),
+    });
+    data.readings.push(ReadingRecord {
+        id: id(64),
+        register_id: id(5),
+        device_id: id(14),
+        read_at: at(8, 23),
+        value_milli: 26_600_125,
+        source: "api".into(),
+        photo_key: None,
+        ai_confidence: None,
+        note: None,
+        created_by: Some(id(1)),
+        created_at: at(8, 23),
+        updated_at: None,
+        api_token_id: Some(id(63)),
     });
 }

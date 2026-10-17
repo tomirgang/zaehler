@@ -345,6 +345,10 @@ pub fn remap_household(
     }
     data.users.clear();
     data.invitations.clear();
+    data.api_tokens.clear();
+    for r in &mut data.readings {
+        r.api_token_id = None;
+    }
     data.notification_settings.clear();
     data.memberships = vec![MembershipRecord {
         household_id: new_household,

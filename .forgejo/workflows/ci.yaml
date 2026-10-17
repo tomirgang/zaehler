@@ -101,6 +101,33 @@ jobs:
       - uses: https://code.forgejo.org/actions/checkout@v4
       - run: deploy/smoke-test.sh
       - run: deploy/smoke-test.sh compose.postgres.yaml compose.s3.yaml compose.otel.yaml
+      # zwei Instanzen gegen dieselbe Datenbank: genau ein Leader, eine E-Mail
+      # @test SPEC_OPS_REPLICAS
+      - run: deploy/smoke-test.sh compose.postgres.yaml compose.s3.yaml compose.mail.yaml compose.replicas.yaml
+
+  # Barrierefreiheit aller Seiten mit axe-core (WCAG 2.2 AA); Verstöße
+  # serious/critical, CSP-Verstöße und nicht gezeichnete Diagramme brechen ab
+  # @test SPEC_A11Y
+  a11y:
+    needs: [rust]
+    runs-on: docker
+    container:
+      image: catthehacker/ubuntu:act-latest
+    env:
+      COMPOSE_APP_ENV_FILE: /dev/null
+      COMPOSE_HTTP_PORT: "18081"
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+      - run: docker compose --env-file /dev/null -p a11y up -d --build --wait
+      - name: axe-core über Playwright im Compose-Netz
+        run: |
+          id=$(docker create --network a11y_default -e ZAEHLER_URL=http://zaehler:8080 -w /work \
+            mcr.microsoft.com/playwright:v1.63.0-noble \
+            sh -c "npm ci --no-audit --no-fund && node a11y.mjs")
+          docker cp tests/browser/. "$id:/work"
+          docker start -a "$id"
+      - if: always()
+        run: docker compose --env-file /dev/null -p a11y down -v
 
   docs:
     runs-on: docker
@@ -141,8 +168,13 @@ jobs:
       - run: helm lint deploy/helm/zaehler --set "$OIDC"
       - run: helm lint deploy/helm/zaehler --set "$OIDC" --set database.type=sqlite
       - run: helm lint deploy/helm/zaehler --set "$OIDC" --set storage.kind=s3,replicaCount=2
+      - run: >-
+          helm lint deploy/helm/zaehler --set "$OIDC" --set storage.kind=s3,replicaCount=2
+          --set database.type=existing,database.existing.secretName=pg,database.lockUrl.secretName=pg-direct
+          --set notify.smtp.enabled=true,notify.smtp.host=mail.example.com,notify.smtp.existingSecret=smtp
       # ohne OIDC muss das Chart die Installation verweigern
       - run: "! helm template t deploy/helm/zaehler"
+      # @test SPEC_OPS_BACKUP_CNPG
       - run: >-
           helm lint deploy/helm/zaehler --set "$OIDC"
           --set otel.endpoint=http://otel-collector:4318,session.cookieSecure=true

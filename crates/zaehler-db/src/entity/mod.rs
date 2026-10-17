@@ -2,6 +2,7 @@
 
 pub mod adjustment;
 pub mod ai_draft;
+pub mod api_token;
 pub mod asset_cost;
 pub mod charging_session;
 pub mod contract;

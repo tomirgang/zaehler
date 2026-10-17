@@ -1,0 +1,14 @@
+{
+  "name": "zaehler-browser",
+  "private": true,
+  "description": "Browser-Abläufe mit Playwright: Barrierefreiheit (SPEC_A11Y) und Anmeldung über Keycloak",
+  "type": "module",
+  "scripts": {
+    "check": "node a11y.mjs",
+    "keycloak": "node keycloak.mjs"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "playwright": "1.63.0"
+  }
+}

@@ -44,16 +44,41 @@ fn file_name(household: &str, date: chrono::NaiveDate) -> String {
     format!("zaehler-{slug}-{}.zip", date.format("%Y-%m-%d"))
 }
 
-/// `GET /settings/export`: Archiv des aktiven Haushalts (nur Owner).
-// @impl SPEC_BACKUP_HOUSEHOLD
-pub async fn export(State(state): State<WebState>, ctx: Ctx) -> Result<Response, Response> {
+/// Format des Exports: `json` (Haushaltsarchiv, Standard) oder `csv`.
+#[derive(Debug, serde::Deserialize)]
+pub struct ExportQuery {
+    pub format: Option<String>,
+}
+
+/// `GET /settings/export?format=json|csv`: Archiv bzw. CSV-Export des
+/// aktiven Haushalts (nur Owner).
+// @impl SPEC_BACKUP_HOUSEHOLD, SPEC_IMP_EXPORT_CSV
+pub async fn export(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    axum::extract::Query(q): axum::extract::Query<ExportQuery>,
+) -> Result<Response, Response> {
     let file = tempfile::tempfile().map_err(|e| ctx.fail(internal(e)))?;
-    let (mut file, _) = state
-        .uc
-        .export_household
-        .execute(&ctx.tenant, file)
-        .await
-        .map_err(|e| ctx.fail(e))?;
+    let csv = match q.format.as_deref() {
+        None | Some("json") => false,
+        Some("csv") => true,
+        Some(_) => return Err(ctx.fail(AppError::NotFound)),
+    };
+    let mut file = if csv {
+        state
+            .uc
+            .export_household_csv
+            .execute(&ctx.tenant, file)
+            .await
+    } else {
+        state
+            .uc
+            .export_household
+            .execute(&ctx.tenant, file)
+            .await
+            .map(|(f, _)| f)
+    }
+    .map_err(|e| ctx.fail(e))?;
     let len = file
         .seek(SeekFrom::End(0))
         .and_then(|len| file.seek(SeekFrom::Start(0)).map(|_| len))
@@ -72,7 +97,14 @@ pub async fn export(State(state): State<WebState>, ctx: Ctx) -> Result<Response,
             (header::CONTENT_LENGTH, len.to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", file_name(name, today)),
+                format!(
+                    "attachment; filename=\"{}\"",
+                    if csv {
+                        file_name(name, today).replace(".zip", "-csv.zip")
+                    } else {
+                        file_name(name, today)
+                    }
+                ),
             ),
             (header::CACHE_CONTROL, "private, no-store".to_owned()),
         ],

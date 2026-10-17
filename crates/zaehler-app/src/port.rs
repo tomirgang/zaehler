@@ -13,19 +13,20 @@ use crate::{
     backup::BackupData,
     error::PortError,
     ids::{
-        AssetCostId, BlobKey, ChargingId, ContractId, DeviceId, DocumentId, DraftId, HouseholdId,
-        InvitationId, MeterId, OutboxId, PositionId, ProfileId, PvSystemId, ReadingId, RegisterId,
-        UserId,
+        ApiTokenId, AssetCostId, BlobKey, ChargingId, ContractId, DeviceId, DocumentId, DraftId,
+        HouseholdId, InvitationId, MeterId, OutboxId, PositionId, ProfileId, PvSystemId, ReadingId,
+        RegisterId, UserId,
     },
     model::{
-        AdjustmentRow, AssetCost, AssetRef, ChargingSession, Contract, ContractData, ContractEntry,
-        DeviceData, Document, DocumentAnalysis, DocumentStatus, DocumentType, Draft, DraftAnalysis,
-        DraftOutcome, Household, HouseholdData, HouseholdSummary, Identity, InstallmentRow,
-        Invitation, InvoiceExtraction, JobRun, Member, MeterAggregate, MeterData, MeterSummary,
-        NewInvitation, Notification, NotificationKind, NotificationLogEntry, NotificationSettings,
-        OutboxEntry, OutboxEvent, OutboxResult, PriceComponentRow, ProfileRow, PvSystem, Reading,
-        ReadingUpdate, ReceiptExtraction, Recipient, Recognition, RegisterData, Revision,
-        SettlementRow, User, Vehicle, VehicleData,
+        AdjustmentRow, ApiToken, AssetCost, AssetRef, ChargingSession, Contract, ContractData,
+        ContractEntry, DailyOutcome, DeviceData, Document, DocumentAnalysis, DocumentStatus,
+        DocumentType, Draft, DraftAnalysis, DraftOutcome, Household, HouseholdData,
+        HouseholdSummary, Identity, InstallmentRow, Invitation, InvoiceExtraction, JobRun, Member,
+        MeterAggregate, MeterData, MeterSummary, NewApiToken, NewInvitation, Notification,
+        NotificationKind, NotificationLogEntry, NotificationSettings, OutboxEntry, OutboxEvent,
+        OutboxResult, PriceComponentRow, ProfileRow, PvSystem, Reading, ReadingUpdate,
+        ReceiptExtraction, Recipient, Recognition, RegisterData, Revision, SettlementRow, User,
+        Vehicle, VehicleData,
     },
     tenant::{Role, Tenant},
 };
@@ -58,6 +59,7 @@ pub trait UnitOfWork: Send {
     fn vehicles(&mut self) -> &mut dyn VehicleRepository;
     fn asset_costs(&mut self) -> &mut dyn AssetCostRepository;
     fn pv(&mut self) -> &mut dyn PvRepository;
+    fn api_tokens(&mut self) -> &mut dyn ApiTokenRepository;
     async fn commit(self: Box<Self>) -> PortResult<()>;
 }
 
@@ -373,6 +375,36 @@ pub trait ReadingRepository: Send {
     /// Ändert Zeitpunkt, Wert und Notiz; `PortError::NotFound` für fremde
     /// IDs, `PortError::Conflict` bei gleichem (Register, Gerät, Zeitpunkt).
     async fn update(&mut self, t: &Tenant, id: ReadingId, u: &ReadingUpdate) -> PortResult<()>;
+    /// Höchstens eine Ablesung je Register, Token und Tag `[from, until)`:
+    /// ohne vorhandene wird `r` mit dem Token eingefügt, eine frühere wird
+    /// durch `r` ersetzt (Zeitpunkt, Gerät, Wert; ID bleibt), sonst bleibt
+    /// alles unverändert. Ablesungen ohne dieses Token zählen nicht
+    /// (SPEC_API_DAILY_READINGS). `PortError::Conflict` bei gleichem
+    /// (Register, Gerät, Zeitpunkt) mit einer anderen Ablesung.
+    async fn upsert_daily(
+        &mut self,
+        t: &Tenant,
+        r: &Reading,
+        token: ApiTokenId,
+        from: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> PortResult<DailyOutcome>;
+}
+
+/// Persönliche API-Tokens (SPEC_API_AUTH).
+// @impl SPEC_API_AUTH
+#[async_trait]
+pub trait ApiTokenRepository: Send {
+    /// Token des Nutzers im Haushalt des Tenants.
+    async fn create(&mut self, t: &Tenant, tok: &NewApiToken) -> PortResult<()>;
+    /// Token zum Hash, ohne Tenant (Authentifizierung).
+    async fn find_by_hash(&mut self, hash: &[u8; 32]) -> PortResult<Option<ApiToken>>;
+    /// Alle Tokens des Haushalts, neueste zuerst.
+    async fn list(&mut self, t: &Tenant) -> PortResult<Vec<ApiToken>>;
+    /// `PortError::NotFound` für fremde oder bereits widerrufene Tokens.
+    async fn revoke(&mut self, t: &Tenant, id: ApiTokenId, at: DateTime<Utc>) -> PortResult<()>;
+    /// Setzt `last_used_at`, ohne Tenant (Authentifizierung).
+    async fn touch(&mut self, id: ApiTokenId, at: DateTime<Utc>) -> PortResult<()>;
 }
 
 /// Revisionen von Ablesungen; nur anfügen, nie ändern (SPEC_RDG_HISTORY).

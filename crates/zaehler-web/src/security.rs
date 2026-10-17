@@ -19,6 +19,7 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-
 /// Setzt die Sicherheitsheader auf jede Antwort.
 // @impl SPEC_SEC_HEADERS
 pub async fn security_headers(req: Request, next: Next) -> Response {
+    let api = req.uri().path().starts_with("/api/");
     let mut res = next.run(req).await;
     let h = res.headers_mut();
     // Eine strengere Richtlinie des Handlers bleibt erhalten (Dokumente mit
@@ -41,7 +42,10 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
     let html = h
         .get(header::CONTENT_TYPE)
         .is_some_and(|v| v.as_bytes().starts_with(b"text/html"));
-    if html && !h.contains_key(header::CACHE_CONTROL) {
+    // REST-API: Haushaltsdaten nie zwischenspeichern (SPEC_API_REST)
+    if api {
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    } else if html && !h.contains_key(header::CACHE_CONTROL) {
         h.insert(
             header::CACHE_CONTROL,
             HeaderValue::from_static("private, no-cache"),

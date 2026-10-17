@@ -98,7 +98,7 @@ des Namens wird beim Anlegen vergeben.
 | `…_000012_documents` | WP_V1_10 | `documents` (neu, mit Status, Modell und Erkennungsergebnis als JSON); `ai_drafts` bleibt unverändert |
 | `…_000013_vehicles` | WP_V1_11, WP_V1_12 | `vehicles`, `vehicle_consumption_profiles`, `vehicle_acquisitions`, `charging_sessions`, `asset_costs` (neu); als `m20261018_000013_vehicles`, `asset_costs.asset_id` und `document_id` ohne Fremdschlüssel |
 | `…_000014_pv` | WP_V1_15 | `pv_systems`, `pv_system_meters` (neu); als `m20261018_000014_pv`, ohne Teilindex (Eindeutigkeit der Rollen `generation` und `battery` im Anwendungsfall) |
-| `…_000015_api` | WP_V1_20 | `api_tokens` (neu); `readings.api_token_id` |
+| `…_000015_api` | WP_V1_20 | `api_tokens` (neu); `readings.api_token_id`; als `m20261019_000015_api`, `api_token_id` ohne Fremdschlüssel, Index über Token, Register und Zeitpunkt |
 
 Abweichungen vom geplanten Modell in {doc}`../architektur/datenmodell`:
 
@@ -444,6 +444,9 @@ Kategorie (`permanent`, `transient`, `timeout`, `tls`, `connection` mit
 Statuscode) weitergegeben, weil Serverantworten Adressen enthalten können;
 Logs nennen nur die Nutzer-ID. Die Einstellungen sind im
 Installationsarchiv enthalten, Versandprotokoll und Outbox nicht.
+Unverschlüsselt (`security = none`) ist der Versand nur an `localhost` oder
+mit `notify.smtp.allow_insecure = true` ohne Zugangsdaten zulässig, etwa an
+Mailpit im Compose-Netz.
 ```
 
 ```{spec} Ablese-Erinnerungen
@@ -777,7 +780,7 @@ Zuordnung und Darstellung in {need}`SPEC_PV_ASSIGNMENT`,
 
 ```{spec} REST-API v1
 :id: SPEC_API_REST
-:status: draft
+:status: implemented
 :satisfies: REQ_API_001, REQ_API_003
 :links: ADR_023, SPEC_API_AUTH, SPEC_API_DAILY_READINGS
 
@@ -799,13 +802,22 @@ Fehler als `application/problem+json` (RFC 9457) mit `type`, `title`,
 `status`, bei Validierung `errors` je Feld (Fehlercode, nicht übersetzt).
 Body-Limit 1 MiB, höchstens 1000 Stände je Anfrage. Die Versionierung erfolgt
 über den Pfad; Änderungen innerhalb von v1 sind nur additiv.
+
+Umsetzung: Modul `zaehler-web/src/api` mit `utoipa` 6 und `utoipa-axum`
+0.3; die Beschreibung entsteht aus den Handlern. Problem-Details mit
+zusätzlichem `code` (fachlicher Fehlercode), `warnings` bei
+Plausibilitätswarnungen und `reference` bei internen Fehlern; 401 mit
+`WWW-Authenticate: Bearer`. Antworten mit `Cache-Control: no-store`.
+`next_cursor` ist undurchsichtig (Base64URL aus Zeitpunkt und ID). Einträge
+von `POST /api/v1/readings` ohne gültiges Ziel erhalten `api.target_invalid`.
+Bedienung und Beispiele in {doc}`../betrieb/api`.
 ```
 
 ### Export
 
 ```{spec} Export je Entität als CSV und JSON
 :id: SPEC_IMP_EXPORT_CSV
-:status: draft
+:status: implemented
 :satisfies: REQ_IMP_002
 :links: SPEC_BACKUP_HOUSEHOLD
 
@@ -819,6 +831,14 @@ Trenner, Dezimalpunkt, ISO-8601, Kopfzeile mit Spaltennamen, IDs als UUID.
 `format=json` ist das vorhandene Haushaltsarchiv
 ({need}`SPEC_BACKUP_HOUSEHOLD`). Fotos und Dokumente sind nur im
 Haushaltsarchiv enthalten.
+
+Umsetzung: `ExportHouseholdCsv` (Owner) schreibt jede Tabelle des
+Haushaltsarchivs, zusätzlich `households.csv`, `memberships.csv`,
+`ai_drafts.csv`, `documents.csv`, `vehicle_consumption_profiles.csv` und
+`vehicle_acquisitions.csv`. Spalten in Feldreihenfolge der Archiv-Datensätze;
+Festkomma (`*_milli`, `*_micro`) als Dezimalzahl ohne Suffix. Texte, die
+eine Tabellenkalkulation als Formel ausführen würde, erhalten ein führendes
+`'`. Die Einstellungsseite bietet beide Formate zur Wahl.
 ```
 
 ### Betrieb und Qualität
@@ -835,11 +855,16 @@ Standard täglich) und ein Beispiel für Barman Cloud gegen S3 in den Values.
 `bootstrap.recovery` in einen neuen Cluster und für SQLite `VACUUM INTO`
 sowie Litestream; beide Wege sind einmal in einem Test-Cluster bzw. lokal
 durchgespielt und das Ergebnis dokumentiert.
+
+Stand: Values, `ScheduledBackup` und die Beschreibung der Wiederherstellung
+sind umgesetzt; SQLite per `VACUUM INTO` ist durchgespielt. Die
+Wiederherstellung im Test-Cluster und Litestream sind nicht durchgespielt,
+daher bleibt der Status `draft`.
 ```
 
 ```{spec} Barrierefreiheit
 :id: SPEC_A11Y
-:status: draft
+:status: implemented
 :satisfies: REQ_NFR_007
 
 Prüfung aller Seiten in `de` mit axe-core (Regelsatz WCAG 2.2 AA) über
@@ -848,6 +873,14 @@ Verstößen der Stufen `serious` und `critical` fehl. Manuell: Bedienung aller
 Abläufe nur mit Tastatur, sichtbarer Fokus, Bildschirmleser-Probe (Orca) für
 Erfassung und Auswertung. Diagramme haben eine Tabellenalternative
 ({need}`SPEC_ANA_CHARTS`), Ampeln zusätzlich Text.
+
+Umsetzung: `tests/browser/a11y.mjs` (axe-core 4.13, Playwright 1.63) legt
+Beispieldaten über die Formulare an und besucht jede Seite je Routenmuster
+einmal; er prüft zusätzlich CSP-Verstöße, Skriptfehler und gezeichnete
+Diagramme. CI-Job `a11y` gegen `docker compose` (SQLite) mit dem
+Playwright-Image. Waagerecht scrollende Tabellen erhalten `tabindex="0"`.
+Die manuelle Prüfung mit Tastatur und Bildschirmleser ist nicht erfolgt
+({doc}`v1-abnahme`).
 ```
 
 ## HTTP-Schnittstelle: neue Routen

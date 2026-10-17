@@ -34,6 +34,34 @@
       {% endfor %}
     </tbody>
   </table>
+  {% if !drafts.is_empty() %}
+  <fieldset>
+    <legend>{{ ctx.lang.t("pv-bulk-photos") }}</legend>
+    <p class="hint">{{ ctx.lang.t("pv-bulk-photos-hint") }}</p>
+    <ul class="cards">
+      {% for d in drafts %}
+      <li class="card">
+        <img src="/capture/{{ d.id }}/photo" alt="{{ ctx.lang.t("pv-bulk-photo-alt") }}" width="160" loading="lazy">
+        {% if d.ready %}
+        {% if !d.suggestion.is_empty() %}<p class="muted">{{ ctx.lang.t("pv-bulk-suggestion") }}: {{ d.suggestion }}</p>{% endif %}
+        <div class="field">
+          <label for="{{ d.key }}">{{ ctx.lang.t("capture-meter") }}</label>
+          <select id="{{ d.key }}" name="{{ d.key }}">
+            <option value="">{{ ctx.lang.t("pv-bulk-photo-unused") }}</option>
+            {% for (value, label) in meters %}
+            <option value="{{ value }}"{% if self.same(value, d.selected) %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% else %}
+        <p class="muted" role="status">{{ ctx.lang.t("pv-bulk-photo-analysing") }}</p>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    <p><a href="/pv/grid/{{ id }}/readings">{{ ctx.lang.t("pv-bulk-reload") }}</a></p>
+  </fieldset>
+  {% endif %}
   <div class="field">
     <label for="note">{{ ctx.lang.t("reading-note") }}</label>
     <input id="note" name="note" value="{{ self.val("note") }}" maxlength="500">
@@ -50,4 +78,18 @@
     <a href="/pv/grid/{{ id }}">{{ ctx.lang.t("action-cancel") }}</a>
   </div>
 </form>
+
+<section class="card" aria-labelledby="bulk-upload-title">
+  <h2 id="bulk-upload-title">{{ ctx.lang.t("pv-bulk-upload") }}</h2>
+  <form method="post" action="/capture" enctype="multipart/form-data" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <input type="hidden" name="grid" value="{{ id }}">
+    <div class="field">
+      <label for="bulk-photos">{{ ctx.lang.t("capture-photo") }}</label>
+      <input id="bulk-photos" name="photo" type="file" accept="image/jpeg,image/png,image/webp" multiple required>
+      <p class="hint">{{ ctx.lang.t("pv-bulk-upload-hint") }}</p>
+    </div>
+    <button type="submit" class="secondary">{{ ctx.lang.t("capture-upload") }}</button>
+  </form>
+</section>
 {% endblock %}

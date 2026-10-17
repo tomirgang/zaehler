@@ -17,6 +17,7 @@ mod m20261017_000011_tariffs;
 mod m20261017_000012_documents;
 mod m20261018_000013_vehicles;
 mod m20261018_000014_pv;
+mod m20261019_000015_api;
 
 pub struct Migrator;
 
@@ -38,6 +39,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261017_000012_documents::Migration),
             Box::new(m20261018_000013_vehicles::Migration),
             Box::new(m20261018_000014_pv::Migration),
+            Box::new(m20261019_000015_api::Migration),
         ]
     }
 }

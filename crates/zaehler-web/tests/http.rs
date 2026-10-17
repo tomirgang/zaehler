@@ -679,9 +679,28 @@ async fn household_archive_download_and_import_as_new_household() {
     let csrf = anna.csrf().await;
     create_meter(&mut anna, &csrf, "Strom").await;
     let settings = text(anna.get("/settings").await).await;
-    assert!(settings.contains("href=\"/settings/export\" hx-boost=\"false\" download"));
+    assert!(settings.contains("action=\"/settings/export\""));
+    assert!(settings.contains("name=\"format\" value=\"csv\""));
 
-    let res = anna.get("/settings/export").await;
+    // CSV-Export (SPEC_IMP_EXPORT_CSV)
+    let res = anna.get("/settings/export?format=csv").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let disposition = res.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(disposition.ends_with("-csv.zip\""), "{disposition}");
+    let csv = to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .to_vec();
+    assert!(csv.starts_with(b"PK"));
+    assert_eq!(
+        anna.get("/settings/export?format=xml").await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let res = anna.get("/settings/export?format=json").await;
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(res.headers()[header::CONTENT_TYPE], "application/zip");
     let disposition = res.headers()[header::CONTENT_DISPOSITION]
@@ -2635,4 +2654,370 @@ async fn pv_pages_bulk_capture_and_charts() {
         bob.get(&format!("/pv/grid/{grid}")).await.status(),
         StatusCode::NOT_FOUND
     );
+}
+
+/// JSON-Anfrage mit optionalem Bearer-Token.
+async fn api(
+    c: &mut Client,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Option<serde_json::Value>,
+) -> (StatusCode, serde_json::Value, Response) {
+    let mut req = Request::builder().method(method).uri(path);
+    if let Some(t) = token {
+        req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
+    }
+    let req = match body {
+        Some(b) => req
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(b.to_string()))
+            .unwrap(),
+        None => req.body(Body::empty()).unwrap(),
+    };
+    let res = c.send(req).await;
+    let status = res.status();
+    let headers = res.headers().clone();
+    let bytes = to_bytes(res.into_body(), 1 << 22).await.unwrap();
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    let mut echo = Response::new(Body::empty());
+    *echo.headers_mut() = headers;
+    (status, json, echo)
+}
+
+/// Erzeugt über die Einstellungsseite ein Token und liest es aus der Antwort.
+async fn create_token(c: &mut Client, csrf: &str, role: &str) -> String {
+    let res = c
+        .post(
+            "/settings/tokens",
+            &[
+                ("_csrf", csrf),
+                ("name", "Home Assistant"),
+                ("role", role),
+                ("expires_on", ""),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = text(res).await;
+    let start = html.find("value=\"zt_").expect("Token einmal angezeigt") + 7;
+    html[start..start + 46].to_owned()
+}
+
+// @test SPEC_API_AUTH, SPEC_API_REST, SPEC_API_DAILY_READINGS
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
+async fn rest_api_with_bearer_tokens() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let meter = create_meter(&mut c, &csrf, "Strom API").await;
+    assert!(
+        text(c.get("/settings").await)
+            .await
+            .contains("/settings/tokens")
+    );
+    let token = create_token(&mut c, &csrf, "member").await;
+    assert!(token.starts_with("zt_"));
+    let page = text(c.get("/settings/tokens").await).await;
+    assert!(!page.contains(&token), "Token erscheint nur einmal");
+    assert!(page.contains(&token[..8]));
+
+    // ohne Bearer, Cookie allein genügt nicht
+    let (status, body, res) = api(&mut c, "GET", "/api/v1/meters", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["status"], 401);
+    assert_eq!(res.headers()[header::WWW_AUTHENTICATE], "Bearer");
+    assert_eq!(
+        res.headers()[header::CONTENT_TYPE],
+        "application/problem+json"
+    );
+    let (status, ..) = api(&mut c, "GET", "/api/v1/meters", Some("zt_falsch"), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Lesen
+    let (status, meters, _) = api(&mut c, "GET", "/api/v1/meters", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{meters}");
+    assert_eq!(meters[0]["id"], meter.as_str());
+    assert_eq!(meters[0]["registers"][0]["code"], "main");
+    assert_eq!(meters[0]["registers"][0]["last_value"], "1000");
+    let register = meters[0]["registers"][0]["id"].as_str().unwrap().to_owned();
+    let (status, detail, _) = api(
+        &mut c,
+        "GET",
+        &format!("/api/v1/meters/{meter}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["devices"].as_array().unwrap().len(), 1);
+
+    // automatische Stände: zwei an einem Tag ergeben eine Ablesung
+    let ingest = serde_json::json!({ "readings": [
+        { "register_id": register, "read_at": "2026-01-10T06:00:00Z", "value": "1010.5" },
+        { "register_id": register, "read_at": "2026-01-10T18:00:00Z", "value": "1012" },
+        { "serial": "unbekannt", "register": "main", "read_at": "2026-01-10T18:00:00Z", "value": "1" },
+        { "read_at": "2026-01-10T18:00:00Z", "value": "1" }
+    ]});
+    let (status, out, _) = api(
+        &mut c,
+        "POST",
+        "/api/v1/readings",
+        Some(&token),
+        Some(ingest),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let results = out["results"].as_array().unwrap();
+    assert_eq!(results[0]["status"], "stored");
+    assert_eq!(results[1]["status"], "replaced");
+    assert_eq!(results[1]["reading_id"], results[0]["reading_id"]);
+    assert_eq!(results[2]["error"], "api.serial_unknown");
+    assert_eq!(results[3]["error"], "api.target_invalid");
+
+    // Ablesungen seitenweise
+    let path = format!("/api/v1/meters/{meter}/readings?limit=1");
+    let (status, first, _) = api(&mut c, "GET", &path, Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["items"][0]["value"], "1000");
+    let cursor = first["next_cursor"].as_str().unwrap().to_owned();
+    let (_, second, _) = api(
+        &mut c,
+        "GET",
+        &format!("{path}&cursor={cursor}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(second["items"][0]["value"], "1012");
+    assert_eq!(second["items"][0]["source"], "api");
+    assert!(second["next_cursor"].is_null());
+    let (status, ..) = api(
+        &mut c,
+        "GET",
+        &format!("{path}&cursor=kaputt"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Erfassen wie das Formular: Warnung ohne confirm, dann gespeichert
+    let record = |confirm: bool| {
+        serde_json::json!({
+            "read_at": "2026-01-12T08:00:00Z",
+            "values": [{ "register_id": register, "value": "900" }],
+            "confirm": confirm
+        })
+    };
+    let readings = format!("/api/v1/meters/{meter}/readings");
+    let (status, problem, _) =
+        api(&mut c, "POST", &readings, Some(&token), Some(record(false))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+    assert_eq!(problem["warnings"][0]["kind"], "decreasing");
+    let (status, saved, _) = api(&mut c, "POST", &readings, Some(&token), Some(record(true))).await;
+    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    assert_eq!(saved["reading_ids"].as_array().unwrap().len(), 1);
+    let (status, problem, _) = api(
+        &mut c,
+        "POST",
+        &readings,
+        Some(&token),
+        Some(serde_json::json!({ "values": "kein Array" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(problem["code"], "body.invalid");
+
+    // Auswertung, Kosten, Verträge
+    for p in [
+        format!("/api/v1/meters/{meter}/analysis"),
+        format!("/api/v1/meters/{meter}/costs"),
+        "/api/v1/contracts".to_owned(),
+    ] {
+        let (status, body, _) = api(&mut c, "GET", &p, Some(&token), None).await;
+        assert_eq!(status, StatusCode::OK, "{p}: {body}");
+    }
+    let (status, body, _) = api(
+        &mut c,
+        "GET",
+        &format!("/api/v1/contracts/{}", uuid::Uuid::now_v7()),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body["code"].is_null());
+
+    // Viewer-Token darf nicht schreiben
+    let viewer = create_token(&mut c, &csrf, "viewer").await;
+    let (status, ..) = api(&mut c, "POST", &readings, Some(&viewer), Some(record(true))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // fremder Haushalt sieht die Messstelle nicht
+    let mut bea = Client::new(&app);
+    bea.login("bea").await;
+    let bea_csrf = bea.csrf().await;
+    let beas = create_token(&mut bea, &bea_csrf, "owner").await;
+    let (status, ..) = api(
+        &mut bea,
+        "GET",
+        &format!("/api/v1/meters/{meter}"),
+        Some(&beas),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, list, _) = api(&mut bea, "GET", "/api/v1/meters", Some(&beas), None).await;
+    assert_eq!(list, serde_json::json!([]));
+
+    // Widerruf des neuesten Tokens (Viewer); das andere gilt weiter
+    let page = text(c.get("/settings/tokens").await).await;
+    let start = page.find("/settings/tokens/").unwrap() + 17;
+    let id = &page[start..start + 36];
+    let res = c
+        .post(
+            &format!("/settings/tokens/{id}/revoke"),
+            &[("_csrf", &csrf)],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let (status, ..) = api(&mut c, "GET", "/api/v1/meters", Some(&viewer), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, ..) = api(&mut c, "GET", "/api/v1/meters", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // unbekannte Route
+    let (status, body, _) = api(&mut c, "GET", "/api/v1/unbekannt", Some(&token), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "route.unknown");
+}
+
+/// Jeder Pfad der OpenAPI-Beschreibung ist im Router vorhanden und jede
+/// Route des Routers beschrieben.
+// @test SPEC_API_REST
+#[tokio::test]
+async fn openapi_matches_router() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    let (status, doc, _) = api(&mut c, "GET", "/api/v1/openapi.json", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(doc["openapi"].as_str().unwrap().starts_with("3.1"));
+    assert!(doc["components"]["securitySchemes"]["bearer"].is_object());
+    let paths = doc["paths"].as_object().unwrap();
+    let mut documented: Vec<(String, String)> = Vec::new();
+    for (path, item) in paths {
+        for method in item.as_object().unwrap().keys() {
+            documented.push((method.to_uppercase(), path.clone()));
+        }
+    }
+    documented.sort();
+    let expected: Vec<(String, String)> = [
+        ("GET", "/api/v1/contracts"),
+        ("GET", "/api/v1/contracts/{id}"),
+        ("GET", "/api/v1/meters"),
+        ("GET", "/api/v1/meters/{id}"),
+        ("GET", "/api/v1/meters/{id}/analysis"),
+        ("GET", "/api/v1/meters/{id}/costs"),
+        ("GET", "/api/v1/meters/{id}/readings"),
+        ("POST", "/api/v1/meters/{id}/readings"),
+        ("POST", "/api/v1/readings"),
+    ]
+    .iter()
+    .map(|(m, p)| ((*m).to_owned(), (*p).to_owned()))
+    .collect();
+    assert_eq!(documented, expected);
+    // jeder beschriebene Pfad trifft eine Route (401 statt 404 oder 405)
+    for (method, path) in &documented {
+        let concrete = path.replace("{id}", &uuid::Uuid::now_v7().to_string());
+        let (status, body, _) = api(&mut c, method, &concrete, None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
+    }
+    // und die Router-Tabelle des Moduls stimmt mit der Beschreibung überein
+    let (_, api_doc) = zaehler_web::api::router();
+    assert_eq!(api_doc.paths.paths.len(), paths.len());
+}
+
+/// Fotos in der Sammelerfassung: Upload mit Rückkehr zum Formular, Vorschlag,
+/// Zuordnung zur Messstelle und Speichern mit Belegfoto.
+// @test SPEC_PV_BULK_CAPTURE
+#[tokio::test]
+async fn pv_bulk_capture_with_photos() {
+    let app = capture_app(1024 * 1024);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let grid =
+        create_two_register_meter(&mut c, &csrf, "Hausanschluss", ["1.8.0", "2.8.0"], "export")
+            .await
+            .trim_start_matches("/meters/")
+            .to_owned();
+    let pv = create_meter(&mut c, &csrf, "PV Dach").await;
+    let gen_key = format!("gen_{pv}");
+    let fields = vec![
+        ("_csrf", csrf.clone()),
+        ("name", "Dach".to_owned()),
+        ("kind", "surplus".to_owned()),
+        ("kwp", "5".to_owned()),
+        ("commissioned_on", "2026-01-01".to_owned()),
+        ("azimuth", String::new()),
+        ("tilt", String::new()),
+        ("inverter", String::new()),
+        ("battery_kwh", String::new()),
+        ("specific_yield", "950".to_owned()),
+        ("degradation_pct", "0,5".to_owned()),
+        ("alarm_threshold_pct", "50".to_owned()),
+        ("grid", grid.clone()),
+        (gen_key.as_str(), "1".to_owned()),
+    ];
+    let res = post_fields(&mut c, "/pv/new", &fields).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+
+    // Upload mit Hausanschluss: zurück zur Sammelerfassung
+    let (content_type, mut body) = multipart_photos(&csrf, &[&fake_jpeg(64)]);
+    let grid_field = format!(
+        "--zaehler-test-boundary\r\nContent-Disposition: form-data; name=\"grid\"\r\n\r\n{grid}\r\n"
+    );
+    body.splice(0..0, grid_field.into_bytes());
+    let req = Request::post("/capture")
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap();
+    let res = c.send(req).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let form_path = format!("/pv/grid/{grid}/readings");
+    assert_eq!(location(&res), form_path);
+    let mut page = String::new();
+    for _ in 0..500 {
+        page = text(c.get(&form_path).await).await;
+        if !page.contains("Wird erkannt") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let start = page.find("/capture/").expect("Foto in der Sammelerfassung") + 9;
+    let draft = page[start..start + 36].to_owned();
+    assert!(page.contains(&format!("name=\"draft_{draft}\"")), "{page}");
+    assert!(page.contains("Erkannt: 1025"), "Vorschlag angezeigt");
+
+    // Zuordnung zur PV-Messstelle, Wert aus dem Foto
+    let reading_form = text(c.get(&format!("/meters/{pv}/readings/new")).await).await;
+    let register = detail_register_id(&reading_form);
+    let draft_key = format!("draft_{draft}");
+    let value_key = format!("v_{pv}_{register}");
+    let fields = vec![
+        ("_csrf", csrf.clone()),
+        ("at", "2026-01-10T12:00".to_owned()),
+        (value_key.as_str(), "1025,0".to_owned()),
+        ("note", String::new()),
+        (draft_key.as_str(), pv.clone()),
+    ];
+    let res = post_fields(&mut c, &form_path, &fields).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let history = text(c.get(&format!("/meters/{pv}")).await).await;
+    assert!(history.contains("/photo"), "Belegfoto an der Ablesung");
+    let page = text(c.get(&form_path).await).await;
+    assert!(!page.contains(&draft), "Entwurf abgeschlossen");
 }

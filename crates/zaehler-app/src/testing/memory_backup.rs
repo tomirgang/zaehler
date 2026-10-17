@@ -143,6 +143,7 @@ fn export(s: &State) -> BackupData {
                 created_by: r.created_by.map(|u| u.0),
                 created_at: r.read_at,
                 updated_at: None,
+                api_token_id: None,
             })
             .collect(),
         drafts: s
@@ -224,6 +225,7 @@ fn export(s: &State) -> BackupData {
     super::documents_impl::export(s, &mut data);
     super::vehicles_impl::export(s, &mut data);
     super::pv_impl::export(s, &mut data);
+    super::api_impl::export(s, &mut data);
     data
 }
 
@@ -435,7 +437,8 @@ fn import_v1(s: &mut State, d: &BackupData) -> PortResult<()> {
     super::contracts_impl::import(s, d)?;
     super::documents_impl::import(s, d)?;
     super::vehicles_impl::import(s, d)?;
-    super::pv_impl::import(s, d)
+    super::pv_impl::import(s, d)?;
+    super::api_impl::import(s, d)
 }
 
 #[async_trait]
