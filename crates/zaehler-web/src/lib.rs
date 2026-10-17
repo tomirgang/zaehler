@@ -92,9 +92,53 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
                     state.cfg.max_document_bytes.saturating_add(64 * 1024),
                 )),
         )
+        .route("/vehicles", get(pages::vehicles::list))
+        .route(
+            "/vehicles/new",
+            get(pages::vehicles::new_form).post(pages::vehicles::create),
+        )
+        .route("/vehicles/{id}", get(pages::vehicles::detail))
+        .route("/vehicles/{id}/chart.json", get(pages::vehicles::chart))
+        .route(
+            "/vehicles/{id}/edit",
+            get(pages::vehicles::edit_form).post(pages::vehicles::update),
+        )
+        .route(
+            "/vehicles/{id}/charging",
+            post(pages::vehicles::add_charging),
+        )
+        .route(
+            "/vehicles/{id}/charging/{entry}/delete",
+            post(pages::vehicles::delete_charging),
+        )
+        .route(
+            "/vehicles/{id}/profiles",
+            post(pages::vehicles::add_profile),
+        )
+        .route(
+            "/vehicles/{id}/profiles/{entry}/delete",
+            post(pages::vehicles::delete_profile),
+        )
+        .route(
+            "/vehicles/{id}/acquisition",
+            post(pages::vehicles::set_acquisition),
+        )
+        .route(
+            "/vehicles/{id}/costs",
+            get(pages::asset_costs::list).post(pages::asset_costs::add),
+        )
+        .route(
+            "/vehicles/{id}/costs/{entry}/edit",
+            get(pages::asset_costs::edit_form).post(pages::asset_costs::update),
+        )
+        .route(
+            "/vehicles/{id}/costs/{entry}/delete",
+            post(pages::asset_costs::delete),
+        )
         .route("/documents/{id}", get(pages::documents::show))
         .route("/documents/{id}/file", get(pages::documents::file))
         .route("/documents/{id}/confirm", post(pages::documents::confirm))
+        .route("/documents/{id}/receipt", post(pages::receipts::confirm))
         .route("/documents/{id}/analyse", post(pages::documents::analyse))
         .route("/documents/{id}/discard", post(pages::documents::discard))
         .route("/contracts/{id}", get(pages::contracts::detail))

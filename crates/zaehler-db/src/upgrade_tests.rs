@@ -8,10 +8,11 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use zaehler_app::{
     backup::{
-        AdjustmentRecord, BackupData, ContractRecord, CostPositionRecord, DeviceRecord,
-        DocumentRecord, DraftRecord, HouseholdRecord, InstallmentRecord, InvitationRecord,
-        MembershipRecord, MeterRecord, PriceComponentRecord, ReadingRecord, RegisterRecord,
-        RevisionRecord, SettlementRecord, UserRecord,
+        AcquisitionRecord, AdjustmentRecord, AssetCostRecord, BackupData, ChargingSessionRecord,
+        ConsumptionProfileRecord, ContractRecord, CostPositionRecord, DeviceRecord, DocumentRecord,
+        DraftRecord, HouseholdRecord, InstallmentRecord, InvitationRecord, MembershipRecord,
+        MeterRecord, PriceComponentRecord, ReadingRecord, RegisterRecord, RevisionRecord,
+        SettlementRecord, UserRecord, VehicleRecord,
     },
     port::BackupRepository,
 };
@@ -436,6 +437,7 @@ pub(crate) fn fixture() -> BackupData {
         revoked_at: None,
     });
     contracts_fixture(&mut data);
+    vehicles_fixture(&mut data);
     data
 }
 
@@ -586,4 +588,87 @@ async fn export_and_import_are_lossless() {
     assert_eq!(target.export().await.unwrap(), data);
     std::fs::remove_dir_all(dir_a).ok();
     std::fs::remove_dir_all(dir_b).ok();
+}
+
+/// Fahrzeug mit Profil, Anschaffung, Ladevorgang und Kostenbuch-Einträgen
+/// (ab `m20261018_000013_vehicles`).
+fn vehicles_fixture(data: &mut BackupData) {
+    let day = |m: u32, d: u32| chrono::NaiveDate::from_ymd_opt(2026, m, d).unwrap();
+    let mut car = data.meters[0].clone();
+    car.id = id(50);
+    car.name = "Familienauto".into();
+    car.kind = "vehicle".into();
+    car.unit = "km".into();
+    car.billing_start_month = None;
+    car.billing_start_day = None;
+    data.meters.push(car);
+    data.vehicles.push(VehicleRecord {
+        meter_id: id(50),
+        plate: "M-ZÄ 42E".into(),
+        model: "Kombi Hybrid".into(),
+        drive_type: "plugin_hybrid".into(),
+        home_charging_meter_id: Some(id(3)),
+        pv_share_override_pct_milli: Some(35_500),
+    });
+    data.consumption_profiles.push(ConsumptionProfileRecord {
+        id: id(51),
+        vehicle_id: id(50),
+        valid_from: day(1, 1),
+        kwh_per_100km_milli: 18_750,
+        charging_loss_pct_milli: 10_000,
+        electric_share_pct_milli: Some(60_000),
+    });
+    data.acquisitions.push(AcquisitionRecord {
+        vehicle_id: id(50),
+        purchased_on: day(1, 15),
+        price_micro: 32_990_000_000,
+        residual_micro: 12_000_000_000,
+        planned_end_on: chrono::NaiveDate::from_ymd_opt(2032, 1, 15).unwrap(),
+        sold_on: None,
+        sale_price_micro: None,
+    });
+    data.charging_sessions.push(ChargingSessionRecord {
+        id: id(52),
+        vehicle_id: id(50),
+        charged_at: at(4, 654_321),
+        energy_milli: 32_125,
+        amount_micro: 18_990_000,
+        odometer_milli: Some(12_345_000),
+        provider: Some("Ladesäule Marktplatz".into()),
+        kind: "dc".into(),
+        source: "form".into(),
+        document_id: None,
+    });
+    data.asset_costs.push(AssetCostRecord {
+        id: id(53),
+        household_id: id(2),
+        asset_type: "vehicle".into(),
+        asset_id: id(50),
+        booked_on: day(2, 1),
+        category: "insurance".into(),
+        amount_micro: 612_400_000,
+        quantity_milli: None,
+        odometer_milli: None,
+        full_tank: None,
+        recurrence_months: Some(12),
+        recurrence_until: Some(day(12, 31)),
+        document_id: None,
+        note: Some("Vollkasko".into()),
+    });
+    data.asset_costs.push(AssetCostRecord {
+        id: id(54),
+        household_id: id(2),
+        asset_type: "vehicle".into(),
+        asset_id: id(50),
+        booked_on: day(3, 2),
+        category: "fuel".into(),
+        amount_micro: 71_230_000,
+        quantity_milli: Some(41_120),
+        odometer_milli: Some(12_800_000),
+        full_tank: Some(true),
+        recurrence_months: None,
+        recurrence_until: None,
+        document_id: Some(id(41)),
+        note: None,
+    });
 }

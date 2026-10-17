@@ -18,19 +18,21 @@ use sea_orm::{
 use zaehler_app::{
     PortError,
     backup::{
-        AdjustmentRecord, BackupData, ContractRecord, CostPositionRecord, DeviceRecord,
-        DocumentRecord, DraftRecord, HouseholdRecord, InstallmentRecord, InvitationRecord,
-        MembershipRecord, MeterRecord, NotificationSettingRecord, PriceComponentRecord,
-        ReadingRecord, RegisterRecord, RevisionRecord, SettlementRecord, UserRecord,
+        AcquisitionRecord, AdjustmentRecord, AssetCostRecord, BackupData, ChargingSessionRecord,
+        ConsumptionProfileRecord, ContractRecord, CostPositionRecord, DeviceRecord, DocumentRecord,
+        DraftRecord, HouseholdRecord, InstallmentRecord, InvitationRecord, MembershipRecord,
+        MeterRecord, NotificationSettingRecord, PriceComponentRecord, ReadingRecord,
+        RegisterRecord, RevisionRecord, SettlementRecord, UserRecord, VehicleRecord,
     },
     port::{BackupRepository, PortResult},
 };
 
 use crate::{
     entity::{
-        adjustment, ai_draft, contract, cost_position, document, household, installment,
-        invitation, membership, meter, meter_device, notification_settings, price_component,
-        reading, reading_revision, register, settlement, user,
+        adjustment, ai_draft, asset_cost, charging_session, contract, cost_position, document,
+        household, installment, invitation, membership, meter, meter_device, notification_settings,
+        price_component, reading, reading_revision, register, settlement, user, vehicle,
+        vehicle_acquisition, vehicle_consumption_profile,
     },
     uow::SeaOrmStore,
 };
@@ -390,6 +392,7 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
             })
         })
         .await?,
+        ..BackupData::default()
     };
     // feste Reihenfolge, damit gleiche Daten gleiche Archive ergeben
     data.users.sort_by_key(|x| x.id);
@@ -411,6 +414,7 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
     data.adjustments.sort_by_key(|x| x.id);
     data.settlements.sort_by_key(|x| x.id);
     data.documents.sort_by_key(|x| x.id);
+    read_vehicles(db, &mut data).await?;
     Ok(data)
 }
 
@@ -657,7 +661,8 @@ async fn write_all(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> 
             .collect(),
     )
     .await?;
-    write_contracts(txn, d).await
+    write_contracts(txn, d).await?;
+    write_vehicles(txn, d).await
 }
 
 /// Verträge mit Positionen, Preisständen und Einträgen (ab
@@ -754,6 +759,176 @@ async fn write_contracts(txn: &DatabaseTransaction, d: &BackupData) -> PortResul
                 period_end: Set(x.period_end),
                 amount_micro: Set(x.amount_micro),
                 document_id: Set(x.document_id),
+            })
+            .collect(),
+    )
+    .await
+}
+
+/// Fahrzeuge und Kostenbuch lesen (ab `m20261018_000013_vehicles`).
+async fn read_vehicles(db: &DatabaseTransaction, data: &mut BackupData) -> PortResult<()> {
+    data.vehicles = records(db, "vehicles", |r| {
+        Ok(VehicleRecord {
+            meter_id: r.get("meter_id")?,
+            plate: r.get("plate")?,
+            model: r.get("model")?,
+            drive_type: r.get("drive_type")?,
+            home_charging_meter_id: r.get("home_charging_meter_id")?,
+            pv_share_override_pct_milli: r.get("pv_share_override_pct_milli")?,
+        })
+    })
+    .await?;
+    data.consumption_profiles = records(db, "vehicle_consumption_profiles", |r| {
+        Ok(ConsumptionProfileRecord {
+            id: r.get("id")?,
+            vehicle_id: r.get("vehicle_id")?,
+            valid_from: r.get("valid_from")?,
+            kwh_per_100km_milli: r.get("kwh_per_100km_milli")?,
+            charging_loss_pct_milli: r.get("charging_loss_pct_milli")?,
+            electric_share_pct_milli: r.get("electric_share_pct_milli")?,
+        })
+    })
+    .await?;
+    data.acquisitions = records(db, "vehicle_acquisitions", |r| {
+        Ok(AcquisitionRecord {
+            vehicle_id: r.get("vehicle_id")?,
+            purchased_on: r.get("purchased_on")?,
+            price_micro: r.get("price_micro")?,
+            residual_micro: r.get("residual_micro")?,
+            planned_end_on: r.get("planned_end_on")?,
+            sold_on: r.get("sold_on")?,
+            sale_price_micro: r.get("sale_price_micro")?,
+        })
+    })
+    .await?;
+    data.charging_sessions = records(db, "charging_sessions", |r| {
+        Ok(ChargingSessionRecord {
+            id: r.get("id")?,
+            vehicle_id: r.get("vehicle_id")?,
+            charged_at: r.get("charged_at")?,
+            energy_milli: r.get("energy_milli")?,
+            amount_micro: r.get("amount_micro")?,
+            odometer_milli: r.get("odometer_milli")?,
+            provider: r.get("provider")?,
+            kind: r.get("kind")?,
+            source: r.get("source")?,
+            document_id: r.get("document_id")?,
+        })
+    })
+    .await?;
+    data.asset_costs = records(db, "asset_costs", |r| {
+        Ok(AssetCostRecord {
+            id: r.get("id")?,
+            household_id: r.get("household_id")?,
+            asset_type: r.get("asset_type")?,
+            asset_id: r.get("asset_id")?,
+            booked_on: r.get("booked_on")?,
+            category: r.get("category")?,
+            amount_micro: r.get("amount_micro")?,
+            quantity_milli: r.get("quantity_milli")?,
+            odometer_milli: r.get("odometer_milli")?,
+            full_tank: r.get("full_tank")?,
+            recurrence_months: r.get("recurrence_months")?,
+            recurrence_until: r.get("recurrence_until")?,
+            document_id: r.get("document_id")?,
+            note: r.get("note")?,
+        })
+    })
+    .await?;
+    data.vehicles.sort_by_key(|x| x.meter_id);
+    data.consumption_profiles.sort_by_key(|x| x.id);
+    data.acquisitions.sort_by_key(|x| x.vehicle_id);
+    data.charging_sessions.sort_by_key(|x| x.id);
+    data.asset_costs.sort_by_key(|x| x.id);
+    Ok(())
+}
+
+/// Fahrzeuge und Kostenbuch schreiben (ab `m20261018_000013_vehicles`).
+async fn write_vehicles(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> {
+    insert(
+        txn,
+        d.vehicles
+            .iter()
+            .map(|x| vehicle::ActiveModel {
+                meter_id: Set(x.meter_id),
+                plate: Set(x.plate.clone()),
+                model: Set(x.model.clone()),
+                drive_type: Set(x.drive_type.clone()),
+                home_charging_meter_id: Set(x.home_charging_meter_id),
+                pv_share_override_pct_milli: Set(x.pv_share_override_pct_milli),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.consumption_profiles
+            .iter()
+            .map(|x| vehicle_consumption_profile::ActiveModel {
+                id: Set(x.id),
+                vehicle_id: Set(x.vehicle_id),
+                valid_from: Set(x.valid_from),
+                kwh_per_100km_milli: Set(x.kwh_per_100km_milli),
+                charging_loss_pct_milli: Set(x.charging_loss_pct_milli),
+                electric_share_pct_milli: Set(x.electric_share_pct_milli),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.acquisitions
+            .iter()
+            .map(|x| vehicle_acquisition::ActiveModel {
+                vehicle_id: Set(x.vehicle_id),
+                purchased_on: Set(x.purchased_on),
+                price_micro: Set(x.price_micro),
+                residual_micro: Set(x.residual_micro),
+                planned_end_on: Set(x.planned_end_on),
+                sold_on: Set(x.sold_on),
+                sale_price_micro: Set(x.sale_price_micro),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.charging_sessions
+            .iter()
+            .map(|x| charging_session::ActiveModel {
+                id: Set(x.id),
+                vehicle_id: Set(x.vehicle_id),
+                charged_at: Set(x.charged_at),
+                energy_milli: Set(x.energy_milli),
+                amount_micro: Set(x.amount_micro),
+                odometer_milli: Set(x.odometer_milli),
+                provider: Set(x.provider.clone()),
+                kind: Set(x.kind.clone()),
+                source: Set(x.source.clone()),
+                document_id: Set(x.document_id),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.asset_costs
+            .iter()
+            .map(|x| asset_cost::ActiveModel {
+                id: Set(x.id),
+                household_id: Set(x.household_id),
+                asset_type: Set(x.asset_type.clone()),
+                asset_id: Set(x.asset_id),
+                booked_on: Set(x.booked_on),
+                category: Set(x.category.clone()),
+                amount_micro: Set(x.amount_micro),
+                quantity_milli: Set(x.quantity_milli),
+                odometer_milli: Set(x.odometer_milli),
+                full_tank: Set(x.full_tank),
+                recurrence_months: Set(x.recurrence_months),
+                recurrence_until: Set(x.recurrence_until),
+                document_id: Set(x.document_id),
+                note: Set(x.note.clone()),
             })
             .collect(),
     )

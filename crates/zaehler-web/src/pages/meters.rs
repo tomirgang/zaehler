@@ -186,6 +186,8 @@ struct DetailPage {
     id: String,
     name: String,
     kind: String,
+    /// Fahrzeug-Messstelle: Verweis auf die Fahrzeugseite
+    is_vehicle: bool,
     unit: String,
     schedule: Option<String>,
     purpose: Option<String>,
@@ -826,6 +828,7 @@ pub async fn detail(
         id: id.to_string(),
         name: data.name.clone(),
         kind: lang.t(&format!("kind-{}", data.kind.as_str())),
+        is_vehicle: data.kind == MeterKind::Vehicle,
         unit: data.unit.clone(),
         schedule: data.schedule.map(|s| schedule_text(lang, s)),
         purpose: (data.purpose != MeterPurpose::General)

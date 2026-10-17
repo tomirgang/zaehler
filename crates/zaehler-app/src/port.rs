@@ -7,23 +7,24 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, FixedOffset, NaiveDateTime, Utc};
 use uuid::Uuid;
-use zaehler_domain::calendar::Calendar;
+use zaehler_domain::{calendar::Calendar, vehicle::Holding};
 
 use crate::{
     backup::BackupData,
     error::PortError,
     ids::{
-        BlobKey, ContractId, DeviceId, DocumentId, DraftId, HouseholdId, InvitationId, MeterId,
-        OutboxId, PositionId, ReadingId, RegisterId, UserId,
+        AssetCostId, BlobKey, ChargingId, ContractId, DeviceId, DocumentId, DraftId, HouseholdId,
+        InvitationId, MeterId, OutboxId, PositionId, ProfileId, ReadingId, RegisterId, UserId,
     },
     model::{
-        AdjustmentRow, Contract, ContractData, ContractEntry, DeviceData, Document,
-        DocumentAnalysis, DocumentStatus, DocumentType, Draft, DraftAnalysis, DraftOutcome,
-        Household, HouseholdData, HouseholdSummary, Identity, InstallmentRow, Invitation,
-        InvoiceExtraction, JobRun, Member, MeterAggregate, MeterData, MeterSummary, NewInvitation,
-        Notification, NotificationKind, NotificationLogEntry, NotificationSettings, OutboxEntry,
-        OutboxEvent, OutboxResult, PriceComponentRow, Reading, ReadingUpdate, Recipient,
-        Recognition, RegisterData, Revision, SettlementRow, User,
+        AdjustmentRow, AssetCost, AssetRef, ChargingSession, Contract, ContractData, ContractEntry,
+        DeviceData, Document, DocumentAnalysis, DocumentStatus, DocumentType, Draft, DraftAnalysis,
+        DraftOutcome, Household, HouseholdData, HouseholdSummary, Identity, InstallmentRow,
+        Invitation, InvoiceExtraction, JobRun, Member, MeterAggregate, MeterData, MeterSummary,
+        NewInvitation, Notification, NotificationKind, NotificationLogEntry, NotificationSettings,
+        OutboxEntry, OutboxEvent, OutboxResult, PriceComponentRow, ProfileRow, Reading,
+        ReadingUpdate, ReceiptExtraction, Recipient, Recognition, RegisterData, Revision,
+        SettlementRow, User, Vehicle, VehicleData,
     },
     tenant::{Role, Tenant},
 };
@@ -53,6 +54,8 @@ pub trait UnitOfWork: Send {
     fn notification_settings(&mut self) -> &mut dyn NotificationSettingsRepository;
     fn contracts(&mut self) -> &mut dyn ContractRepository;
     fn documents(&mut self) -> &mut dyn DocumentRepository;
+    fn vehicles(&mut self) -> &mut dyn VehicleRepository;
+    fn asset_costs(&mut self) -> &mut dyn AssetCostRepository;
     async fn commit(self: Box<Self>) -> PortResult<()>;
 }
 
@@ -137,6 +140,53 @@ pub trait ContractRepository: Send {
     ) -> PortResult<()>;
 }
 
+/// Fahrzeuge mit Verbrauchsprofilen, Anschaffung und Ladevorgängen
+/// (SPEC_CAR_VEHICLES). Der Haushalt ergibt sich aus der Messstelle; fremde
+/// IDs ergeben `PortError::NotFound`.
+// @impl SPEC_CAR_VEHICLES, SPEC_SEC_TENANT_SCOPE
+#[async_trait]
+pub trait VehicleRepository: Send {
+    /// Fahrzeuge des Haushalts, nach Messstelle sortiert.
+    async fn list(&mut self, t: &Tenant) -> PortResult<Vec<Vehicle>>;
+    async fn get(&mut self, t: &Tenant, meter: MeterId) -> PortResult<Option<Vehicle>>;
+    /// Legt die Stammdaten an oder ersetzt sie.
+    async fn save(&mut self, t: &Tenant, meter: MeterId, data: &VehicleData) -> PortResult<()>;
+    /// `PortError::Conflict` bei gleichem `valid_from`.
+    async fn add_profile(&mut self, t: &Tenant, meter: MeterId, p: &ProfileRow) -> PortResult<()>;
+    async fn delete_profile(&mut self, t: &Tenant, meter: MeterId, id: ProfileId)
+    -> PortResult<()>;
+    /// `None` entfernt die Anschaffung.
+    async fn set_holding(
+        &mut self,
+        t: &Tenant,
+        meter: MeterId,
+        h: Option<&Holding>,
+    ) -> PortResult<()>;
+    /// Ladevorgänge des Fahrzeugs, nach Zeitpunkt sortiert.
+    async fn charging(&mut self, t: &Tenant, meter: MeterId) -> PortResult<Vec<ChargingSession>>;
+    async fn add_charging(&mut self, t: &Tenant, c: &ChargingSession) -> PortResult<()>;
+    async fn delete_charging(
+        &mut self,
+        t: &Tenant,
+        meter: MeterId,
+        id: ChargingId,
+    ) -> PortResult<()>;
+}
+
+/// Kostenbuch für Fahrzeuge und Anlagen (SPEC_ASSET_COSTS); Einträge gehören
+/// zum Haushalt des Tenants.
+// @impl SPEC_ASSET_COSTS, SPEC_SEC_TENANT_SCOPE
+#[async_trait]
+pub trait AssetCostRepository: Send {
+    /// Einträge der Anlage, nach Buchungstag sortiert.
+    async fn list(&mut self, t: &Tenant, asset: AssetRef) -> PortResult<Vec<AssetCost>>;
+    async fn get(&mut self, t: &Tenant, id: AssetCostId) -> PortResult<Option<AssetCost>>;
+    async fn create(&mut self, t: &Tenant, c: &AssetCost) -> PortResult<()>;
+    /// Ersetzt den Eintrag; die Anlage bleibt unverändert.
+    async fn update(&mut self, t: &Tenant, c: &AssetCost) -> PortResult<()>;
+    async fn delete(&mut self, t: &Tenant, id: AssetCostId) -> PortResult<()>;
+}
+
 /// Hochgeladene Dokumente (SPEC_DOC_UPLOADS, SPEC_AI_INVOICE).
 // @impl SPEC_DOC_UPLOADS, SPEC_SEC_TENANT_SCOPE
 #[async_trait]
@@ -172,13 +222,15 @@ pub struct DocumentContent {
     pub bytes: Bytes,
 }
 
-/// Liest Rechnungen strukturiert aus (AI). Übertragen wird nur das
+/// Liest Rechnungen und Belege strukturiert aus (AI). Übertragen wird nur das
 /// Dokument, keine Nutzer- oder Haushaltsdaten (REQ_AI_006).
 #[async_trait]
 pub trait DocumentExtractor: Send + Sync {
     /// Bezeichnung des Modells (für Dokumente und Metriken).
     fn model(&self) -> &str;
     async fn invoice(&self, doc: &DocumentContent) -> Result<InvoiceExtraction, RecognitionError>;
+    /// Beleg (Tankquittung, Ladebeleg, Werkstattrechnung; SPEC_AI_RECEIPT).
+    async fn receipt(&self, doc: &DocumentContent) -> Result<ReceiptExtraction, RecognitionError>;
 }
 
 /// Einladungen (SPEC_TEN_INVITES).

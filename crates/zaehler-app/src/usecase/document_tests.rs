@@ -15,7 +15,8 @@ use crate::{
     AppError, Tenant,
     ids::MeterId,
     model::{
-        DocumentStatus, DocumentType, Identity, InvoiceExtraction, InvoiceReading, MeterTargets,
+        DocumentKind, DocumentStatus, DocumentType, Identity, InvoiceExtraction, InvoiceReading,
+        MeterTargets,
     },
     port::{Clock, RecognitionError},
     testing::{FixedClock, InMemoryBlobStore, StubExtractor, memory_ports_with_blobs},
@@ -203,13 +204,22 @@ async fn upload_accepts_pdf_and_photos_only() {
         other => panic!("Validierungsfehler erwartet: {other:?}"),
     };
     assert_eq!(
-        field(e.uc.upload_document.execute(&e.t, Bytes::new(), "x").await),
+        field(
+            e.uc.upload_document
+                .execute(&e.t, Bytes::new(), "x", DocumentKind::Invoice)
+                .await
+        ),
         "document.required"
     );
     assert_eq!(
         field(
             e.uc.upload_document
-                .execute(&e.t, Bytes::from_static(b"<html>"), "rechnung.pdf")
+                .execute(
+                    &e.t,
+                    Bytes::from_static(b"<html>"),
+                    "rechnung.pdf",
+                    DocumentKind::Invoice
+                )
                 .await
         ),
         "document.type_invalid"
@@ -217,7 +227,12 @@ async fn upload_accepts_pdf_and_photos_only() {
     assert_eq!(
         field(
             e.uc.upload_document
-                .execute(&e.t, Bytes::from(vec![b'%'; 2048]), "gross.pdf")
+                .execute(
+                    &e.t,
+                    Bytes::from(vec![b'%'; 2048]),
+                    "gross.pdf",
+                    DocumentKind::Invoice
+                )
                 .await
         ),
         "document.too_large"
@@ -225,7 +240,12 @@ async fn upload_accepts_pdf_and_photos_only() {
 
     let pdf =
         e.uc.upload_document
-            .execute(&e.t, Bytes::from_static(PDF), "../Ordner/Rechnung 2026.pdf")
+            .execute(
+                &e.t,
+                Bytes::from_static(PDF),
+                "../Ordner/Rechnung 2026.pdf",
+                DocumentKind::Invoice,
+            )
             .await
             .unwrap();
     let doc = e.uc.get_document.execute(&e.t, pdf).await.unwrap();
@@ -241,7 +261,12 @@ async fn upload_accepts_pdf_and_photos_only() {
 
     let photo =
         e.uc.upload_document
-            .execute(&e.t, Bytes::from_static(JPEG), "foto.jpg")
+            .execute(
+                &e.t,
+                Bytes::from_static(JPEG),
+                "foto.jpg",
+                DocumentKind::Invoice,
+            )
             .await
             .unwrap();
     let doc = e.uc.get_document.execute(&e.t, photo).await.unwrap();
@@ -249,7 +274,12 @@ async fn upload_accepts_pdf_and_photos_only() {
     // die Art folgt dem Inhalt, nicht der Endung
     let renamed =
         e.uc.upload_document
-            .execute(&e.t, Bytes::from_static(PDF), "scan.jpg")
+            .execute(
+                &e.t,
+                Bytes::from_static(PDF),
+                "scan.jpg",
+                DocumentKind::Invoice,
+            )
             .await
             .unwrap();
     let doc = e.uc.get_document.execute(&e.t, renamed).await.unwrap();
@@ -264,7 +294,12 @@ async fn analysis_matches_meter_or_leaves_document_for_manual_entry() {
     let e = setup(Some(Ok(extraction()))).await;
     let id =
         e.uc.upload_document
-            .execute(&e.t, Bytes::from_static(PDF), "r.pdf")
+            .execute(
+                &e.t,
+                Bytes::from_static(PDF),
+                "r.pdf",
+                DocumentKind::Invoice,
+            )
             .await
             .unwrap();
     assert_eq!(
@@ -283,7 +318,12 @@ async fn analysis_matches_meter_or_leaves_document_for_manual_entry() {
     ] {
         let id =
             e.uc.upload_document
-                .execute(&e.t, Bytes::from_static(PDF), "r.pdf")
+                .execute(
+                    &e.t,
+                    Bytes::from_static(PDF),
+                    "r.pdf",
+                    DocumentKind::Invoice,
+                )
                 .await
                 .unwrap();
         assert_eq!(
@@ -301,7 +341,12 @@ async fn confirmation_saves_everything_in_one_unit_of_work() {
     let e = setup(Some(Ok(extraction()))).await;
     let id =
         e.uc.upload_document
-            .execute(&e.t, Bytes::from_static(PDF), "r.pdf")
+            .execute(
+                &e.t,
+                Bytes::from_static(PDF),
+                "r.pdf",
+                DocumentKind::Invoice,
+            )
             .await
             .unwrap();
     e.uc.analyse_document.execute(&e.t, id).await.unwrap();
@@ -380,7 +425,12 @@ async fn housekeeping_keeps_only_documents_of_settlements() {
     let e = setup(Some(Ok(extraction()))).await;
     let upload = || async {
         e.uc.upload_document
-            .execute(&e.t, Bytes::from_static(PDF), "r.pdf")
+            .execute(
+                &e.t,
+                Bytes::from_static(PDF),
+                "r.pdf",
+                DocumentKind::Invoice,
+            )
             .await
             .unwrap()
     };

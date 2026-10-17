@@ -20,6 +20,7 @@ fn document(t: &crate::Tenant, days: i64) -> Document {
     Document {
         id,
         blob_key: BlobKey::document(t.household_id(), id, true),
+        kind: crate::model::DocumentKind::Invoice,
         media_type: DocumentType::Pdf,
         bytes: 1234,
         original_name: "rechnung.pdf".into(),
@@ -28,6 +29,7 @@ fn document(t: &crate::Tenant, days: i64) -> Document {
         status: DocumentStatus::Uploaded,
         model: None,
         extraction: None,
+        receipt: None,
         meter_id: None,
         analysed_at: None,
     }
@@ -89,6 +91,7 @@ pub async fn documents(f: &dyn UnitOfWorkFactory, m: &dyn MaintenanceRepository)
     let analysis = DocumentAnalysis {
         model: Some("stub".into()),
         extraction: Some(extraction),
+        receipt: None,
         meter_id: Some(meter_id),
         status: DocumentStatus::Analysed,
         at: t0() + Duration::hours(1),
@@ -264,4 +267,50 @@ pub async fn documents(f: &dyn UnitOfWorkFactory, m: &dyn MaintenanceRepository)
     uow.commit().await.expect("commit");
     let mut uow = f.begin().await.expect("begin");
     assert!(uow.documents().get(&t, d.id).await.expect("get").is_none());
+
+    // Beleg: Art und Vorschlag bleiben erhalten (SPEC_AI_RECEIPT)
+    let t = super::tenant(f, "Belege").await;
+    let r = Document {
+        kind: crate::model::DocumentKind::Receipt,
+        ..document(&t, 11)
+    };
+    let receipt = crate::model::ReceiptExtraction {
+        date: chrono::NaiveDate::from_ymd_opt(2026, 3, 14),
+        total_amount: Some(Decimal::new(1899, 2)),
+        category: Some(zaehler_domain::assets::VehicleCostCategory::Charging),
+        quantity: Some(Decimal::new(32_125, 3)),
+        unit: Some("kWh".into()),
+        vendor: Some("Ladepark".into()),
+        odometer: Some(Decimal::from(12_345)),
+        charging_kind: Some("dc".into()),
+        confidence: Decimal::new(9, 1),
+    };
+    let mut uow = f.begin().await.expect("begin");
+    uow.documents().create(&t, &r).await.expect("create");
+    uow.documents()
+        .record_analysis(
+            &t,
+            r.id,
+            &DocumentAnalysis {
+                model: Some("stub".into()),
+                extraction: None,
+                receipt: Some(receipt.clone()),
+                meter_id: None,
+                status: DocumentStatus::Analysed,
+                at: t0(),
+            },
+        )
+        .await
+        .expect("analysis");
+    uow.commit().await.expect("commit");
+    let mut uow = f.begin().await.expect("begin");
+    let loaded = uow
+        .documents()
+        .get(&t, r.id)
+        .await
+        .expect("get")
+        .expect("da");
+    assert_eq!(loaded.kind, crate::model::DocumentKind::Receipt);
+    assert_eq!(loaded.receipt, Some(receipt));
+    assert!(loaded.extraction.is_none());
 }

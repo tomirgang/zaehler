@@ -964,6 +964,7 @@ pub struct InvoiceExtraction {
 pub struct Document {
     pub id: crate::ids::DocumentId,
     pub blob_key: BlobKey,
+    pub kind: DocumentKind,
     pub media_type: DocumentType,
     pub bytes: i64,
     /// Dateiname beim Upload, nur zur Anzeige
@@ -974,6 +975,8 @@ pub struct Document {
     /// Modell der Erkennung; `None` ohne AI-Konfiguration
     pub model: Option<String>,
     pub extraction: Option<InvoiceExtraction>,
+    /// Vorschlag bei Belegen
+    pub receipt: Option<ReceiptExtraction>,
     /// Über die Zählernummer zugeordnete Messstelle
     pub meter_id: Option<MeterId>,
     pub analysed_at: Option<DateTime<Utc>>,
@@ -984,8 +987,264 @@ pub struct Document {
 pub struct DocumentAnalysis {
     pub model: Option<String>,
     pub extraction: Option<InvoiceExtraction>,
+    /// Vorschlag bei Belegen
+    pub receipt: Option<ReceiptExtraction>,
     pub meter_id: Option<MeterId>,
     /// `Analysed` mit Vorschlag, sonst `Failed`
     pub status: DocumentStatus,
     pub at: DateTime<Utc>,
+}
+
+/// Stammdaten eines Fahrzeugs; die Messstelle der Art `vehicle` führt den
+/// Kilometerstand (SPEC_CAR_VEHICLES).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VehicleData {
+    pub plate: String,
+    pub model: String,
+    pub drive_type: zaehler_domain::vehicle::DriveType,
+    /// Heimlade-Messstelle: Wallbox-Zwischenzähler (gemessen) oder
+    /// Hausstrom-Messstelle (Schätzung)
+    pub home_charging_meter_id: Option<MeterId>,
+    /// Bekannter PV-Anteil beim Heimladen in Prozent (ab M8)
+    pub pv_share_pct: Option<Decimal>,
+}
+
+/// Verbrauchsprofil mit ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileRow {
+    pub id: crate::ids::ProfileId,
+    pub profile: zaehler_domain::vehicle::ConsumptionProfile,
+}
+
+/// Fahrzeug mit Profilen und Anschaffung.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Vehicle {
+    pub meter_id: MeterId,
+    pub data: VehicleData,
+    /// Aufsteigend nach `valid_from`
+    pub profiles: Vec<ProfileRow>,
+    pub holding: Option<zaehler_domain::vehicle::Holding>,
+}
+
+impl Vehicle {
+    #[must_use]
+    pub fn consumption_profiles(&self) -> Vec<zaehler_domain::vehicle::ConsumptionProfile> {
+        self.profiles.iter().map(|p| p.profile.clone()).collect()
+    }
+}
+
+/// Ladeart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChargingKind {
+    Ac,
+    Dc,
+}
+
+impl ChargingKind {
+    pub const ALL: [Self; 2] = [Self::Ac, Self::Dc];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ac => "ac",
+            Self::Dc => "dc",
+        }
+    }
+}
+
+impl std::str::FromStr for ChargingKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|x| x.as_str() == s)
+            .ok_or_else(|| format!("unbekannte Ladeart: {s}"))
+    }
+}
+
+/// Herkunft eines Eintrags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntrySource {
+    Form,
+    /// Aus der Belegerkennung (SPEC_AI_RECEIPT)
+    Receipt,
+}
+
+impl EntrySource {
+    pub const ALL: [Self; 2] = [Self::Form, Self::Receipt];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Form => "form",
+            Self::Receipt => "receipt",
+        }
+    }
+}
+
+impl std::str::FromStr for EntrySource {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|x| x.as_str() == s)
+            .ok_or_else(|| format!("unbekannte Herkunft: {s}"))
+    }
+}
+
+/// Externer Ladevorgang (REQ_CAR_010).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChargingSession {
+    pub id: crate::ids::ChargingId,
+    pub vehicle: MeterId,
+    pub charged_at: DateTime<Utc>,
+    /// kWh
+    pub energy: Decimal,
+    /// Betrag brutto, 0 bei kostenlosem Laden
+    pub amount: Decimal,
+    pub odometer: Option<Decimal>,
+    pub provider: Option<String>,
+    pub kind: ChargingKind,
+    pub source: EntrySource,
+    pub document_id: Option<crate::ids::DocumentId>,
+}
+
+/// Anlage eines Kostenbuch-Eintrags (ADR_020).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AssetRef {
+    pub asset_type: zaehler_domain::assets::AssetType,
+    /// Fahrzeug: ID der Messstelle
+    pub id: uuid::Uuid,
+}
+
+impl AssetRef {
+    #[must_use]
+    pub fn vehicle(meter: MeterId) -> Self {
+        Self {
+            asset_type: zaehler_domain::assets::AssetType::Vehicle,
+            id: meter.0,
+        }
+    }
+}
+
+/// Eintrag im Kostenbuch (SPEC_ASSET_COSTS).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetCost {
+    pub id: crate::ids::AssetCostId,
+    pub asset: AssetRef,
+    pub booked_on: NaiveDate,
+    pub category: zaehler_domain::assets::AssetCategory,
+    pub amount: Decimal,
+    /// Menge (l) bei Kraftstoff
+    pub quantity: Option<Decimal>,
+    pub odometer: Option<Decimal>,
+    pub full_tank: Option<bool>,
+    pub recurrence: Option<zaehler_domain::assets::Recurrence>,
+    pub document_id: Option<crate::ids::DocumentId>,
+    pub note: Option<String>,
+}
+
+impl AssetCost {
+    /// Summe der Buchungen im Zeitraum.
+    #[must_use]
+    pub fn amount_in(&self, period: Period) -> Decimal {
+        let n = zaehler_domain::assets::occurrences(self.booked_on, self.recurrence, period).len();
+        self.amount * Decimal::from(n)
+    }
+}
+
+/// Art eines Dokuments: Rechnung eines Versorgers oder Beleg
+/// (SPEC_AI_INVOICE, SPEC_AI_RECEIPT).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DocumentKind {
+    #[default]
+    Invoice,
+    Receipt,
+}
+
+impl DocumentKind {
+    pub const ALL: [Self; 2] = [Self::Invoice, Self::Receipt];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Invoice => "invoice",
+            Self::Receipt => "receipt",
+        }
+    }
+}
+
+impl std::str::FromStr for DocumentKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|x| x.as_str() == s)
+            .ok_or_else(|| format!("unbekannte Dokumentart: {s}"))
+    }
+}
+
+/// Vorschlag der Belegerkennung (SPEC_AI_RECEIPT); nicht lesbare Felder
+/// sind leer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptExtraction {
+    pub date: Option<NaiveDate>,
+    /// Betrag brutto
+    pub total_amount: Option<Decimal>,
+    pub category: Option<zaehler_domain::assets::VehicleCostCategory>,
+    pub quantity: Option<Decimal>,
+    /// `l` oder `kWh`
+    pub unit: Option<String>,
+    pub vendor: Option<String>,
+    pub odometer: Option<Decimal>,
+    /// `ac` oder `dc` bei Ladebelegen
+    pub charging_kind: Option<String>,
+    pub confidence: Decimal,
+}
+
+impl ReceiptExtraction {
+    /// Ladebeleg: Kategorie Laden oder Menge in kWh.
+    #[must_use]
+    pub fn is_charging(&self) -> bool {
+        self.category == Some(zaehler_domain::assets::VehicleCostCategory::Charging)
+            || self
+                .unit
+                .as_deref()
+                .is_some_and(|u| u.eq_ignore_ascii_case("kwh"))
+    }
+}
+
+/// Erkennungsergebnis als JSON wie gespeichert; die Art des Dokuments
+/// bestimmt das Schema.
+#[must_use]
+pub fn extraction_json(
+    invoice: Option<&InvoiceExtraction>,
+    receipt: Option<&ReceiptExtraction>,
+) -> Option<String> {
+    match (invoice, receipt) {
+        (Some(x), _) => serde_json::to_string(x).ok(),
+        (None, Some(x)) => serde_json::to_string(x).ok(),
+        (None, None) => None,
+    }
+}
+
+/// Gespeichertes Erkennungsergebnis lesen.
+///
+/// # Errors
+///
+/// Wenn das JSON nicht zum Schema der Dokumentart passt.
+pub fn parse_extraction(
+    kind: DocumentKind,
+    json: Option<&str>,
+) -> Result<(Option<InvoiceExtraction>, Option<ReceiptExtraction>), serde_json::Error> {
+    let Some(json) = json else {
+        return Ok((None, None));
+    };
+    Ok(match kind {
+        DocumentKind::Invoice => (Some(serde_json::from_str(json)?), None),
+        DocumentKind::Receipt => (None, Some(serde_json::from_str(json)?)),
+    })
 }

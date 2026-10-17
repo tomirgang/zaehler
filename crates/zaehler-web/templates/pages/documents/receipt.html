@@ -1,0 +1,147 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("document-receipt-title") }}</h1>
+  <div class="actions"><a class="button secondary" href="/documents/{{ doc_id }}/file">{{ ctx.lang.t("document-download") }}</a></div>
+</div>
+<p class="muted">{{ doc_name }} · {{ status }}</p>
+
+{% if let Some(s) = summary %}
+<dl class="facts">
+  <dt>{{ ctx.lang.t("asset-booked-on") }}</dt><dd>{{ s.date }}</dd>
+  <dt>{{ ctx.lang.t("asset-amount") }}</dt><dd>{{ s.amount }}</dd>
+  <dt>{{ ctx.lang.t("asset-category") }}</dt><dd>{{ s.category }}</dd>
+  <dt>{{ ctx.lang.t("asset-quantity") }}</dt><dd>{{ s.quantity }}</dd>
+  <dt>{{ ctx.lang.t("vehicle-provider") }}</dt><dd>{{ s.vendor }}</dd>
+  <dt>{{ ctx.lang.t("asset-odometer") }}</dt><dd>{{ s.odometer }}</dd>
+  <dt>{{ ctx.lang.t("capture-confidence") }}</dt><dd>{{ s.confidence }} %</dd>
+</dl>
+<p class="hint">{{ ctx.lang.t("document-suggestion-hint") }}</p>
+{% endif %}
+
+{% if open %}
+{% if failed %}
+<div class="callout warning">
+  <p>{{ ctx.lang.t("document-manual") }}</p>
+  {% if ai_enabled %}
+  <form method="post" action="/documents/{{ doc_id }}/analyse" class="inline">
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <button type="submit" class="secondary">{{ ctx.lang.t("document-retry") }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if vehicles.is_empty() %}
+<p class="callout">{{ ctx.lang.t("receipt-no-vehicle") }}</p>
+{% else %}
+<form method="post" action="/documents/{{ doc_id }}/receipt" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  {% if !messages.is_empty() %}
+  <div class="callout warning" role="alert">
+    {% for m in messages %}<p>{{ m }}</p>{% endfor %}
+  </div>
+  {% endif %}
+  <div class="field">
+    <label for="vehicle">{{ ctx.lang.t("receipt-vehicle") }}</label>
+    <select id="vehicle" name="vehicle">
+      <option value="">{{ ctx.lang.t("receipt-vehicle-choose") }}</option>
+      {% for (value, label) in vehicles %}
+      <option value="{{ value }}"{% if *value == self.val("vehicle") %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <fieldset class="field">
+    <legend>{{ ctx.lang.t("receipt-entry") }}</legend>
+    <label><input type="radio" name="entry" value="charging"{% if self.val("entry") == "charging" %} checked{% endif %}> {{ ctx.lang.t("receipt-entry-charging") }}</label>
+    <label><input type="radio" name="entry" value="cost"{% if self.val("entry") != "charging" %} checked{% endif %}> {{ ctx.lang.t("receipt-entry-cost") }}</label>
+  </fieldset>
+
+  <fieldset class="card">
+    <legend>{{ ctx.lang.t("receipt-entry-charging") }}</legend>
+    <div class="grid">
+      <div class="field">
+        <label for="charging_at">{{ ctx.lang.t("reading-at") }}</label>
+        <input id="charging_at" name="charging_at" type="datetime-local" value="{{ self.val("charging_at") }}">
+      </div>
+      <div class="field">
+        <label for="charging_energy">{{ ctx.lang.t("vehicle-energy") }}</label>
+        <input id="charging_energy" name="charging_energy" value="{{ self.val("charging_energy") }}" inputmode="decimal">
+      </div>
+      <div class="field">
+        <label for="charging_amount">{{ ctx.lang.t("asset-amount") }}</label>
+        <input id="charging_amount" name="charging_amount" value="{{ self.val("charging_amount") }}" inputmode="decimal">
+      </div>
+      <div class="field">
+        <label for="charging_kind">{{ ctx.lang.t("vehicle-charging-kind") }}</label>
+        <select id="charging_kind" name="charging_kind">
+          {% for (value, label) in kinds %}
+          <option value="{{ value }}"{% if *value == self.val("charging_kind") %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="charging_provider">{{ ctx.lang.t("vehicle-provider") }}</label>
+        <input id="charging_provider" name="charging_provider" value="{{ self.val("charging_provider") }}" maxlength="80">
+      </div>
+      <div class="field">
+        <label for="charging_odometer">{{ ctx.lang.t("asset-odometer") }}</label>
+        <input id="charging_odometer" name="charging_odometer" value="{{ self.val("charging_odometer") }}" inputmode="decimal">
+        <label><input type="checkbox" name="charging_odometer_reading" value="1"{% if self.checked("charging_odometer_reading") %} checked{% endif %}> {{ ctx.lang.t("asset-odometer-reading") }}</label>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="card">
+    <legend>{{ ctx.lang.t("receipt-entry-cost") }}</legend>
+    <div class="grid">
+      <div class="field">
+        <label for="booked_on">{{ ctx.lang.t("asset-booked-on") }}</label>
+        <input id="booked_on" name="booked_on" type="date" value="{{ self.val("booked_on") }}">
+      </div>
+      <div class="field">
+        <label for="category">{{ ctx.lang.t("asset-category") }}</label>
+        <select id="category" name="category">
+          {% for (value, label) in categories %}
+          <option value="{{ value }}"{% if *value == self.val("category") %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="amount">{{ ctx.lang.t("asset-amount") }}</label>
+        <input id="amount" name="amount" value="{{ self.val("amount") }}" inputmode="decimal">
+      </div>
+      <div class="field">
+        <label for="quantity">{{ ctx.lang.t("asset-quantity") }}</label>
+        <input id="quantity" name="quantity" value="{{ self.val("quantity") }}" inputmode="decimal">
+        <label><input type="checkbox" name="full_tank" value="1"{% if self.checked("full_tank") %} checked{% endif %}> {{ ctx.lang.t("asset-full-tank") }}</label>
+      </div>
+      <div class="field">
+        <label for="odometer">{{ ctx.lang.t("asset-odometer") }}</label>
+        <input id="odometer" name="odometer" value="{{ self.val("odometer") }}" inputmode="decimal">
+        <label><input type="checkbox" name="odometer_reading" value="1"{% if self.checked("odometer_reading") %} checked{% endif %}> {{ ctx.lang.t("asset-odometer-reading") }}</label>
+      </div>
+      <div class="field">
+        <label for="note">{{ ctx.lang.t("contract-note") }}</label>
+        <input id="note" name="note" value="{{ self.val("note") }}" maxlength="500">
+      </div>
+    </div>
+  </fieldset>
+  {% for e in self.errs("vehicle") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  {% if let Some(w) = warning %}
+  <div class="callout warning">
+    <p>{{ w }}</p>
+    <label><input type="checkbox" name="confirm_warnings" value="true"> {{ ctx.lang.t("readings-confirm") }}</label>
+  </div>
+  {% endif %}
+  <div class="actions"><button type="submit">{{ ctx.lang.t("document-confirm") }}</button></div>
+</form>
+{% endif %}
+
+<form method="post" action="/documents/{{ doc_id }}/discard" class="inline">
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <button type="submit" class="link danger">{{ ctx.lang.t("document-discard") }}</button>
+</form>
+{% endif %}
+{% endblock %}

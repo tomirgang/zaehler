@@ -64,6 +64,9 @@ struct State {
     notification_log: Vec<(UserId, &'static str, String)>,
     contracts: Vec<Contract>,
     documents: Vec<(HouseholdId, crate::model::Document)>,
+    vehicles: Vec<crate::model::Vehicle>,
+    charging: Vec<crate::model::ChargingSession>,
+    asset_costs: Vec<(HouseholdId, crate::model::AssetCost)>,
 }
 
 /// Outbox-Eintrag mit Zustand (nur für Tests einsehbar).
@@ -739,6 +742,12 @@ impl UnitOfWork for MemoryUow {
     fn contracts(&mut self) -> &mut dyn ContractRepository {
         self
     }
+    fn vehicles(&mut self) -> &mut dyn crate::port::VehicleRepository {
+        self
+    }
+    fn asset_costs(&mut self) -> &mut dyn crate::port::AssetCostRepository {
+        self
+    }
     fn documents(&mut self) -> &mut dyn crate::port::DocumentRepository {
         self
     }
@@ -1008,6 +1017,7 @@ impl HouseholdRepository for MemoryUow {
         self.state.meters.retain(|(h, _)| *h != hid);
         self.state.drafts.retain(|d| d.household != hid);
         self.state.documents.retain(|(h, _)| *h != hid);
+        vehicles_impl::delete_household(&mut self.state, hid, &meters);
         self.state.invitations.retain(|i| i.household != hid);
         self.state.revisions.retain(|(h, _)| *h != hid);
         self.state.outbox.retain(|o| o.entry.household_id != hid);
@@ -1432,4 +1442,7 @@ mod contracts_impl;
 #[path = "memory_documents.rs"]
 mod documents_impl;
 
-pub use documents_impl::StubExtractor;
+#[path = "memory_vehicles.rs"]
+mod vehicles_impl;
+
+pub use documents_impl::{StubExtractor, StubExtractors};

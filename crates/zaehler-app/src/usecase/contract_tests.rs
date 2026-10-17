@@ -29,15 +29,15 @@ use crate::{
     },
 };
 
-fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+pub(super) fn day(y: i32, m: u32, d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, d).unwrap()
 }
 
-fn berlin(y: i32, m: u32, d: u32) -> DateTime<Utc> {
+pub(super) fn berlin(y: i32, m: u32, d: u32) -> DateTime<Utc> {
     Calendar::new(chrono_tz::Europe::Berlin).start_of(day(y, m, d))
 }
 
-async fn setup() -> (UseCases, Tenant, std::sync::Arc<FixedClock>) {
+pub(super) async fn setup() -> (UseCases, Tenant, std::sync::Arc<FixedClock>) {
     let (ports, _, clock) = memory_ports();
     let uc = UseCases::new(&ports);
     let identity = Identity {
@@ -53,7 +53,7 @@ async fn setup() -> (UseCases, Tenant, std::sync::Arc<FixedClock>) {
 }
 
 /// Uhr auf 12:00 UTC des Tages stellen (nur vorwärts).
-fn set_today(clock: &FixedClock, d: NaiveDate) {
+pub(super) fn set_today(clock: &FixedClock, d: NaiveDate) {
     let target = Utc
         .from_utc_datetime(&d.and_hms_opt(12, 0, 0).unwrap())
         .timestamp();
@@ -61,7 +61,7 @@ fn set_today(clock: &FixedClock, d: NaiveDate) {
     clock.advance(Duration::seconds(target - now));
 }
 
-fn meter_input(
+pub(super) fn meter_input(
     name: &str,
     kind: MeterKind,
     registers: &[(&str, Direction)],
@@ -93,7 +93,7 @@ fn meter_input(
     }
 }
 
-async fn registers(uc: &UseCases, t: &Tenant, meter: MeterId) -> Vec<RegisterId> {
+pub(super) async fn registers(uc: &UseCases, t: &Tenant, meter: MeterId) -> Vec<RegisterId> {
     uc.get_meter
         .execute(t, meter)
         .await
@@ -118,7 +118,13 @@ async fn register(uc: &UseCases, t: &Tenant, meter: MeterId, code: &str) -> Regi
         .id
 }
 
-async fn record(uc: &UseCases, t: &Tenant, meter: MeterId, at: DateTime<Utc>, value: Decimal) {
+pub(super) async fn record(
+    uc: &UseCases,
+    t: &Tenant,
+    meter: MeterId,
+    at: DateTime<Utc>,
+    value: Decimal,
+) {
     let register = registers(uc, t, meter).await[0];
     let out = uc
         .record_readings
@@ -138,7 +144,7 @@ async fn record(uc: &UseCases, t: &Tenant, meter: MeterId, at: DateTime<Utc>, va
     assert!(matches!(out, RecordOutcome::Saved(_)));
 }
 
-fn flat(from: NaiveDate, base: Decimal, price: Decimal) -> ComponentInput {
+pub(super) fn flat(from: NaiveDate, base: Decimal, price: Decimal) -> ComponentInput {
     ComponentInput {
         id: None,
         valid_from: from,
@@ -149,7 +155,7 @@ fn flat(from: NaiveDate, base: Decimal, price: Decimal) -> ComponentInput {
     }
 }
 
-fn position(
+pub(super) fn position(
     name: &str,
     register: Option<RegisterId>,
     components: Vec<ComponentInput>,
@@ -164,7 +170,7 @@ fn position(
     }
 }
 
-fn contract(start: NaiveDate, positions: Vec<PositionInput>) -> ContractInput {
+pub(super) fn contract(start: NaiveDate, positions: Vec<PositionInput>) -> ContractInput {
     ContractInput {
         direction: Direction::Import,
         provider: "Stadtwerke".into(),
@@ -177,14 +183,14 @@ fn contract(start: NaiveDate, positions: Vec<PositionInput>) -> ContractInput {
     }
 }
 
-fn conflict<T: std::fmt::Debug>(r: Result<T, AppError>, code: &str) {
+pub(super) fn conflict<T: std::fmt::Debug>(r: Result<T, AppError>, code: &str) {
     match r {
         Err(AppError::Conflict(c)) if c == code => {}
         other => panic!("{code} erwartet, war {other:?}"),
     }
 }
 
-fn field<T: std::fmt::Debug>(r: Result<T, AppError>, name: &str, code: &str) {
+pub(super) fn field<T: std::fmt::Debug>(r: Result<T, AppError>, name: &str, code: &str) {
     match r {
         Err(AppError::Validation(e)) => assert!(
             e.for_field(name).iter().any(|x| x.code == code),

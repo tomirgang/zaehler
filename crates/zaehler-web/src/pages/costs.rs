@@ -355,7 +355,7 @@ fn chart_json(lang: Lang, months: &[MonthCost]) -> Value {
     })
 }
 
-fn json_response(v: Value) -> Response {
+pub(crate) fn json_response(v: Value) -> Response {
     ([(header::CACHE_CONTROL, "private, no-store")], Json(v)).into_response()
 }
 

@@ -68,6 +68,12 @@ id_type!(
     SettlementId,
     /// Hochgeladenes Dokument (Rechnung)
     DocumentId,
+    /// Verbrauchsprofil eines Fahrzeugs
+    ProfileId,
+    /// Ladevorgang eines Fahrzeugs
+    ChargingId,
+    /// Eintrag im Kostenbuch
+    AssetCostId,
 );
 
 /// Schlüssel im Objektspeicher, immer unter `households/{household_id}/`.

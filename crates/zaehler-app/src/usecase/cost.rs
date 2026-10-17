@@ -245,8 +245,8 @@ pub struct MeterCostView {
 }
 
 /// Messstelle mit Verträgen, bereit zur Kostenrechnung.
-struct MeterPricing {
-    agg: MeterAggregate,
+pub(crate) struct MeterPricing {
+    pub(crate) agg: MeterAggregate,
     readings: Vec<Reading>,
     per_register: Vec<RegisterIntervals>,
     profile: SeasonProfile,
@@ -291,7 +291,7 @@ fn profile_for(
     choose_profile(&agg.meter, &series).0
 }
 
-async fn load_pricing(
+pub(crate) async fn load_pricing(
     uow: &mut dyn UnitOfWork,
     t: &Tenant,
     id: MeterId,
@@ -403,6 +403,55 @@ impl MeterPricing {
                 }
             })
             .collect()
+    }
+
+    /// Menge aller Bezugsregister im Zeitraum; außerhalb der Ablesungen
+    /// geschätzt (Fahrleistung, Heimladen).
+    pub(crate) fn import_quantity(
+        &self,
+        cal: Calendar,
+        range: Period,
+    ) -> Option<Estimated<Decimal>> {
+        Quantities::new(
+            self.per_register
+                .iter()
+                .filter(|r| r.register.data.direction == Direction::Import)
+                .map(|r| r.intervals.clone().unwrap_or_default())
+                .collect(),
+            cal,
+            self.profile.clone(),
+        )
+        .amount(range, range)
+    }
+
+    /// Erster Tag mit Ablesung (lokal).
+    pub(crate) fn first_day(&self, cal: Calendar) -> Option<NaiveDate> {
+        self.readings.first().map(|r| cal.local_date(r.read_at))
+    }
+
+    /// Durchschnittlicher Arbeitspreis der Bezugsverträge im Zeitraum, ohne
+    /// Grundpreis und Anpassungen (`p_haus`, SPEC_CAR_ENERGY_COST).
+    // @impl SPEC_CAR_ENERGY_COST
+    pub(crate) fn unit_price(&self, range: Period) -> Option<Estimated<Decimal>> {
+        let (mut work, mut quantity, mut estimated) = (Decimal::ZERO, Decimal::ZERO, false);
+        for p in self
+            .priced
+            .iter()
+            .filter(|p| p.contract.data.direction == Direction::Import)
+        {
+            if p.terms().clip(range).is_none() {
+                continue;
+            }
+            let b = p.cost(range)?;
+            let q = p.quantity(range)?;
+            work += b.work();
+            quantity += q.value;
+            estimated |= b.has_estimate() || q.estimated;
+        }
+        (quantity > Decimal::ZERO).then(|| Estimated {
+            value: work / quantity,
+            estimated,
+        })
     }
 
     /// Menge der Messstelle als Zwischenzähler von `parent` im Zeitraum.
@@ -598,7 +647,7 @@ pub fn installment_target(
     })
 }
 
-async fn calendar_today(
+pub(crate) async fn calendar_today(
     p: &Ports,
     uow: &mut dyn UnitOfWork,
     t: &Tenant,
@@ -609,7 +658,7 @@ async fn calendar_today(
 
 /// Übergeordnete Messstelle des Geräts, das heute eingebaut ist, sonst
 /// des zuletzt ausgebauten.
-fn parent_of(agg: &MeterAggregate) -> Option<MeterId> {
+pub(crate) fn parent_of(agg: &MeterAggregate) -> Option<MeterId> {
     agg.active_device()
         .and_then(|d| d.data.parent_meter_id)
         .or_else(|| {

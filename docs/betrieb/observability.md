@@ -33,8 +33,8 @@ Prometheus-Format unter `GET /metrics` auf `server.metrics_listen`
 | `zaehler_ai_corrections_total` | `corrected` |
 | `zaehler_import_rows_total` | `result` |
 | `zaehler_housekeeping_removed_total` | `kind` (`draft`, `tmp`, `session`, `outbox`, `document`) |
-| `zaehler_documents_total` | `kind` (`invoice`), `outcome` (`ok`, `error`, `timeout`, `invalid`) |
-| `zaehler_document_analysis_seconds` | Dauer der Rechnungserkennung |
+| `zaehler_documents_total` | `kind` (`invoice`, `receipt`), `outcome` (`ok`, `error`, `timeout`, `invalid`) |
+| `zaehler_document_analysis_seconds` | Dauer der Erkennung von Rechnungen und Belegen |
 | `zaehler_leader` | Gauge: 1 auf der Instanz mit Leader-Lock |
 | `zaehler_job_runs_total` | `job` (`dispatch_outbox`, `send_reminders`, `housekeeping`), `outcome` (`ok`, `error`) |
 | `zaehler_outbox_pending` | Gauge: offene Outbox-Einträge |

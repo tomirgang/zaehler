@@ -1,0 +1,134 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("asset-costs-title") }}: {{ name }} {{ year }}</h1>
+  <div class="actions">
+    <a class="button secondary" href="/vehicles/{{ id }}/costs?year={{ year - 1 }}">{{ year - 1 }}</a>
+    <a class="button secondary" href="/vehicles/{{ id }}/costs?year={{ year + 1 }}">{{ year + 1 }}</a>
+    <a class="button secondary" href="/vehicles/{{ id }}">{{ name }}</a>
+  </div>
+</div>
+
+{% if rows.is_empty() %}
+<p class="muted">{{ ctx.lang.t("asset-costs-empty") }}</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>{{ ctx.lang.t("asset-booked-on") }}</th>
+      <th>{{ ctx.lang.t("asset-category") }}</th>
+      <th class="num">{{ ctx.lang.t("asset-amount") }}</th>
+      <th class="num">{{ ctx.lang.t("asset-in-year") }}</th>
+      <th>{{ ctx.lang.t("asset-details") }}</th>
+      {% if ctx.can_write %}<th><span class="visually-hidden">{{ ctx.lang.t("member-actions") }}</span></th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.date }}</td>
+      <td>{{ r.category }}</td>
+      <td class="num">{{ r.amount }}</td>
+      <td class="num">{{ r.year_amount }}</td>
+      <td>{{ r.details }}{% if !r.recurring.is_empty() %} <span class="tag">{{ r.recurring }}</span>{% endif %}{% if !r.document.is_empty() %} <a href="/documents/{{ r.document }}/file">{{ ctx.lang.t("document-receipt") }}</a>{% endif %}</td>
+      {% if ctx.can_write %}
+      <td>
+        <a href="/vehicles/{{ id }}/costs/{{ r.id }}/edit">{{ ctx.lang.t("action-edit") }}</a>
+        <form method="post" action="/vehicles/{{ id }}/costs/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("entry-delete-confirm") }}">
+          <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+          <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<h2>{{ ctx.lang.t("asset-totals") }}</h2>
+<table class="table">
+  <tbody>
+    {% for (c, v) in totals %}<tr><td>{{ c }}</td><td class="num">{{ v }}</td></tr>{% endfor %}
+    <tr><th>{{ ctx.lang.t("costs-total") }}</th><th class="num">{{ total }}</th></tr>
+  </tbody>
+</table>
+{% endif %}
+
+{% if ctx.can_write %}
+<section aria-labelledby="entry-title">
+  <h2 id="entry-title">{% if entry.is_some() %}{{ ctx.lang.t("asset-edit") }}{% else %}{{ ctx.lang.t("asset-add") }}{% endif %}</h2>
+  <form method="post" action="{% if let Some(e) = entry %}/vehicles/{{ id }}/costs/{{ e }}/edit{% else %}/vehicles/{{ id }}/costs{% endif %}" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="grid">
+      <div class="field">
+        <label for="booked_on">{{ ctx.lang.t("asset-booked-on") }}</label>
+        <input id="booked_on" name="booked_on" type="date" value="{{ self.val("booked_on") }}" required>
+        {% for e in self.errs("booked_on") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="category">{{ ctx.lang.t("asset-category") }}</label>
+        <select id="category" name="category">
+          {% for (value, label) in categories %}
+          <option value="{{ value }}"{% if *value == self.val("category") %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% for e in self.errs("category") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="amount">{{ ctx.lang.t("asset-amount") }}</label>
+        <input id="amount" name="amount" value="{{ self.val("amount") }}" inputmode="decimal" required>
+        {% for e in self.errs("amount") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    <fieldset class="field">
+      <legend>{{ ctx.lang.t("asset-fuel") }}</legend>
+      <div class="grid">
+        <div class="field">
+          <label for="quantity">{{ ctx.lang.t("asset-quantity") }}</label>
+          <input id="quantity" name="quantity" value="{{ self.val("quantity") }}" inputmode="decimal">
+          {% for e in self.errs("quantity") %}<p class="field-error">{{ e }}</p>{% endfor %}
+        </div>
+        <div class="field">
+          <label><input type="checkbox" name="full_tank" value="1"{% if self.checked("full_tank") %} checked{% endif %}> {{ ctx.lang.t("asset-full-tank") }}</label>
+          {% for e in self.errs("full_tank") %}<p class="field-error">{{ e }}</p>{% endfor %}
+        </div>
+      </div>
+    </fieldset>
+    <div class="grid">
+      <div class="field">
+        <label for="odometer">{{ ctx.lang.t("asset-odometer") }}</label>
+        <input id="odometer" name="odometer" value="{{ self.val("odometer") }}" inputmode="decimal">
+        {% if entry.is_none() %}<label><input type="checkbox" name="odometer_reading" value="1"{% if self.checked("odometer_reading") %} checked{% endif %}> {{ ctx.lang.t("asset-odometer-reading") }}</label>{% endif %}
+        {% for e in self.errs("odometer") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="recurrence_months">{{ ctx.lang.t("asset-recurrence") }}</label>
+        <input id="recurrence_months" name="recurrence_months" value="{{ self.val("recurrence_months") }}" inputmode="numeric" size="3">
+        <p class="hint">{{ ctx.lang.t("asset-recurrence-hint") }}</p>
+        {% for e in self.errs("recurrence_months") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="recurrence_until">{{ ctx.lang.t("asset-recurrence-until") }}</label>
+        <input id="recurrence_until" name="recurrence_until" type="date" value="{{ self.val("recurrence_until") }}">
+        {% for e in self.errs("recurrence_until") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    <div class="field">
+      <label for="note">{{ ctx.lang.t("contract-note") }}</label>
+      <input id="note" name="note" value="{{ self.val("note") }}" maxlength="500">
+      {% for e in self.errs("note") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    {% if let Some(w) = warning %}
+    <div class="callout warning">
+      <p>{{ w }}</p>
+      <label><input type="checkbox" name="confirm_warnings" value="true"> {{ ctx.lang.t("readings-confirm") }}</label>
+    </div>
+    {% endif %}
+    <div class="actions">
+      <button type="submit">{{ ctx.lang.t("action-save") }}</button>
+      {% if entry.is_some() %}<a href="/vehicles/{{ id }}/costs?year={{ year }}">{{ ctx.lang.t("action-cancel") }}</a>{% endif %}
+    </div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

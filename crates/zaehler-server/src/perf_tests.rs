@@ -45,7 +45,7 @@ const BUDGET: Duration = Duration::from_millis(300);
 /// Ein Haushalt, 20 Messstellen mit je 2 Registern, 10 Jahre monatliche
 /// Ablesungen (4 800 Ablesungen) und je ein Vertrag mit zwei Preiswechseln
 /// je Jahr.
-async fn seed(uc: &UseCases, name: &str) -> MeterId {
+async fn seed(uc: &UseCases, name: &str) -> (MeterId, MeterId) {
     let identity = Identity {
         issuer: "dev".into(),
         subject: name.into(),
@@ -109,7 +109,8 @@ async fn seed(uc: &UseCases, name: &str) -> MeterId {
         seed_contract(uc, &tenant, id, &registers).await;
         first.get_or_insert(id);
     }
-    first.unwrap()
+    let house = first.unwrap();
+    (house, seed_vehicle(uc, &tenant, house).await)
 }
 
 /// Vertrag HT/NT ab 2016 mit zwei Preiswechseln je Jahr und jährlich neuem
@@ -182,6 +183,130 @@ async fn seed_contract(
     }
 }
 
+/// Plug-in-Hybrid mit 10 Jahren Kilometerständen, monatlichem Tanken und
+/// Laden, Parken und jährlicher Versicherung; Heimladen über die erste
+/// Messstelle geschätzt (SPEC_PERF_BUDGET, SPEC_CAR_REPORT).
+#[allow(clippy::too_many_lines)] // vollständiger Datensatz
+async fn seed_vehicle(uc: &UseCases, tenant: &zaehler_app::Tenant, house: MeterId) -> MeterId {
+    use zaehler_app::{
+        model::{AssetRef, ChargingKind},
+        usecase::{
+            asset_cost::AssetCostInput,
+            vehicle::{ChargingInput, NewVehicle, VehicleInput},
+        },
+    };
+    use zaehler_domain::{
+        assets::{AssetCategory, Recurrence, VehicleCostCategory},
+        vehicle::{ConsumptionProfile, DriveType},
+    };
+    let start: DateTime<Utc> = Utc.with_ymd_and_hms(2016, 1, 1, 0, 0, 0).unwrap();
+    let car = uc
+        .create_vehicle
+        .execute(
+            tenant,
+            NewVehicle {
+                name: "Hybrid".into(),
+                vehicle: VehicleInput {
+                    plate: "M-PF 1".into(),
+                    model: "Kombi".into(),
+                    drive_type: DriveType::PluginHybrid,
+                    home_charging_meter_id: Some(house),
+                    pv_share_pct: None,
+                },
+                odometer: Decimal::ZERO,
+                start_at: start,
+            },
+        )
+        .await
+        .unwrap();
+    uc.set_consumption_profile
+        .execute(
+            tenant,
+            car,
+            ConsumptionProfile {
+                valid_from: start.date_naive(),
+                kwh_per_100km: Decimal::from(18),
+                charging_loss_pct: Decimal::from(10),
+                electric_share_pct: Some(Decimal::from(40)),
+            },
+        )
+        .await
+        .unwrap();
+    let mut insurance = AssetCostInput {
+        booked_on: start.date_naive(),
+        category: AssetCategory::Vehicle(VehicleCostCategory::Insurance),
+        amount: Decimal::from(600),
+        quantity: None,
+        odometer: None,
+        full_tank: false,
+        recurrence: Some(Recurrence {
+            every_months: 12,
+            until: None,
+        }),
+        note: None,
+        odometer_as_reading: false,
+        confirm_warnings: false,
+    };
+    uc.add_asset_cost
+        .execute(tenant, AssetRef::vehicle(car), insurance.clone())
+        .await
+        .unwrap();
+    insurance.recurrence = None;
+    for k in 1..=MONTHS {
+        let at = start + Months::new(k);
+        let km = Decimal::from(k * 1200);
+        uc.add_asset_cost
+            .execute(
+                tenant,
+                AssetRef::vehicle(car),
+                AssetCostInput {
+                    booked_on: at.date_naive(),
+                    category: AssetCategory::Vehicle(VehicleCostCategory::Fuel),
+                    amount: Decimal::from(75),
+                    quantity: Some(Decimal::from(42)),
+                    odometer: Some(km),
+                    full_tank: true,
+                    odometer_as_reading: true,
+                    confirm_warnings: true,
+                    ..insurance.clone()
+                },
+            )
+            .await
+            .unwrap();
+        uc.add_asset_cost
+            .execute(
+                tenant,
+                AssetRef::vehicle(car),
+                AssetCostInput {
+                    booked_on: at.date_naive(),
+                    category: AssetCategory::Vehicle(VehicleCostCategory::Parking),
+                    amount: Decimal::from(12),
+                    ..insurance.clone()
+                },
+            )
+            .await
+            .unwrap();
+        uc.record_charging
+            .execute(
+                tenant,
+                car,
+                ChargingInput {
+                    charged_at: at,
+                    energy: Decimal::from(40),
+                    amount: Decimal::from(20),
+                    odometer: None,
+                    provider: Some("Ladesäule".into()),
+                    kind: ChargingKind::Ac,
+                    odometer_as_reading: false,
+                    confirm_warnings: false,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    car
+}
+
 async fn get(app: &Router, path: &str, cookie: &str) -> (StatusCode, Duration) {
     let req = Request::get(path)
         .header(header::COOKIE, cookie)
@@ -215,7 +340,7 @@ async fn measure(database_url: &str, backend: &str) {
     // eigener Nutzer je Lauf, damit eine geteilte Test-Datenbank genügt
     let name = format!("perf-{}", uuid::Uuid::now_v7().simple());
     let seeded = Instant::now();
-    let meter = seed(&app.uc, &name).await;
+    let (meter, vehicle) = seed(&app.uc, &name).await;
     println!("{backend}: Seed in {:?}", seeded.elapsed());
 
     let login = app
@@ -244,6 +369,8 @@ async fn measure(database_url: &str, backend: &str) {
         ("chart.json", format!("/meters/{meter}/chart.json")),
         ("Kostenansicht", format!("/meters/{meter}/costs")),
         ("Haushaltskosten", "/costs".to_owned()),
+        ("Fahrzeug", format!("/vehicles/{vehicle}")),
+        ("Kostenbuch", format!("/vehicles/{vehicle}/costs?year=2020")),
     ] {
         for _ in 0..WARMUP {
             get(&app.router, &path, &cookie).await;

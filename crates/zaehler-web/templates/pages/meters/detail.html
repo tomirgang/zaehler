@@ -39,6 +39,7 @@
 <div class="page-head">
   <h1>{{ name }}</h1>
   <div class="actions">
+    {% if is_vehicle %}<a class="button secondary" href="/vehicles/{{ id }}">{{ ctx.lang.t("vehicle-open") }}</a>{% endif %}
     {% if ctx.can_write %}<a class="button" href="/meters/{{ id }}/readings/new">{{ ctx.lang.t("dashboard-record") }}</a>{% endif %}
     {% if ctx.is_owner %}
     <a class="button secondary" href="/meters/{{ id }}/edit">{{ ctx.lang.t("action-edit") }}</a>

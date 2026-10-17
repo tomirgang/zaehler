@@ -2185,3 +2185,286 @@ async fn invoice_import_workflow() {
         StatusCode::NOT_FOUND
     );
 }
+
+// @test SPEC_CAR_VEHICLES, SPEC_ASSET_COSTS, SPEC_CAR_REPORT, SPEC_CAR_ENERGY_COST
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
+async fn vehicle_pages_and_cost_book() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let page = text(c.get("/").await).await;
+    assert!(
+        !page.contains("href=\"/vehicles\""),
+        "Navigation ohne Fahrzeuge"
+    );
+
+    // ungültig: ohne Kilometerstand
+    let mut fields = vec![
+        ("_csrf", csrf.as_str()),
+        ("name", "Familienauto"),
+        ("plate", "M-ZA 1"),
+        ("model", "Kombi"),
+        ("drive_type", "combustion"),
+        ("home_charging_meter_id", ""),
+        ("pv_share_pct", ""),
+        ("odometer", ""),
+        ("start_at", "2025-01-01"),
+    ];
+    let res = c.post("/vehicles/new", &fields).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("Zahl erforderlich."));
+    fields.retain(|(k, _)| *k != "odometer");
+    fields.push(("odometer", "10000"));
+    let res = c.post("/vehicles/new", &fields).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let vehicle = location(&res);
+    assert!(vehicle.starts_with("/vehicles/"));
+    let html = text(c.get(&vehicle).await).await;
+    assert!(html.contains("Fahrzeug angelegt.") && html.contains("M-ZA 1"));
+    assert!(html.contains("Verbrenner"));
+    assert!(
+        !html.contains("Ladevorgang erfassen"),
+        "Verbrenner lädt nicht"
+    );
+    assert!(
+        html.contains("href=\"/vehicles\""),
+        "Navigation mit Fahrzeugen"
+    );
+    let list = text(c.get("/vehicles").await).await;
+    assert!(list.contains("Familienauto"));
+
+    // Kostenbuch: Laden nicht erlaubt, Tanken mit Kilometerstand als Ablesung
+    let costs = format!("{vehicle}/costs");
+    let entry = |category: &'static str, amount: &'static str| {
+        vec![
+            ("_csrf", csrf.clone()),
+            ("booked_on", "2025-03-01".to_owned()),
+            ("category", category.to_owned()),
+            ("amount", amount.to_owned()),
+            ("quantity", String::new()),
+            ("odometer", String::new()),
+            ("recurrence_months", String::new()),
+            ("recurrence_until", String::new()),
+            ("note", String::new()),
+        ]
+    };
+    let res = post_fields(&mut c, &costs, &entry("charging", "10")).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("passt nicht zur Antriebsart"));
+    let mut fuel = entry("fuel", "70,50");
+    fuel.retain(|(k, _)| !matches!(*k, "quantity" | "odometer"));
+    fuel.extend([
+        ("quantity", "40".to_owned()),
+        ("odometer", "10500".to_owned()),
+        ("full_tank", "1".to_owned()),
+        ("odometer_reading", "1".to_owned()),
+    ]);
+    let res = post_fields(&mut c, &costs, &fuel).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    assert_eq!(location(&res), format!("{costs}?year=2025"));
+    let mut insurance = entry("insurance", "480");
+    insurance.retain(|(k, _)| *k != "recurrence_months");
+    insurance.push(("recurrence_months", "12".to_owned()));
+    let res = post_fields(&mut c, &costs, &insurance).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let book = text(c.get(&format!("{costs}?year=2026")).await).await;
+    assert!(
+        book.contains("Versicherung") && book.contains("480,00 €"),
+        "wiederkehrend"
+    );
+    assert!(!book.contains("70,50 €"), "einmalig nur 2025");
+    let book = text(c.get(&format!("{costs}?year=2025")).await).await;
+    assert!(book.contains("Kraftstoff") && book.contains("550,50 €"));
+    let meter = text(c.get(&vehicle.replace("/vehicles/", "/meters/")).await).await;
+    assert!(meter.contains("10500"), "Kilometerstand als Ablesung");
+    assert!(meter.contains(&format!("href=\"{vehicle}\"")));
+
+    // Bearbeiten und Löschen eines Eintrags
+    let start = book.find("/costs/").unwrap() + 7;
+    let entry_id = book[start..start + 36].to_owned();
+    let edit = text(c.get(&format!("{costs}/{entry_id}/edit")).await).await;
+    assert!(edit.contains("Eintrag bearbeiten"));
+    let res = c
+        .post(&format!("{costs}/{entry_id}/delete"), &[("_csrf", &csrf)])
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    // Antriebsart gesperrt, Auswertung vorhanden
+    let mut edit = fields.clone();
+    edit.retain(|(k, _)| !matches!(*k, "drive_type" | "odometer" | "start_at" | "name"));
+    edit.push(("drive_type", "electric"));
+    let res = c.post(&format!("{vehicle}/edit"), &edit).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("nicht mehr änderbar"));
+    let html = text(c.get(&vehicle).await).await;
+    assert!(html.contains("Auswertung") && html.contains("Haltedauer"));
+
+    // anderer Haushalt sieht nichts
+    let mut bob = Client::new(&app);
+    bob.login("bob").await;
+    assert_eq!(bob.get(&vehicle).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(bob.get(&costs).await.status(), StatusCode::NOT_FOUND);
+}
+
+// @test SPEC_AI_RECEIPT, SPEC_CAR_ENERGY_COST
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
+async fn receipt_becomes_charging_session() {
+    use chrono::NaiveDate;
+    use rust_decimal::Decimal;
+    use zaehler_app::{model::ReceiptExtraction, port::RecognitionError, testing::StubExtractor};
+    use zaehler_domain::assets::VehicleCostCategory;
+
+    let (mut ports, store, _clock) = memory_ports();
+    ports.extractor = Some(Arc::new(
+        StubExtractor(Err(RecognitionError::Timeout)).with_receipt(Ok(ReceiptExtraction {
+            date: NaiveDate::from_ymd_opt(2026, 1, 10),
+            total_amount: Some(Decimal::new(1899, 2)),
+            category: Some(VehicleCostCategory::Charging),
+            quantity: Some(Decimal::new(32_125, 3)),
+            unit: Some("kWh".into()),
+            vendor: Some("Ladepark Süd".into()),
+            odometer: None,
+            charging_kind: Some("dc".into()),
+            confidence: Decimal::new(9, 1),
+        })),
+    ));
+    let state = WebState {
+        uc: Arc::new(UseCases::new(&ports)),
+        readiness: store,
+        cfg: Arc::new(WebConfig::new(
+            "http://localhost:8080",
+            true,
+            false,
+            24,
+            "test",
+        )),
+        oidc: None,
+        analysis: Arc::default(),
+    };
+    let app = router(state, MemoryStore::default());
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let res = c
+        .post(
+            "/vehicles/new",
+            &[
+                ("_csrf", &csrf),
+                ("name", "Stromer"),
+                ("plate", ""),
+                ("model", ""),
+                ("drive_type", "electric"),
+                ("home_charging_meter_id", ""),
+                ("pv_share_pct", ""),
+                ("odometer", "100"),
+                ("start_at", "2025-01-01"),
+            ],
+        )
+        .await;
+    let vehicle = location(&res);
+    let id = vehicle.trim_start_matches("/vehicles/").to_owned();
+    assert!(
+        text(c.get("/documents?kind=receipt").await)
+            .await
+            .contains(r#"value="receipt" checked"#)
+    );
+
+    // Upload als Beleg
+    let boundary = "zaehler-test-boundary";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"_csrf\"\r\n\r\n{csrf}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"kind\"\r\n\r\nreceipt\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"beleg.pdf\"\r\nContent-Type: application/pdf\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(b"%PDF-1.7 Beleg");
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let req = Request::post("/documents")
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let res = c.send(req).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let doc = location(&res);
+    let page = text(c.get(&doc).await).await;
+    assert!(
+        page.contains("Beleg prüfen") && page.contains("Ladepark Süd"),
+        "{page}"
+    );
+    assert!(page.contains(r#"value="charging" checked"#));
+    assert!(
+        page.contains(&format!(r#"value="{id}" selected"#)),
+        "einziges Fahrzeug"
+    );
+    assert!(page.contains(r#"name="charging_at" type="datetime-local" value="2026-01-10T12:00""#));
+
+    let res = c
+        .post(
+            &format!("{doc}/receipt"),
+            &[
+                ("_csrf", &csrf),
+                ("vehicle", &id),
+                ("entry", "charging"),
+                ("charging_at", "2026-01-10T12:00"),
+                ("charging_energy", "32,125"),
+                ("charging_amount", "18,99"),
+                ("charging_kind", "dc"),
+                ("charging_provider", "Ladepark Süd"),
+                ("charging_odometer", ""),
+                ("booked_on", "2026-01-10"),
+                ("category", "other"),
+                ("amount", "18,99"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    assert_eq!(location(&res), vehicle);
+    let html = text(c.get(&vehicle).await).await;
+    assert!(
+        html.contains("Beleg übernommen.") && html.contains("32,12 kWh"),
+        "{html}"
+    );
+    assert!(html.contains(&format!("{doc}/file")), "Beleg verlinkt");
+}
+
+async fn post_fields(c: &mut Client, path: &str, fields: &[(&str, String)]) -> Response {
+    let body: Vec<(&str, &str)> = fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    c.post(path, &body).await
+}
+
+// @test SPEC_CAR_REPORT
+#[tokio::test]
+async fn vehicle_chart_json() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let res = c
+        .post(
+            "/vehicles/new",
+            &[
+                ("_csrf", &csrf),
+                ("name", "Auto"),
+                ("plate", ""),
+                ("model", ""),
+                ("drive_type", "combustion"),
+                ("home_charging_meter_id", ""),
+                ("pv_share_pct", ""),
+                ("odometer", "100"),
+                ("start_at", "2025-01-01"),
+            ],
+        )
+        .await;
+    let vehicle = location(&res);
+    let html = text(c.get(&vehicle).await).await;
+    assert!(html.contains(&format!("data-chart-url=\"{vehicle}/chart.json\"")));
+    let json: serde_json::Value =
+        serde_json::from_str(&text(c.get(&format!("{vehicle}/chart.json")).await).await).unwrap();
+    assert_eq!(json["unit"], "€");
+    assert_eq!(json["labels"][0], "2025");
+    assert!(json["series"]["depreciation"]["data"].is_array());
+}

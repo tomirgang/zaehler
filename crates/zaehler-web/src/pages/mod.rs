@@ -4,6 +4,7 @@
 #![allow(clippy::result_large_err)]
 
 pub mod analysis;
+pub mod asset_costs;
 pub mod backup;
 pub mod capture;
 pub mod contracts;
@@ -16,7 +17,9 @@ pub mod meters;
 pub mod notifications;
 pub mod pwa;
 pub mod readings;
+pub mod receipts;
 pub mod settings;
+pub mod vehicles;
 
 use std::collections::HashMap;
 

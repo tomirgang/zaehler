@@ -241,8 +241,9 @@ Kostenbuch-Eintrag gelöscht) entfernt das Housekeeping nach
 `housekeeping.draft_ttl_hours`.
 
 Umsetzung: Tabelle `documents` (Migration `m20261017_000012_documents`).
-Verweis ist bis M7 nur `settlements.document_id`; übernommene Rechnungen ohne
-Abrechnung gelten damit ebenfalls als ohne Verweis. Fotos werden als JPEG
+Verweise sind `settlements.document_id`, `charging_sessions.document_id` und
+`asset_costs.document_id`; übernommene Rechnungen ohne Abrechnung gelten als
+ohne Verweis. Fotos werden als JPEG
 normalisiert und ebenfalls nur als Download ausgeliefert. Die CSP lautet
 `sandbox; default-src 'none'`, der Dateiname im Header enthält nur ASCII.
 Die Größengrenze prüft der Anwendungsfall; der Body des Uploads ist auf

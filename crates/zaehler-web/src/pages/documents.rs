@@ -13,7 +13,10 @@ use serde::Deserialize;
 use zaehler_app::{
     AppError, FieldErrors,
     ids::{ContractId, DocumentId, MeterId, PositionId, RegisterId},
-    model::{Contract, Document, DocumentStatus, DocumentType, InvoiceExtraction, MeterAggregate},
+    model::{
+        Contract, Document, DocumentKind, DocumentStatus, DocumentType, InvoiceExtraction,
+        MeterAggregate,
+    },
     usecase::{
         contract::{
             ComponentInput, ContractInput, InstallmentInput, PositionInput, SettlementInput,
@@ -59,6 +62,8 @@ struct UploadPage {
     file_hint: String,
     documents: Vec<DocumentRow>,
     errors: Vec<String>,
+    /// Vorauswahl „Beleg“ (`?kind=receipt`)
+    receipt: bool,
 }
 
 async fn upload_page(
@@ -97,16 +102,28 @@ async fn upload_page(
         ),
         documents,
         errors,
+        receipt: false,
     })
 }
 
 /// Upload-Formular mit den offenen Dokumenten.
 // @impl SPEC_DOC_UPLOADS
-pub async fn list(State(state): State<WebState>, ctx: Ctx) -> Result<Response, Response> {
+#[derive(Deserialize)]
+pub struct KindQuery {
+    kind: Option<String>,
+}
+
+pub async fn list(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Query(q): Query<KindQuery>,
+) -> Result<Response, Response> {
     if !ctx.page.can_write {
         return Err(ctx.fail(AppError::Forbidden));
     }
-    Ok(render(&upload_page(&ctx, &state, Vec::new()).await?))
+    let mut page = upload_page(&ctx, &state, Vec::new()).await?;
+    page.receipt = q.kind.as_deref() == Some("receipt");
+    Ok(render(&page))
 }
 
 async fn upload_failed(
@@ -133,6 +150,7 @@ pub async fn upload(
     let lang = ctx.page.lang;
     let mut token = None;
     let mut file = None;
+    let mut kind = DocumentKind::Invoice;
     loop {
         let field = match multipart.next_field().await {
             Ok(Some(f)) => f,
@@ -148,6 +166,14 @@ pub async fn upload(
         };
         match field.name() {
             Some("_csrf") => token = field.text().await.ok(),
+            Some("kind") => {
+                kind = field
+                    .text()
+                    .await
+                    .ok()
+                    .and_then(|k| k.parse().ok())
+                    .unwrap_or_default();
+            }
             Some("file") => {
                 let name = field.file_name().unwrap_or_default().to_owned();
                 match field.bytes().await {
@@ -173,7 +199,7 @@ pub async fn upload(
     let id = match state
         .uc
         .upload_document
-        .execute(&ctx.tenant, bytes, &name)
+        .execute(&ctx.tenant, bytes, &name, kind)
         .await
     {
         Ok(id) => id,
@@ -926,6 +952,15 @@ pub async fn show(
     Query(q): Query<MeterQuery>,
 ) -> Result<Response, Response> {
     let id = parse_id(&id).map_err(|e| ctx.fail(e))?;
+    let doc = state
+        .uc
+        .get_document
+        .execute(&ctx.tenant, id)
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    if doc.kind == DocumentKind::Receipt {
+        return super::receipts::show(&state, &ctx, doc).await;
+    }
     let meter = q.meter.as_deref().and_then(|m| m.parse().ok());
     let l = load(&state, &ctx, id, meter).await?;
     Ok(render(&invoice_page(

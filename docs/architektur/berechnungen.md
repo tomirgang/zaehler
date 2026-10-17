@@ -199,7 +199,7 @@ Kauf bis heute bzw. Verkauf.
 
 ```{spec} Energiekosten von Elektrofahrzeugen und Plug-in-Hybriden
 :id: SPEC_CAR_ENERGY_COST
-:status: draft
+:status: implemented
 :satisfies: REQ_CAR_007, REQ_CAR_008, REQ_CAR_009, REQ_CAR_010, REQ_CAR_011, REQ_CAR_003
 
 Für einen Zeitraum *P*:
@@ -228,6 +228,13 @@ Für einen Zeitraum *P*:
   nur ausgewiesen, wenn `E_heim` gemessen ist.
 - Hausstrom ohne Fahrzeuganteil: Verbrauch der Hausstrom-Messstelle minus
   Verbrauch aller zugeordneten Zwischenzähler im selben Zeitraum.
+
+Umsetzung (`zaehler_domain::vehicle`): Die Heimlade-Messstelle ist ein
+Wallbox-Zwischenzähler oder die Hausstrom-Messstelle selbst (dann
+Schätzung). `p_haus` ist der durchschnittliche Arbeitspreis der
+Bezugsverträge im Zeitraum. Der Mischpreis mit PV folgt mit WP_V1_18; bis
+dahin gilt `p_lade = p_haus`. Profile vor dem ersten `valid_from` gelten
+wie das erste Profil.
 ```
 
 ```{spec} Linearer Wertverlust

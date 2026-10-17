@@ -21,6 +21,7 @@ pub const SESSION_INVITE: &str = "invite";
 
 /// Daten, die jede Seite im Layout braucht.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)] // Rollen und Navigation
 pub struct PageCtx {
     pub lang: Lang,
     pub csrf: String,
@@ -32,6 +33,8 @@ pub struct PageCtx {
     pub can_write: bool,
     /// Navigation „Kosten“ nur mit Verträgen (SPEC_TAR_COST_VIEW)
     pub has_contracts: bool,
+    /// Navigation „Fahrzeuge“ nur mit Fahrzeugen (SPEC_CAR_VEHICLES)
+    pub has_vehicles: bool,
     pub flash: Option<String>,
     pub static_prefix: String,
     pub version: &'static str,
@@ -175,6 +178,7 @@ impl FromRequestParts<WebState> for Ctx {
             is_owner: resolved.tenant.role() >= Role::Owner,
             can_write: resolved.tenant.role() >= Role::Member,
             has_contracts: resolved.has_contracts,
+            has_vehicles: resolved.has_vehicles,
             flash,
             static_prefix: format!("/static/{}", state.cfg.version),
             version: state.cfg.version,

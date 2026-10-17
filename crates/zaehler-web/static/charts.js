@@ -171,6 +171,39 @@
       });
       return { ...base(data), series };
     },
+    // Fahrzeugkosten je Jahr: variabel, fix und Wertverlust gestapelt
+    // (SPEC_CAR_REPORT)
+    vehicle(data) {
+      const s = data.series;
+      const accent = css("--accent");
+      const series = [
+        {
+          id: "variable",
+          type: "bar",
+          stack: "cost",
+          name: s.variable.name,
+          data: s.variable.data,
+          itemStyle: { color: accent },
+        },
+        {
+          id: "fixed",
+          type: "bar",
+          stack: "cost",
+          name: s.fixed.name,
+          data: s.fixed.data,
+          itemStyle: { color: css("--muted") },
+        },
+        {
+          id: "depreciation",
+          type: "bar",
+          stack: "cost",
+          name: s.depreciation.name,
+          data: s.depreciation.data,
+          itemStyle: { color: accent, opacity: 0.55, decal: hatch },
+        },
+      ];
+      return { ...base(data), series };
+    },
     // Monatskosten: Bezug gemessen und prognostiziert (schraffiert)
     // gestapelt, Einspeisevergütung als negativer Balken (SPEC_TAR_COST_VIEW)
     costs(data) {

@@ -9,6 +9,7 @@ use crate::port::{
 };
 
 pub mod analysis;
+pub mod asset_cost;
 pub mod auth;
 pub mod backup;
 pub mod capture;
@@ -24,6 +25,8 @@ pub mod meter;
 pub mod notify;
 pub mod reading;
 mod validate;
+pub mod vehicle;
+pub mod vehicle_report;
 
 #[cfg(test)]
 mod contract_tests;
@@ -43,6 +46,8 @@ mod notify_tests;
 mod reading_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vehicle_tests;
 
 /// Driven Ports, die alle Anwendungsfälle benötigen.
 #[derive(Clone)]
@@ -181,6 +186,22 @@ pub struct UseCases {
     pub get_document_file: document::GetDocumentFile,
     pub discard_document: document::DiscardDocument,
     pub confirm_invoice: document::ConfirmInvoice,
+    pub confirm_receipt: document::ConfirmReceipt,
+    pub list_vehicles: vehicle::ListVehicles,
+    pub get_vehicle: vehicle::GetVehicle,
+    pub create_vehicle: vehicle::CreateVehicle,
+    pub update_vehicle: vehicle::UpdateVehicle,
+    pub set_consumption_profile: vehicle::SetConsumptionProfile,
+    pub delete_consumption_profile: vehicle::DeleteConsumptionProfile,
+    pub set_acquisition: vehicle::SetAcquisition,
+    pub record_charging: vehicle::RecordCharging,
+    pub delete_charging: vehicle::DeleteCharging,
+    pub list_asset_costs: asset_cost::ListAssetCosts,
+    pub get_asset_cost: asset_cost::GetAssetCost,
+    pub add_asset_cost: asset_cost::AddAssetCost,
+    pub update_asset_cost: asset_cost::UpdateAssetCost,
+    pub delete_asset_cost: asset_cost::DeleteAssetCost,
+    pub vehicle_report: vehicle_report::VehicleReport,
 }
 
 impl UseCases {
@@ -256,6 +277,22 @@ impl UseCases {
             get_document_file: document::GetDocumentFile::new(p.clone()),
             discard_document: document::DiscardDocument::new(p.clone()),
             confirm_invoice: document::ConfirmInvoice::new(p.clone()),
+            confirm_receipt: document::ConfirmReceipt::new(p.clone()),
+            list_vehicles: vehicle::ListVehicles::new(p.clone()),
+            get_vehicle: vehicle::GetVehicle::new(p.clone()),
+            create_vehicle: vehicle::CreateVehicle::new(p.clone()),
+            update_vehicle: vehicle::UpdateVehicle::new(p.clone()),
+            set_consumption_profile: vehicle::SetConsumptionProfile::new(p.clone()),
+            delete_consumption_profile: vehicle::DeleteConsumptionProfile::new(p.clone()),
+            set_acquisition: vehicle::SetAcquisition::new(p.clone()),
+            record_charging: vehicle::RecordCharging::new(p.clone()),
+            delete_charging: vehicle::DeleteCharging::new(p.clone()),
+            list_asset_costs: asset_cost::ListAssetCosts::new(p.clone()),
+            get_asset_cost: asset_cost::GetAssetCost::new(p.clone()),
+            add_asset_cost: asset_cost::AddAssetCost::new(p.clone()),
+            update_asset_cost: asset_cost::UpdateAssetCost::new(p.clone()),
+            delete_asset_cost: asset_cost::DeleteAssetCost::new(p.clone()),
+            vehicle_report: vehicle_report::VehicleReport::new(p.clone()),
         }
     }
 }

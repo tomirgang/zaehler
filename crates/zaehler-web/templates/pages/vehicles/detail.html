@@ -1,0 +1,332 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ name }}</h1>
+  <div class="actions">
+    <a class="button secondary" href="/vehicles/{{ id }}/costs">{{ ctx.lang.t("asset-costs-title") }}</a>
+    {% if ctx.can_write %}<a class="button secondary" href="/documents?kind=receipt">{{ ctx.lang.t("receipt-import") }}</a>{% endif %}
+    <a class="button secondary" href="/meters/{{ id }}">{{ ctx.lang.t("vehicle-readings") }}</a>
+    {% if ctx.is_owner %}<a class="button secondary" href="/vehicles/{{ id }}/edit">{{ ctx.lang.t("vehicle-edit") }}</a>{% endif %}
+  </div>
+</div>
+
+{% if !has_vehicle %}
+<p class="callout warning">{{ ctx.lang.t("vehicle-data-missing-hint") }}</p>
+{% else %}
+<dl class="facts">
+  {% for (k, v) in facts %}<dt>{{ k }}</dt><dd>{{ v }}</dd>{% endfor %}
+</dl>
+
+{% for e in self.errs("entry") %}<p class="callout warning" role="alert">{{ e }}</p>{% endfor %}
+
+<section aria-labelledby="report-title">
+  <h2 id="report-title">{{ ctx.lang.t("vehicle-report") }}</h2>
+  {% if rows.is_empty() %}
+  <p class="muted">{{ ctx.lang.t("vehicle-report-empty") }}</p>
+  {% else %}
+  <div class="table-scroll">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("vehicle-period") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-km") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-variable") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-fixed") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-depreciation") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-variable-per-km") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-total-per-km") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-fuel-per-100") }}</th>
+        {% if charges %}
+        <th class="num">{{ ctx.lang.t("vehicle-kwh-per-100") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-charging-external") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-charging-home") }}</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <th scope="row">{{ r.label }}{% if r.estimated %} <span class="tag">{{ ctx.lang.t("vehicle-estimated") }}</span>{% endif %}</th>
+        <td class="num">{{ r.km }}</td>
+        <td class="num">{{ r.variable }}</td>
+        <td class="num">{{ r.fixed }}</td>
+        <td class="num">{{ r.depreciation }}</td>
+        <td class="num">{{ r.variable_per_km }}</td>
+        <td class="num">{{ r.total_per_km }}</td>
+        <td class="num">{{ r.fuel }}</td>
+        {% if charges %}
+        <td class="num">{{ r.kwh }}</td>
+        <td class="num">{{ r.external }}</td>
+        <td class="num">{{ r.home }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="hint">{{ ctx.lang.t("vehicle-report-hint") }}</p>
+  <div class="charts" data-chart-url="/vehicles/{{ id }}/chart.json" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
+    <h3 id="vehicle-chart-title">{{ ctx.lang.t("vehicle-chart") }}</h3>
+    <div class="chart" data-chart="vehicle" role="img" aria-labelledby="vehicle-chart-title"></div>
+  </div>
+  {% endif %}
+</section>
+
+{% if let Some(f) = forecast %}
+<section aria-labelledby="forecast-title">
+  <h2 id="forecast-title">{{ ctx.lang.t("vehicle-forecast") }} {{ f.year }}</h2>
+  <dl class="facts">
+    <dt>{{ ctx.lang.t("vehicle-forecast-km") }}</dt><dd>{{ f.km }}</dd>
+    <dt>{{ ctx.lang.t("vehicle-forecast-fixed") }}</dt><dd>{{ f.fixed }}</dd>
+    <dt>{{ ctx.lang.t("vehicle-forecast-variable") }}</dt><dd>{{ f.variable_per_km }}</dd>
+    <dt>{{ ctx.lang.t("vehicle-forecast-expected") }}</dt><dd>{{ f.expected }}</dd>
+  </dl>
+</section>
+{% endif %}
+
+{% if !categories.is_empty() %}
+<section aria-labelledby="categories-title">
+  <h2 id="categories-title">{{ ctx.lang.t("vehicle-categories") }}</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("asset-category") }}</th>
+        <th class="num">{{ category_year }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-holding") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for (c, a, b) in categories %}
+      <tr><td>{{ c }}</td><td class="num">{{ a }}</td><td class="num">{{ b }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if !fuel.is_empty() %}
+<section aria-labelledby="fuel-title">
+  <h2 id="fuel-title">{{ ctx.lang.t("vehicle-fuel-segments") }}</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("vehicle-full-tank-on") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-km") }}</th>
+        <th class="num">{{ ctx.lang.t("asset-quantity") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-fuel-per-100") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in fuel %}
+      <tr><td>{{ r.cells[0] }}</td><td class="num">{{ r.cells[1] }}</td><td class="num">{{ r.cells[2] }}</td><td class="num">{{ r.cells[3] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if charges %}
+<section aria-labelledby="charging-title">
+  <h2 id="charging-title">{{ ctx.lang.t("vehicle-charging") }}</h2>
+  {% if charging.is_empty() %}
+  <p class="muted">{{ ctx.lang.t("vehicle-charging-empty") }}</p>
+  {% else %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("reading-at") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-energy") }}</th>
+        <th class="num">{{ ctx.lang.t("asset-amount") }}</th>
+        <th>{{ ctx.lang.t("vehicle-charging-kind") }}</th>
+        <th>{{ ctx.lang.t("vehicle-provider") }}</th>
+        {% if ctx.can_write %}<th><span class="visually-hidden">{{ ctx.lang.t("member-actions") }}</span></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in charging %}
+      <tr>
+        <td>{{ r.cells[0] }}</td>
+        <td class="num">{{ r.cells[1] }}</td>
+        <td class="num">{{ r.cells[2] }}</td>
+        <td>{{ r.cells[3] }}</td>
+        <td>{{ r.cells[4] }}{% if !r.cells[5].is_empty() %} <a href="/documents/{{ r.cells[5] }}/file">{{ ctx.lang.t("document-receipt") }}</a>{% endif %}</td>
+        {% if ctx.can_write %}
+        <td>
+          <form method="post" action="/vehicles/{{ id }}/charging/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("entry-delete-confirm") }}">
+            <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+            <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if ctx.can_write %}
+  <form method="post" action="/vehicles/{{ id }}/charging" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <h3>{{ ctx.lang.t("vehicle-charging-add") }}</h3>
+    <div class="grid">
+      <div class="field">
+        <label for="charging_at">{{ ctx.lang.t("reading-at") }}</label>
+        <input id="charging_at" name="charging_at" type="datetime-local" value="{{ self.val_or("charging_at", crate::pages::vehicles::now_input(ctx.tz).as_str()) }}" required>
+        {% for e in self.errs("charging_at") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="charging_energy">{{ ctx.lang.t("vehicle-energy") }}</label>
+        <input id="charging_energy" name="charging_energy" value="{{ self.val("charging_energy") }}" inputmode="decimal" required>
+        {% for e in self.errs("charging_energy") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="charging_amount">{{ ctx.lang.t("asset-amount") }}</label>
+        <input id="charging_amount" name="charging_amount" value="{{ self.val("charging_amount") }}" inputmode="decimal" required>
+        <p class="hint">{{ ctx.lang.t("vehicle-charging-free-hint") }}</p>
+        {% for e in self.errs("charging_amount") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="charging_kind">{{ ctx.lang.t("vehicle-charging-kind") }}</label>
+        <select id="charging_kind" name="charging_kind">
+          {% for (value, label) in kinds %}
+          <option value="{{ value }}"{% if *value == self.val("charging_kind") %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="charging_provider">{{ ctx.lang.t("vehicle-provider") }}</label>
+        <input id="charging_provider" name="charging_provider" value="{{ self.val("charging_provider") }}" maxlength="80">
+        {% for e in self.errs("charging_provider") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="charging_odometer">{{ ctx.lang.t("asset-odometer") }}</label>
+        <input id="charging_odometer" name="charging_odometer" value="{{ self.val("charging_odometer") }}" inputmode="decimal">
+        <label><input type="checkbox" name="charging_odometer_reading" value="1"{% if !self.val("charging_odometer_reading").is_empty() %} checked{% endif %}> {{ ctx.lang.t("asset-odometer-reading") }}</label>
+        {% for e in self.errs("charging_odometer") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    {% for e in self.errs("charging_drive_type") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    {% if let Some(w) = warning %}
+    <div class="callout warning">
+      <p>{{ w }}</p>
+      <label><input type="checkbox" name="confirm_warnings" value="true"> {{ ctx.lang.t("readings-confirm") }}</label>
+    </div>
+    {% endif %}
+    <div class="actions"><button type="submit">{{ ctx.lang.t("vehicle-charging-save") }}</button></div>
+  </form>
+  {% endif %}
+</section>
+
+<section aria-labelledby="profiles-title">
+  <h2 id="profiles-title">{{ ctx.lang.t("vehicle-profiles") }}</h2>
+  <p class="hint">{{ ctx.lang.t("vehicle-profiles-hint") }}</p>
+  {% if profiles.is_empty() %}
+  <p class="muted">{{ ctx.lang.t("vehicle-profiles-empty") }}</p>
+  {% else %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("contract-valid-from") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-profile-kwh") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-profile-loss") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-profile-share") }}</th>
+        {% if ctx.is_owner %}<th><span class="visually-hidden">{{ ctx.lang.t("member-actions") }}</span></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in profiles %}
+      <tr>
+        <td>{{ r.cells[0] }}</td><td class="num">{{ r.cells[1] }}</td><td class="num">{{ r.cells[2] }}</td><td class="num">{{ r.cells[3] }}</td>
+        {% if ctx.is_owner %}
+        <td>
+          <form method="post" action="/vehicles/{{ id }}/profiles/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("entry-delete-confirm") }}">
+            <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+            <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if ctx.is_owner %}
+  <form method="post" action="/vehicles/{{ id }}/profiles" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="grid">
+      <div class="field">
+        <label for="profile_valid_from">{{ ctx.lang.t("contract-valid-from") }}</label>
+        <input id="profile_valid_from" name="profile_valid_from" type="date" value="{{ self.val("profile_valid_from") }}" required>
+        {% for e in self.errs("profile_valid_from") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="profile_kwh">{{ ctx.lang.t("vehicle-profile-kwh") }}</label>
+        <input id="profile_kwh" name="profile_kwh" value="{{ self.val("profile_kwh") }}" inputmode="decimal" required>
+        {% for e in self.errs("profile_kwh") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="profile_loss">{{ ctx.lang.t("vehicle-profile-loss") }}</label>
+        <input id="profile_loss" name="profile_loss" value="{{ self.val_or("profile_loss", "10") }}" inputmode="decimal">
+        {% for e in self.errs("profile_loss") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      {% if plugin_hybrid %}
+      <div class="field">
+        <label for="profile_share">{{ ctx.lang.t("vehicle-profile-share") }}</label>
+        <input id="profile_share" name="profile_share" value="{{ self.val("profile_share") }}" inputmode="decimal">
+        {% for e in self.errs("profile_share") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    <div class="actions"><button type="submit">{{ ctx.lang.t("vehicle-profile-save") }}</button></div>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+{% endif %}
+
+{% if ctx.is_owner %}
+<section aria-labelledby="acquisition-title">
+  <h2 id="acquisition-title">{{ ctx.lang.t("vehicle-acquisition") }}</h2>
+  <p class="hint">{{ ctx.lang.t("vehicle-acquisition-hint") }}</p>
+  <form method="post" action="/vehicles/{{ id }}/acquisition" class="form" novalidate>
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="grid">
+      <div class="field">
+        <label for="purchased_on">{{ ctx.lang.t("vehicle-purchased-on") }}</label>
+        <input id="purchased_on" name="purchased_on" type="date" value="{{ self.val("purchased_on") }}" required>
+        {% for e in self.errs("purchased_on") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="price">{{ ctx.lang.t("vehicle-price") }}</label>
+        <input id="price" name="price" value="{{ self.val("price") }}" inputmode="decimal" required>
+        {% for e in self.errs("price") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="residual_value">{{ ctx.lang.t("vehicle-residual") }}</label>
+        <input id="residual_value" name="residual_value" value="{{ self.val("residual_value") }}" inputmode="decimal" required>
+        {% for e in self.errs("residual_value") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="planned_end">{{ ctx.lang.t("vehicle-planned-end") }}</label>
+        <input id="planned_end" name="planned_end" type="date" value="{{ self.val("planned_end") }}" required>
+        {% for e in self.errs("planned_end") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="sold_on">{{ ctx.lang.t("vehicle-sold-on") }}</label>
+        <input id="sold_on" name="sold_on" type="date" value="{{ self.val("sold_on") }}">
+        {% for e in self.errs("sold_on") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="sale_price">{{ ctx.lang.t("vehicle-sale-price") }}</label>
+        <input id="sale_price" name="sale_price" value="{{ self.val("sale_price") }}" inputmode="decimal">
+        {% for e in self.errs("sale_price") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    <div class="actions">
+      <button type="submit">{{ ctx.lang.t("vehicle-acquisition-save") }}</button>
+      <button type="submit" name="action" value="remove" class="link danger">{{ ctx.lang.t("vehicle-acquisition-remove") }}</button>
+    </div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

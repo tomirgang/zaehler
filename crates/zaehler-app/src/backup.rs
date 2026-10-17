@@ -317,6 +317,78 @@ pub struct DocumentRecord {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
+/// Fahrzeug (ab `m20261018_000013_vehicles`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VehicleRecord {
+    pub meter_id: Uuid,
+    pub plate: String,
+    pub model: String,
+    /// `combustion`, `electric` oder `plugin_hybrid`
+    pub drive_type: String,
+    pub home_charging_meter_id: Option<Uuid>,
+    pub pv_share_override_pct_milli: Option<i64>,
+}
+
+/// Verbrauchsprofil (ab `m20261018_000013_vehicles`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsumptionProfileRecord {
+    pub id: Uuid,
+    pub vehicle_id: Uuid,
+    pub valid_from: NaiveDate,
+    pub kwh_per_100km_milli: i64,
+    pub charging_loss_pct_milli: i64,
+    pub electric_share_pct_milli: Option<i64>,
+}
+
+/// Anschaffung (ab `m20261018_000013_vehicles`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcquisitionRecord {
+    pub vehicle_id: Uuid,
+    pub purchased_on: NaiveDate,
+    pub price_micro: i64,
+    pub residual_micro: i64,
+    pub planned_end_on: NaiveDate,
+    pub sold_on: Option<NaiveDate>,
+    pub sale_price_micro: Option<i64>,
+}
+
+/// Externer Ladevorgang (ab `m20261018_000013_vehicles`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChargingSessionRecord {
+    pub id: Uuid,
+    pub vehicle_id: Uuid,
+    pub charged_at: DateTime<Utc>,
+    pub energy_milli: i64,
+    pub amount_micro: i64,
+    pub odometer_milli: Option<i64>,
+    pub provider: Option<String>,
+    /// `ac` oder `dc`
+    pub kind: String,
+    /// `form` oder `receipt`
+    pub source: String,
+    pub document_id: Option<Uuid>,
+}
+
+/// Kostenbuch-Eintrag (ab `m20261018_000013_vehicles`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetCostRecord {
+    pub id: Uuid,
+    pub household_id: Uuid,
+    /// `vehicle` oder `pv_system`
+    pub asset_type: String,
+    pub asset_id: Uuid,
+    pub booked_on: NaiveDate,
+    pub category: String,
+    pub amount_micro: i64,
+    pub quantity_milli: Option<i64>,
+    pub odometer_milli: Option<i64>,
+    pub full_tank: Option<bool>,
+    pub recurrence_months: Option<i16>,
+    pub recurrence_until: Option<NaiveDate>,
+    pub document_id: Option<Uuid>,
+    pub note: Option<String>,
+}
+
 /// Alle Datensätze eines Archivs. Sitzungen und temporäre Dateien sind nicht
 /// enthalten.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -357,6 +429,16 @@ pub struct BackupData {
     pub settlements: Vec<SettlementRecord>,
     #[serde(default)]
     pub documents: Vec<DocumentRecord>,
+    #[serde(default)]
+    pub vehicles: Vec<VehicleRecord>,
+    #[serde(default)]
+    pub consumption_profiles: Vec<ConsumptionProfileRecord>,
+    #[serde(default)]
+    pub acquisitions: Vec<AcquisitionRecord>,
+    #[serde(default)]
+    pub charging_sessions: Vec<ChargingSessionRecord>,
+    #[serde(default)]
+    pub asset_costs: Vec<AssetCostRecord>,
 }
 
 impl BackupData {
@@ -388,6 +470,7 @@ impl BackupData {
     /// Nur die Daten eines Haushalts; Nutzerkonten, Einladungen und
     /// Benachrichtigungseinstellungen entfallen.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // ein Filter je Tabelle
     pub fn household(self, id: Uuid) -> Self {
         let meters: HashSet<Uuid> = self
             .meters
@@ -488,6 +571,31 @@ impl BackupData {
                 .filter(|r| r.household_id == id)
                 .collect(),
             notification_settings: Vec::new(),
+            vehicles: self
+                .vehicles
+                .into_iter()
+                .filter(|v| meters.contains(&v.meter_id))
+                .collect(),
+            consumption_profiles: self
+                .consumption_profiles
+                .into_iter()
+                .filter(|p| meters.contains(&p.vehicle_id))
+                .collect(),
+            acquisitions: self
+                .acquisitions
+                .into_iter()
+                .filter(|a| meters.contains(&a.vehicle_id))
+                .collect(),
+            charging_sessions: self
+                .charging_sessions
+                .into_iter()
+                .filter(|c| meters.contains(&c.vehicle_id))
+                .collect(),
+            asset_costs: self
+                .asset_costs
+                .into_iter()
+                .filter(|c| c.household_id == id)
+                .collect(),
         }
     }
 

@@ -6,8 +6,8 @@
 //! (`docs/_ext/codetrace.py`) eingesammelt und als Trace-Links gerendert.
 
 pub mod analysis;
+pub mod assets;
 pub mod calendar;
-pub mod car;
 pub mod comparison;
 pub mod consumption;
 pub mod cost;
@@ -19,5 +19,6 @@ pub mod reading;
 pub mod schedule;
 pub mod series;
 pub mod tariff;
+pub mod vehicle;
 
 pub use rust_decimal::Decimal;

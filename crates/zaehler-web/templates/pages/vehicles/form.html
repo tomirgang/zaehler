@@ -1,0 +1,78 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{% if meter_id.is_some() %}{{ ctx.lang.t("vehicle-edit") }}{% else %}{{ ctx.lang.t("vehicle-new") }}{% endif %}</h1>
+{% if let Some(c) = conflict %}<p class="callout warning" role="alert">{{ c }}</p>{% endif %}
+<form method="post" action="{% if let Some(id) = meter_id %}/vehicles/{{ id }}/edit{% else %}/vehicles/new{% endif %}" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  {% if meter_id.is_none() %}
+  <div class="field{% if self.has_errs("name") %} has-error{% endif %}">
+    <label for="name">{{ ctx.lang.t("meter-name") }}</label>
+    <input id="name" name="name" value="{{ form.name }}" maxlength="80" required>
+    {% for e in self.errs("name") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">{{ form.name }}</p>
+  {% endif %}
+  <div class="grid">
+    <div class="field{% if self.has_errs("plate") %} has-error{% endif %}">
+      <label for="plate">{{ ctx.lang.t("vehicle-plate") }}</label>
+      <input id="plate" name="plate" value="{{ form.plate }}" maxlength="20">
+      {% for e in self.errs("plate") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("model") %} has-error{% endif %}">
+      <label for="model">{{ ctx.lang.t("vehicle-model") }}</label>
+      <input id="model" name="model" value="{{ form.model }}" maxlength="80">
+      {% for e in self.errs("model") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("drive_type") %} has-error{% endif %}">
+      <label for="drive_type">{{ ctx.lang.t("vehicle-drive") }}</label>
+      <select id="drive_type" name="drive_type">
+        {% for (value, label) in drives %}
+        <option value="{{ value }}"{% if *value == form.drive_type %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">{{ ctx.lang.t("vehicle-drive-hint") }}</p>
+      {% for e in self.errs("drive_type") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+  <div class="grid">
+    <div class="field{% if self.has_errs("home_charging_meter_id") %} has-error{% endif %}">
+      <label for="home_charging_meter_id">{{ ctx.lang.t("vehicle-home") }}</label>
+      <select id="home_charging_meter_id" name="home_charging_meter_id">
+        <option value="">{{ ctx.lang.t("vehicle-home-none") }}</option>
+        {% for (value, label) in home_meters %}
+        <option value="{{ value }}"{% if *value == form.home %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">{{ ctx.lang.t("vehicle-home-hint") }}</p>
+      {% for e in self.errs("home_charging_meter_id") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("pv_share_pct") %} has-error{% endif %}">
+      <label for="pv_share_pct">{{ ctx.lang.t("vehicle-pv-share") }}</label>
+      <input id="pv_share_pct" name="pv_share_pct" value="{{ form.pv_share }}" inputmode="decimal">
+      <p class="hint">{{ ctx.lang.t("vehicle-pv-share-hint") }}</p>
+      {% for e in self.errs("pv_share_pct") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+  {% if meter_id.is_none() %}
+  <div class="grid">
+    <div class="field{% if self.has_errs("odometer") || self.has_errs("register_0_start") %} has-error{% endif %}">
+      <label for="odometer">{{ ctx.lang.t("vehicle-odometer-start") }}</label>
+      <input id="odometer" name="odometer" value="{{ form.odometer }}" inputmode="decimal" required>
+      {% for e in self.errs("odometer") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      {% for e in self.errs("register_0_start") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("start_at") %} has-error{% endif %}">
+      <label for="start_at">{{ ctx.lang.t("vehicle-start") }}</label>
+      <input id="start_at" name="start_at" type="date" value="{{ form.start }}" required>
+      {% for e in self.errs("start_at") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("action-save") }}</button>
+    <a href="{% if let Some(id) = meter_id %}/vehicles/{{ id }}{% else %}/vehicles{% endif %}">{{ ctx.lang.t("action-cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

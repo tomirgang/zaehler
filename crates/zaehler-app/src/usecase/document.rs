@@ -9,9 +9,13 @@ use zaehler_domain::reading::ReadingSource;
 use crate::{
     AppError, PortError, Role, Tenant,
     ids::{BlobKey, ContractId, DocumentId, MeterId, PositionId},
-    model::{Document, DocumentAnalysis, DocumentStatus, DocumentType},
+    model::{
+        AssetRef, Document, DocumentAnalysis, DocumentKind, DocumentStatus, DocumentType,
+        EntrySource,
+    },
     port::{DocumentContent, UnitOfWork},
     usecase::{
+        asset_cost::{AssetCostInput, add_in},
         capture::normalize_serial,
         contract::{
             ComponentInput, ContractInput, InstallmentInput, SettlementInput, add_component_in,
@@ -19,6 +23,7 @@ use crate::{
         },
         reading::{ReadingExtras, ReadingsInput, RecordOutcome, RegisterCheck, record_in},
         use_case,
+        vehicle::{ChargingInput, SaveOutcome, record_charging_in},
     },
 };
 
@@ -38,6 +43,8 @@ use_case!(
     /// Ausgewählte Vorschläge einer Rechnung übernehmen (Member; Vertrag,
     /// Preisstände und Abschlag Owner).
     ConfirmInvoice,
+    /// Beleg als Ladevorgang oder Kostenbuch-Eintrag übernehmen (Member).
+    ConfirmReceipt,
 );
 
 /// Höchstlänge des angezeigten Dateinamens.
@@ -81,6 +88,7 @@ impl UploadDocument {
         t: &Tenant,
         bytes: Bytes,
         original_name: &str,
+        kind: DocumentKind,
     ) -> Result<DocumentId, AppError> {
         t.require(Role::Member)?;
         if bytes.is_empty() {
@@ -116,6 +124,7 @@ impl UploadDocument {
         let doc = Document {
             id,
             blob_key: key.clone(),
+            kind,
             media_type,
             bytes: size,
             original_name: display_name(original_name),
@@ -124,6 +133,7 @@ impl UploadDocument {
             status: DocumentStatus::Uploaded,
             model: None,
             extraction: None,
+            receipt: None,
             meter_id: None,
             analysed_at: None,
         };
@@ -170,33 +180,40 @@ impl AnalyseDocument {
                 .get(&doc.blob_key)
                 .await
                 .map_err(AppError::from_storage)?;
+            let content = DocumentContent {
+                media_type: doc.media_type,
+                bytes,
+            };
             let started = Instant::now();
-            let result = extractor
-                .invoice(&DocumentContent {
-                    media_type: doc.media_type,
-                    bytes,
-                })
-                .await;
+            let result = match doc.kind {
+                DocumentKind::Invoice => extractor.invoice(&content).await.map(|x| (Some(x), None)),
+                DocumentKind::Receipt => extractor.receipt(&content).await.map(|x| (None, Some(x))),
+            };
             let outcome = result
                 .as_ref()
                 .map_or_else(crate::port::RecognitionError::outcome, |_| "ok");
-            metrics::counter!("zaehler_documents_total", "kind" => "invoice", "outcome" => outcome)
+            metrics::counter!("zaehler_documents_total", "kind" => doc.kind.as_str(), "outcome" => outcome)
                 .increment(1);
             metrics::histogram!("zaehler_document_analysis_seconds")
                 .record(started.elapsed().as_secs_f64());
             match result {
-                Ok(extraction) => DocumentAnalysis {
+                Ok((extraction, receipt)) => DocumentAnalysis {
                     model: Some(extractor.model().to_owned()),
-                    meter_id: self.match_meter(t, &extraction).await?,
-                    extraction: Some(extraction),
+                    meter_id: match &extraction {
+                        Some(x) => self.match_meter(t, x).await?,
+                        None => None,
+                    },
+                    extraction,
+                    receipt,
                     status: DocumentStatus::Analysed,
                     at: now,
                 },
                 Err(e) => {
-                    tracing::warn!(outcome, error = %e, "invoice extraction failed");
+                    tracing::warn!(outcome, error = %e, kind = doc.kind.as_str(), "document extraction failed");
                     DocumentAnalysis {
                         model: Some(extractor.model().to_owned()),
                         extraction: None,
+                        receipt: None,
                         meter_id: None,
                         status: DocumentStatus::Failed,
                         at: now,
@@ -207,6 +224,7 @@ impl AnalyseDocument {
             DocumentAnalysis {
                 model: None,
                 extraction: None,
+                receipt: None,
                 meter_id: None,
                 status: DocumentStatus::Failed,
                 at: now,
@@ -434,5 +452,66 @@ impl ConfirmInvoice {
             .await?;
         uow.commit().await?;
         Ok(ConfirmOutcome::Saved { contract })
+    }
+}
+
+/// Übernahme eines Belegs (SPEC_AI_RECEIPT).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiptEntry {
+    /// Externer Ladevorgang
+    Charging(ChargingInput),
+    /// Kostenbuch-Eintrag
+    Cost(AssetCostInput),
+}
+
+impl ConfirmReceipt {
+    /// Speichert den bestätigten Vorschlag mit Verweis auf das Dokument
+    /// (`source = receipt`) und schließt das Dokument in derselben Unit of
+    /// Work ab; bei Warnungen zum Kilometerstand wird nichts gespeichert.
+    // @impl SPEC_AI_RECEIPT
+    #[tracing::instrument(name = "ConfirmReceipt", skip_all)]
+    pub async fn execute(
+        &self,
+        t: &Tenant,
+        id: DocumentId,
+        vehicle: MeterId,
+        entry: ReceiptEntry,
+    ) -> Result<SaveOutcome<()>, AppError> {
+        t.require(Role::Member)?;
+        let mut uow = self.p.uow.begin().await?;
+        let doc = load_open(uow.as_mut(), t, id).await?;
+        if doc.kind != DocumentKind::Receipt {
+            return Err(AppError::NotFound);
+        }
+        let outcome = match &entry {
+            ReceiptEntry::Charging(input) => record_charging_in(
+                &self.p,
+                uow.as_mut(),
+                t,
+                vehicle,
+                input,
+                EntrySource::Receipt,
+                Some(id),
+            )
+            .await?
+            .map(|_| ()),
+            ReceiptEntry::Cost(input) => add_in(
+                &self.p,
+                uow.as_mut(),
+                t,
+                AssetRef::vehicle(vehicle),
+                input,
+                Some(id),
+            )
+            .await?
+            .map(|_| ()),
+        };
+        if matches!(outcome, SaveOutcome::Saved(())) {
+            uow.documents()
+                .finish(t, id, DocumentStatus::Confirmed, self.p.clock.now())
+                .await?;
+            uow.commit().await?;
+        }
+        Ok(outcome)
     }
 }

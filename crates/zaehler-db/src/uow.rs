@@ -213,6 +213,12 @@ impl UnitOfWork for SeaOrmUow {
     fn contracts(&mut self) -> &mut dyn ContractRepository {
         self
     }
+    fn vehicles(&mut self) -> &mut dyn zaehler_app::port::VehicleRepository {
+        self
+    }
+    fn asset_costs(&mut self) -> &mut dyn zaehler_app::port::AssetCostRepository {
+        self
+    }
     fn documents(&mut self) -> &mut dyn zaehler_app::port::DocumentRepository {
         self
     }
@@ -1607,3 +1613,6 @@ mod contracts;
 
 #[path = "documents.rs"]
 mod documents;
+
+#[path = "vehicles.rs"]
+mod vehicles;

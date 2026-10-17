@@ -11,14 +11,15 @@ use crate::{
     port::{DocumentContent, DocumentExtractor, DocumentRepository, RecognitionError},
 };
 
-/// Entfernt Dokumente vor `cutoff` ohne Verweis aus einer Abrechnung und
-/// liefert ihre Dateien.
+/// Entfernt Dokumente vor `cutoff` ohne Verweis aus einer Abrechnung, einem
+/// Ladevorgang oder einem Kostenbuch-Eintrag und liefert ihre Dateien.
 pub(super) fn expire(s: &mut State, cutoff: DateTime<Utc>) -> Vec<BlobKey> {
-    let referenced: Vec<uuid::Uuid> = s
+    let mut referenced: Vec<uuid::Uuid> = s
         .contracts
         .iter()
         .flat_map(|c| c.settlements.iter().filter_map(|x| x.document_id))
         .collect();
+    referenced.extend(super::vehicles_impl::referenced_documents(s));
     let mut keys = Vec::new();
     s.documents.retain(|(_, d)| {
         let expired = d.created_at < cutoff && !referenced.contains(&d.id.0);
@@ -35,7 +36,7 @@ pub(super) fn export(s: &State, data: &mut BackupData) {
         data.documents.push(DocumentRecord {
             id: d.id.0,
             household_id: h.0,
-            kind: "invoice".into(),
+            kind: d.kind.as_str().into(),
             blob_key: d.blob_key.to_string(),
             media_type: d.media_type.media_type().into(),
             bytes: d.bytes,
@@ -44,10 +45,7 @@ pub(super) fn export(s: &State, data: &mut BackupData) {
             created_at: d.created_at,
             status: d.status.as_str().into(),
             model: d.model.clone(),
-            extraction: d
-                .extraction
-                .as_ref()
-                .and_then(|x| serde_json::to_string(x).ok()),
+            extraction: crate::model::extraction_json(d.extraction.as_ref(), d.receipt.as_ref()),
             meter_id: d.meter_id.map(|m| m.0),
             analysed_at: d.analysed_at,
             finished_at: None,
@@ -58,6 +56,12 @@ pub(super) fn export(s: &State, data: &mut BackupData) {
 pub(super) fn import(s: &mut State, d: &BackupData) -> PortResult<()> {
     let invalid = |_| PortError::Invalid("backup.invalid");
     for x in &d.documents {
+        let kind: crate::model::DocumentKind = x
+            .kind
+            .parse()
+            .map_err(|_| PortError::Invalid("backup.invalid"))?;
+        let (extraction, receipt) =
+            crate::model::parse_extraction(kind, x.extraction.as_deref()).map_err(invalid)?;
         s.documents.push((
             HouseholdId(x.household_id),
             Document {
@@ -75,12 +79,9 @@ pub(super) fn import(s: &mut State, d: &BackupData) -> PortResult<()> {
                     .parse()
                     .map_err(|_| PortError::Invalid("backup.invalid"))?,
                 model: x.model.clone(),
-                extraction: x
-                    .extraction
-                    .as_deref()
-                    .map(serde_json::from_str::<InvoiceExtraction>)
-                    .transpose()
-                    .map_err(invalid)?,
+                extraction,
+                receipt,
+                kind,
                 meter_id: x.meter_id.map(MeterId),
                 analysed_at: x.analysed_at,
             },
@@ -145,6 +146,7 @@ impl DocumentRepository for MemoryUow {
         let d = self.document_mut(t, id)?;
         d.model.clone_from(&a.model);
         d.extraction.clone_from(&a.extraction);
+        d.receipt.clone_from(&a.receipt);
         d.meter_id = a.meter_id;
         d.status = a.status;
         d.analysed_at = Some(a.at);
@@ -166,6 +168,20 @@ impl DocumentRepository for MemoryUow {
 /// Ersatz für die Rechnungserkennung mit festem Ergebnis.
 pub struct StubExtractor(pub Result<InvoiceExtraction, RecognitionError>);
 
+impl StubExtractor {
+    /// Mit Vorschlag für Belege.
+    #[must_use]
+    pub fn with_receipt(
+        self,
+        receipt: Result<crate::model::ReceiptExtraction, RecognitionError>,
+    ) -> StubExtractors {
+        StubExtractors {
+            invoice: self.0,
+            receipt,
+        }
+    }
+}
+
 #[async_trait]
 impl DocumentExtractor for StubExtractor {
     fn model(&self) -> &'static str {
@@ -174,5 +190,36 @@ impl DocumentExtractor for StubExtractor {
 
     async fn invoice(&self, _: &DocumentContent) -> Result<InvoiceExtraction, RecognitionError> {
         self.0.clone()
+    }
+
+    async fn receipt(
+        &self,
+        _: &DocumentContent,
+    ) -> Result<crate::model::ReceiptExtraction, RecognitionError> {
+        Err(RecognitionError::Failed("kein Beleg".into()))
+    }
+}
+
+/// Erkennung mit festen Ergebnissen für Rechnungen und Belege.
+pub struct StubExtractors {
+    pub invoice: Result<InvoiceExtraction, RecognitionError>,
+    pub receipt: Result<crate::model::ReceiptExtraction, RecognitionError>,
+}
+
+#[async_trait]
+impl DocumentExtractor for StubExtractors {
+    fn model(&self) -> &'static str {
+        "stub"
+    }
+
+    async fn invoice(&self, _: &DocumentContent) -> Result<InvoiceExtraction, RecognitionError> {
+        self.invoice.clone()
+    }
+
+    async fn receipt(
+        &self,
+        _: &DocumentContent,
+    ) -> Result<crate::model::ReceiptExtraction, RecognitionError> {
+        self.receipt.clone()
     }
 }

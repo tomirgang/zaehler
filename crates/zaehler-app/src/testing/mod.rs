@@ -20,7 +20,7 @@ use crate::{
 
 pub use memory::{
     InMemoryBlobStore, InMemoryStore, RecordingNotifier, StoredOutbox, StubExtractor,
-    StubImageNormalizer, StubRecognizer,
+    StubExtractors, StubImageNormalizer, StubRecognizer,
 };
 
 /// Uhr mit fester, manuell verschiebbarer Zeit.

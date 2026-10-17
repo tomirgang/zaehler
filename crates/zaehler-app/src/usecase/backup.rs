@@ -214,6 +214,7 @@ impl ExportHousehold {
 /// wird Owner und Urheber. Liefert die umgeschriebenen Daten und die
 /// Zuordnung alter zu neuen Objektschlüsseln.
 // @impl SPEC_BACKUP_HOUSEHOLD
+#[allow(clippy::too_many_lines)] // eine Umschlüsselung je Tabelle
 pub fn remap_household(
     mut data: BackupData,
     owner: Uuid,
@@ -307,6 +308,32 @@ pub fn remap_household(
         x.contract_id = known(x.contract_id, &ids)?;
         x.id = map(x.id, &mut ids);
         x.document_id = x.document_id.and_then(|d| ids.get(&d).copied());
+    }
+    for v in &mut data.vehicles {
+        v.meter_id = known(v.meter_id, &ids)?;
+        v.home_charging_meter_id = v
+            .home_charging_meter_id
+            .map(|m| known(m, &ids))
+            .transpose()?;
+    }
+    for p in &mut data.consumption_profiles {
+        p.vehicle_id = known(p.vehicle_id, &ids)?;
+        p.id = map(p.id, &mut ids);
+    }
+    for a in &mut data.acquisitions {
+        a.vehicle_id = known(a.vehicle_id, &ids)?;
+    }
+    for c in &mut data.charging_sessions {
+        c.vehicle_id = known(c.vehicle_id, &ids)?;
+        c.id = map(c.id, &mut ids);
+        c.document_id = c.document_id.and_then(|d| ids.get(&d).copied());
+    }
+    for c in &mut data.asset_costs {
+        c.household_id = new_household;
+        // Fahrzeuge sind Messstellen; Anlagen anderer Art folgen mit M8
+        c.asset_id = map(c.asset_id, &mut ids);
+        c.id = map(c.id, &mut ids);
+        c.document_id = c.document_id.and_then(|d| ids.get(&d).copied());
     }
     data.users.clear();
     data.invitations.clear();

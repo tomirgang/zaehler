@@ -7,12 +7,15 @@ use async_trait::async_trait;
 use chrono::NaiveDate;
 use rust_decimal::{Decimal, prelude::FromPrimitive};
 use zaehler_app::{
-    model::{DocumentType, InvoiceExtraction, InvoiceInstallment, InvoicePrice, InvoiceReading},
+    model::{
+        DocumentType, InvoiceExtraction, InvoiceInstallment, InvoicePrice, InvoiceReading,
+        ReceiptExtraction,
+    },
     port::{DocumentContent, DocumentExtractor, RecognitionError},
 };
-use zaehler_domain::tariff::BasePriceInterval;
+use zaehler_domain::{assets::VehicleCostCategory, tariff::BasePriceInterval};
 
-use crate::{AiError, Document, InvoiceSuggestion, OpenRouter};
+use crate::{AiError, Document, InvoiceSuggestion, OpenRouter, ReceiptSuggestion};
 
 fn present(s: Option<String>) -> Option<String> {
     s.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
@@ -94,6 +97,55 @@ pub(crate) fn to_extraction(s: InvoiceSuggestion) -> Result<InvoiceExtraction, R
     })
 }
 
+/// Abbildung eines Belegs; unbekannte Kategorie oder falsches Format
+/// machen die Antwort ungültig.
+// @impl SPEC_AI_RECEIPT, SPEC_AI_EXTRACTION
+pub(crate) fn to_receipt(s: ReceiptSuggestion) -> Result<ReceiptExtraction, RecognitionError> {
+    let category = VehicleCostCategory::ALL
+        .into_iter()
+        .find(|c| c.as_str() == s.category.trim())
+        .ok_or_else(|| invalid("category"))?;
+    let unit = present(s.quantity_unit).map(|u| {
+        if u.eq_ignore_ascii_case("kwh") {
+            "kWh".to_owned()
+        } else if u.eq_ignore_ascii_case("l") || u.to_lowercase().starts_with("liter") {
+            "l".to_owned()
+        } else {
+            u
+        }
+    });
+    let charging_kind = present(s.charging_kind)
+        .map(|k| k.to_lowercase())
+        .filter(|k| k == "ac" || k == "dc");
+    Ok(ReceiptExtraction {
+        date: opt(s.date, |v| date(v, "date"))?,
+        total_amount: opt(s.total_amount, |v| decimal(v, "total_amount"))?,
+        category: Some(category),
+        quantity: opt(s.quantity, |v| decimal(v, "quantity"))?,
+        unit,
+        vendor: present(s.vendor),
+        odometer: opt(s.odometer, |v| decimal(v, "odometer"))?,
+        charging_kind,
+        confidence: Decimal::from_f64(s.confidence.clamp(0.0, 1.0))
+            .ok_or_else(|| invalid("confidence"))?
+            .round_dp(3),
+    })
+}
+
+/// PDF als `file`-Part, Foto als Data-URL.
+fn document_of(doc: &DocumentContent) -> Document {
+    match doc.media_type {
+        DocumentType::Pdf => Document::Pdf {
+            filename: "dokument.pdf".into(),
+            bytes: doc.bytes.to_vec(),
+        },
+        DocumentType::Jpeg => Document::Image {
+            mime: "image/jpeg".into(),
+            bytes: doc.bytes.to_vec(),
+        },
+    }
+}
+
 fn to_error(e: AiError) -> RecognitionError {
     match e {
         AiError::Http(e) if e.is_timeout() => RecognitionError::Timeout,
@@ -119,18 +171,28 @@ impl DocumentExtractor for OpenRouter {
         fields(model = %self.document_model_name(), outcome = tracing::field::Empty)
     )]
     async fn invoice(&self, doc: &DocumentContent) -> Result<InvoiceExtraction, RecognitionError> {
-        let document = match doc.media_type {
-            DocumentType::Pdf => Document::Pdf {
-                filename: "rechnung.pdf".into(),
-                bytes: doc.bytes.to_vec(),
-            },
-            DocumentType::Jpeg => Document::Image {
-                mime: "image/jpeg".into(),
-                bytes: doc.bytes.to_vec(),
-            },
-        };
+        let document = document_of(doc);
         let result = match self.read_invoice(&document).await {
             Ok(s) => to_extraction(s),
+            Err(e) => Err(to_error(e)),
+        };
+        let outcome = result
+            .as_ref()
+            .map_or_else(RecognitionError::outcome, |_| "ok");
+        tracing::Span::current().record("outcome", outcome);
+        result
+    }
+
+    /// Wie `invoice` mit dem Schema für Belege (SPEC_AI_RECEIPT).
+    // @impl SPEC_AI_RECEIPT, SPEC_OPS_OTEL
+    #[tracing::instrument(
+        name = "ai.receipt",
+        skip_all,
+        fields(model = %self.document_model_name(), outcome = tracing::field::Empty)
+    )]
+    async fn receipt(&self, doc: &DocumentContent) -> Result<ReceiptExtraction, RecognitionError> {
+        let result = match self.read_receipt(&document_of(doc)).await {
+            Ok(s) => to_receipt(s),
             Err(e) => Err(to_error(e)),
         };
         let outcome = result
@@ -289,6 +351,74 @@ mod tests {
         assert_eq!(
             client(&server, 5).invoice(&pdf()).await.unwrap_err(),
             RecognitionError::Failed("HTTP 502".into())
+        );
+    }
+
+    const RECEIPT: &str = r#"{
+        "date": "2026-03-14",
+        "total_amount": "18.99",
+        "category": "charging",
+        "quantity": "32.125",
+        "quantity_unit": "KWH",
+        "vendor": " Ladepark Süd ",
+        "odometer": "12345",
+        "charging_kind": "DC",
+        "confidence": 0.91
+    }"#;
+
+    // @test SPEC_AI_RECEIPT, SPEC_AI_EXTRACTION
+    #[tokio::test]
+    async fn receipt_from_photo_with_document_model() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("\"model\":\"test/documents\""))
+            .and(body_string_contains("\"name\":\"receipt\""))
+            .and(body_string_contains("data:image/jpeg;base64,"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(completion(RECEIPT)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let doc = DocumentContent {
+            media_type: DocumentType::Jpeg,
+            bytes: Bytes::from_static(b"\xFF\xD8\xFFtest"),
+        };
+        let x = client(&server, 5).receipt(&doc).await.unwrap();
+        assert_eq!(x.date, NaiveDate::from_ymd_opt(2026, 3, 14));
+        assert_eq!(x.total_amount, Some(Decimal::new(1899, 2)));
+        assert_eq!(x.category, Some(VehicleCostCategory::Charging));
+        assert_eq!(x.unit.as_deref(), Some("kWh"));
+        assert!(x.is_charging());
+        assert_eq!(x.vendor.as_deref(), Some("Ladepark Süd"));
+        assert_eq!(x.odometer, Some(Decimal::from(12345)));
+        assert_eq!(x.charging_kind.as_deref(), Some("dc"));
+    }
+
+    // @test SPEC_AI_RECEIPT
+    #[tokio::test]
+    async fn receipt_errors() {
+        let server = MockServer::start().await;
+        let wrong = RECEIPT.replace("\"charging\"", "\"snacks\"");
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(completion(&wrong)))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            client(&server, 5).receipt(&pdf()).await,
+            Err(RecognitionError::Invalid(_))
+        ));
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(completion(RECEIPT))
+                    .set_delay(Duration::from_secs(3)),
+            )
+            .mount(&server)
+            .await;
+        assert_eq!(
+            client(&server, 1).receipt(&pdf()).await.unwrap_err(),
+            RecognitionError::Timeout
         );
     }
 }

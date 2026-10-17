@@ -24,9 +24,13 @@ fn open_status() -> Vec<&'static str> {
 }
 
 fn to_document(m: document::Model) -> PortResult<Document> {
+    let kind: zaehler_app::model::DocumentKind = m.kind.parse().map_err(data_err)?;
+    let (extraction, receipt) =
+        zaehler_app::model::parse_extraction(kind, m.extraction.as_deref()).map_err(data_err)?;
     Ok(Document {
         id: DocumentId(m.id),
         blob_key: BlobKey::parse(&m.blob_key).ok_or_else(|| data_err("blob_key"))?,
+        kind,
         media_type: DocumentType::from_media_type(&m.media_type)
             .ok_or_else(|| data_err("media_type"))?,
         bytes: m.bytes,
@@ -35,12 +39,8 @@ fn to_document(m: document::Model) -> PortResult<Document> {
         created_at: m.created_at,
         status: m.status.parse().map_err(data_err)?,
         model: m.model,
-        extraction: m
-            .extraction
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .map_err(data_err)?,
+        extraction,
+        receipt,
         meter_id: m.meter_id.map(MeterId),
         analysed_at: m.analysed_at,
     })
@@ -58,9 +58,21 @@ impl SeaOrmStore {
             .from(settlement::Entity)
             .and_where(settlement::Column::DocumentId.is_not_null())
             .to_owned();
+        let charging = sea_orm::sea_query::Query::select()
+            .column(crate::entity::charging_session::Column::DocumentId)
+            .from(crate::entity::charging_session::Entity)
+            .and_where(crate::entity::charging_session::Column::DocumentId.is_not_null())
+            .to_owned();
+        let costs = sea_orm::sea_query::Query::select()
+            .column(crate::entity::asset_cost::Column::DocumentId)
+            .from(crate::entity::asset_cost::Entity)
+            .and_where(crate::entity::asset_cost::Column::DocumentId.is_not_null())
+            .to_owned();
         let expired = document::Entity::find()
             .filter(document::Column::CreatedAt.lt(cutoff))
             .filter(document::Column::Id.not_in_subquery(referenced))
+            .filter(document::Column::Id.not_in_subquery(charging))
+            .filter(document::Column::Id.not_in_subquery(costs))
             .all(self.conn())
             .await
             .map_err(db_err)?;
@@ -86,7 +98,7 @@ impl DocumentRepository for SeaOrmUow {
         document::Entity::insert(document::ActiveModel {
             id: Set(d.id.0),
             household_id: Set(t.household_id().0),
-            kind: Set("invoice".into()),
+            kind: Set(d.kind.as_str().into()),
             blob_key: Set(d.blob_key.to_string()),
             media_type: Set(d.media_type.media_type().into()),
             bytes: Set(d.bytes),
@@ -95,12 +107,10 @@ impl DocumentRepository for SeaOrmUow {
             created_at: Set(d.created_at),
             status: Set(d.status.as_str().into()),
             model: Set(d.model.clone()),
-            extraction: Set(d
-                .extraction
-                .as_ref()
-                .map(serde_json::to_string)
-                .transpose()
-                .map_err(data_err)?),
+            extraction: Set(zaehler_app::model::extraction_json(
+                d.extraction.as_ref(),
+                d.receipt.as_ref(),
+            )),
             meter_id: Set(d.meter_id.map(|m| m.0)),
             analysed_at: Set(d.analysed_at),
             finished_at: Set(None),
@@ -144,12 +154,8 @@ impl DocumentRepository for SeaOrmUow {
         if let Some(m) = a.meter_id {
             self.require_meter(t, m.0).await?;
         }
-        let extraction = a
-            .extraction
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(data_err)?;
+        let extraction =
+            zaehler_app::model::extraction_json(a.extraction.as_ref(), a.receipt.as_ref());
         let res = document::Entity::update_many()
             .col_expr(document::Column::Model, Expr::value(a.model.clone()))
             .col_expr(document::Column::Extraction, Expr::value(extraction))

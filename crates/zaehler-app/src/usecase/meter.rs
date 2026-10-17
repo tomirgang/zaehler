@@ -348,58 +348,17 @@ impl CreateMeter {
             Some(id) => Some(ready_draft(uow.as_mut(), t, id).await?),
             None => None,
         };
-        check_unique(&mut *uow, t, &input, None).await?;
-        check_parent(&mut *uow, t, None, input.parent_meter_id).await?;
-
         let now = self.p.clock.now();
-        let meter_id = MeterId(self.p.ids.new_uuid());
-        uow.meters()
-            .create(t, meter_id, &meter_data(&input), now)
-            .await?;
-        let device_id = DeviceId(self.p.ids.new_uuid());
-        let device = DeviceData {
-            serial_number: serial(input.serial_number.as_ref()),
-            installed_at: input.start_at,
-            rollover_digits: input.rollover_digits,
-            decimal_places: input.decimal_places,
-            parent_meter_id: input.parent_meter_id,
-        };
-        uow.meters()
-            .add_device(t, meter_id, device_id, &device)
-            .await?;
-
-        let mut starts = Vec::new();
-        for r in &input.registers {
-            let register_id = RegisterId(self.p.ids.new_uuid());
-            let data = RegisterData {
-                code: r.code.trim().to_owned(),
-                direction: r.direction,
-            };
-            uow.meters()
-                .add_register(t, meter_id, register_id, &data)
-                .await?;
-            if let Some(value) = r.start_value {
-                starts.push(new_reading(
-                    &self.p,
-                    t,
-                    register_id,
-                    device_id,
-                    input.start_at,
-                    value,
-                ));
-            }
-        }
-        // Foto des Entwurfs wird Belegfoto des ersten Startstands
-        let photo = match (&draft, starts.first_mut()) {
-            (Some(d), Some(first)) => {
-                let (key, corrected) = take_draft_photo(t, d, first);
-                Some((d, first.id, key, corrected))
-            }
-            _ => None,
-        };
-        if !starts.is_empty() {
-            uow.readings().insert(t, &starts).await?;
-        }
+        let (meter_id, photo) =
+            insert_meter(&self.p, uow.as_mut(), t, &input, draft.as_ref()).await?;
+        let photo = photo.map(|(reading, key, corrected)| {
+            (
+                draft.as_ref().expect("Foto nur mit Entwurf"),
+                reading,
+                key,
+                corrected,
+            )
+        });
         if let Some((d, reading, key, corrected)) = &photo {
             self.p
                 .blobs
@@ -433,6 +392,75 @@ impl CreateMeter {
         }
         Ok(meter_id)
     }
+}
+
+/// Prüft Eindeutigkeit und übergeordnete Messstelle und legt Messstelle,
+/// Gerät, Register und Startstände an; mit Entwurf wird dessen Foto Beleg
+/// des ersten Startstands (Ablesung, neuer Schlüssel, korrigiert). Die
+/// Eingaben sind bereits validiert.
+// @impl SPEC_MTR_MANAGE
+pub(crate) async fn insert_meter(
+    p: &Ports,
+    uow: &mut dyn crate::port::UnitOfWork,
+    t: &Tenant,
+    input: &MeterInput,
+    draft: Option<&Draft>,
+) -> Result<(MeterId, Option<(ReadingId, BlobKey, Option<bool>)>), AppError> {
+    check_unique(uow, t, input, None).await?;
+    check_parent(uow, t, None, input.parent_meter_id).await?;
+    let meter_id = MeterId(p.ids.new_uuid());
+    uow.meters()
+        .create(t, meter_id, &meter_data(input), p.clock.now())
+        .await?;
+    let device_id = DeviceId(p.ids.new_uuid());
+    let device = DeviceData {
+        serial_number: serial(input.serial_number.as_ref()),
+        installed_at: input.start_at,
+        rollover_digits: input.rollover_digits,
+        decimal_places: input.decimal_places,
+        parent_meter_id: input.parent_meter_id,
+    };
+    uow.meters()
+        .add_device(t, meter_id, device_id, &device)
+        .await?;
+    let mut starts = Vec::new();
+    for r in &input.registers {
+        let register_id = RegisterId(p.ids.new_uuid());
+        let data = RegisterData {
+            code: r.code.trim().to_owned(),
+            direction: r.direction,
+        };
+        uow.meters()
+            .add_register(t, meter_id, register_id, &data)
+            .await?;
+        if let Some(value) = r.start_value {
+            starts.push(new_reading(
+                p,
+                t,
+                register_id,
+                device_id,
+                input.start_at,
+                value,
+            ));
+        }
+    }
+    // Foto des Entwurfs wird Belegfoto des ersten Startstands
+    let photo = match (draft, starts.first_mut()) {
+        (Some(d), Some(first)) => {
+            let (key, corrected) = take_draft_photo(t, d, first);
+            Some((first.id, key, corrected))
+        }
+        _ => None,
+    };
+    if !starts.is_empty() {
+        uow.readings().insert(t, &starts).await?;
+    }
+    Ok((meter_id, photo))
+}
+
+/// Eingaben einer neuen Messstelle prüfen (Feldfehler).
+pub(crate) fn validate_new(input: &MeterInput) -> Result<(), AppError> {
+    validate_input(input, true).into_result()
 }
 
 /// Offener Entwurf mit abgeschlossener Analyse.

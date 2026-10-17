@@ -27,6 +27,9 @@ pub struct Resolved {
     pub households: Vec<HouseholdSummary>,
     /// Der Haushalt hat Verträge; die Navigation zeigt dann „Kosten“
     pub has_contracts: bool,
+    /// Der Haushalt hat Fahrzeug-Messstellen; die Navigation zeigt dann
+    /// „Fahrzeuge“
+    pub has_vehicles: bool,
 }
 
 use_case!(
@@ -118,12 +121,19 @@ impl ResolveTenant {
             .ok_or(AppError::Internal("kein Haushalt".into()))?;
         let tenant = Tenant::new(user.id, chosen.id, chosen.role);
         let has_contracts = uow.contracts().any(&tenant).await?;
+        let has_vehicles = uow
+            .meters()
+            .list(&tenant)
+            .await?
+            .iter()
+            .any(|m| m.meter.data.kind == zaehler_domain::meter::MeterKind::Vehicle);
         uow.commit().await?;
         Ok(Resolved {
             tenant,
             user,
             households,
             has_contracts,
+            has_vehicles,
         })
     }
 }

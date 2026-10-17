@@ -2,6 +2,8 @@
 
 pub mod adjustment;
 pub mod ai_draft;
+pub mod asset_cost;
+pub mod charging_session;
 pub mod contract;
 pub mod cost_position;
 pub mod document;
@@ -22,3 +24,6 @@ pub mod register;
 pub mod session;
 pub mod settlement;
 pub mod user;
+pub mod vehicle;
+pub mod vehicle_acquisition;
+pub mod vehicle_consumption_profile;

@@ -6,6 +6,11 @@
 {% if !ai_enabled %}<p class="callout">{{ ctx.lang.t("documents-ai-disabled") }}</p>{% endif %}
 <form method="post" action="/documents" enctype="multipart/form-data" class="form" novalidate>
   <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <fieldset class="field">
+    <legend>{{ ctx.lang.t("document-kind") }}</legend>
+    <label><input type="radio" name="kind" value="invoice"{% if !receipt %} checked{% endif %}> {{ ctx.lang.t("document-kind-invoice") }}</label>
+    <label><input type="radio" name="kind" value="receipt"{% if receipt %} checked{% endif %}> {{ ctx.lang.t("document-kind-receipt") }}</label>
+  </fieldset>
   <div class="field{% if !errors.is_empty() %} has-error{% endif %}">
     <label for="file">{{ ctx.lang.t("document-file") }}</label>
     <input id="file" name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" required>

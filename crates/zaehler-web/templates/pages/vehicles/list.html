@@ -1,0 +1,30 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("vehicles-title") }}</h1>
+  {% if ctx.is_owner %}<div class="actions"><a class="button" href="/vehicles/new">{{ ctx.lang.t("vehicle-new") }}</a></div>{% endif %}
+</div>
+{% if vehicles.is_empty() %}
+<p class="muted">{{ ctx.lang.t("vehicles-empty") }}</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>{{ ctx.lang.t("meter-name") }}</th>
+      <th>{{ ctx.lang.t("vehicle-plate") }}</th>
+      <th>{{ ctx.lang.t("vehicle-drive") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for v in vehicles %}
+    <tr>
+      <td><a href="/vehicles/{{ v.id }}">{{ v.name }}</a>{% if v.archived %} <span class="tag">{{ ctx.lang.t("meter-archived-tag") }}</span>{% endif %}</td>
+      <td>{{ v.plate }}</td>
+      <td>{{ v.drive }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

@@ -7,21 +7,25 @@ use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 use zaehler_domain::{
+    assets::{AssetCategory, VehicleCostCategory},
     meter::{Direction, MeterKind, MeterPurpose},
     reading::ReadingSource,
     tariff::{AdjustmentKind, BasePriceInterval, UnitPricing},
+    vehicle::{ConsumptionProfile, DriveType},
 };
 
 use crate::{
     AppError, Role, Tenant,
     ids::{
-        BlobKey, ContractId, DocumentId, DraftId, HouseholdId, InstallmentId, InvitationId,
-        MeterId, PositionId, ReadingId, SettlementId, UserId,
+        AssetCostId, BlobKey, ChargingId, ContractId, DocumentId, DraftId, HouseholdId,
+        InstallmentId, InvitationId, MeterId, PositionId, ProfileId, ReadingId, SettlementId,
+        UserId,
     },
-    model::{ContractEntry, HouseholdData, Identity},
+    model::{AssetRef, ChargingKind, ContractEntry, HouseholdData, Identity},
     testing::memory_ports,
     usecase::{
         UseCases,
+        asset_cost::AssetCostInput,
         contract::{
             AdjustmentInput, ComponentInput, ContractInput, InstallmentInput, PositionInput,
             SettlementInput,
@@ -31,6 +35,7 @@ use crate::{
         member::InvitationInput,
         meter::{MeterInput, SwapInput},
         reading::ReadingsInput,
+        vehicle::{ChargingInput, NewVehicle, VehicleInput},
     },
 };
 
@@ -251,6 +256,57 @@ async fn role_matrix() {
                 .await,
             &at("DeleteContractEntry(Installment)"),
         );
+        let car = MeterId(Uuid::now_v7());
+        let vehicle_input = VehicleInput {
+            plate: String::new(),
+            model: String::new(),
+            drive_type: DriveType::Electric,
+            home_charging_meter_id: None,
+            pv_share_pct: None,
+        };
+        forbidden(
+            uc.create_vehicle
+                .execute(
+                    t,
+                    NewVehicle {
+                        name: "x".into(),
+                        vehicle: vehicle_input.clone(),
+                        odometer: Decimal::ZERO,
+                        start_at: Utc::now(),
+                    },
+                )
+                .await,
+            &at("CreateVehicle"),
+        );
+        forbidden(
+            uc.update_vehicle.execute(t, car, vehicle_input).await,
+            &at("UpdateVehicle"),
+        );
+        forbidden(
+            uc.set_consumption_profile
+                .execute(
+                    t,
+                    car,
+                    ConsumptionProfile {
+                        valid_from: contract_input().starts_on,
+                        kwh_per_100km: Decimal::ONE,
+                        charging_loss_pct: Decimal::ZERO,
+                        electric_share_pct: None,
+                    },
+                )
+                .await,
+            &at("SetConsumptionProfile"),
+        );
+        forbidden(
+            uc.delete_consumption_profile
+                .execute(t, car, ProfileId(Uuid::now_v7()))
+                .await,
+            &at("DeleteConsumptionProfile"),
+        );
+        forbidden(
+            uc.set_acquisition.execute(t, car, None).await,
+            &at("SetAcquisition"),
+        );
     }
 
     // Verträge ab Member
@@ -337,7 +393,12 @@ async fn role_matrix() {
     };
     forbidden(
         uc.upload_document
-            .execute(t, Bytes::from_static(b"%PDF-1.7"), "x.pdf")
+            .execute(
+                t,
+                Bytes::from_static(b"%PDF-1.7"),
+                "x.pdf",
+                crate::model::DocumentKind::Invoice,
+            )
             .await,
         "UploadDocument",
     );
@@ -350,6 +411,28 @@ async fn role_matrix() {
             .await,
         "ConfirmInvoice",
     );
+    forbidden(
+        uc.confirm_receipt
+            .execute(
+                t,
+                doc,
+                MeterId(Uuid::now_v7()),
+                crate::usecase::document::ReceiptEntry::Cost(AssetCostInput {
+                    booked_on: contract_input().starts_on,
+                    category: AssetCategory::Vehicle(VehicleCostCategory::Tax),
+                    amount: Decimal::ONE,
+                    quantity: None,
+                    odometer: None,
+                    full_tank: false,
+                    recurrence: None,
+                    note: None,
+                    odometer_as_reading: false,
+                    confirm_warnings: false,
+                }),
+            )
+            .await,
+        "ConfirmReceipt",
+    );
     // Vertrag aus der Rechnung nur als Owner
     forbidden(
         uc.confirm_invoice
@@ -360,6 +443,62 @@ async fn role_matrix() {
             )
             .await,
         "ConfirmInvoice(Create) als member",
+    );
+    let car = MeterId(Uuid::now_v7());
+    forbidden(
+        uc.record_charging
+            .execute(
+                t,
+                car,
+                ChargingInput {
+                    charged_at: Utc::now(),
+                    energy: Decimal::ONE,
+                    amount: Decimal::ZERO,
+                    odometer: None,
+                    provider: None,
+                    kind: ChargingKind::Ac,
+                    odometer_as_reading: false,
+                    confirm_warnings: false,
+                },
+            )
+            .await,
+        "RecordCharging",
+    );
+    forbidden(
+        uc.delete_charging
+            .execute(t, car, ChargingId(Uuid::now_v7()))
+            .await,
+        "DeleteCharging",
+    );
+    let entry = AssetCostInput {
+        booked_on: contract_input().starts_on,
+        category: AssetCategory::Vehicle(VehicleCostCategory::Tax),
+        amount: Decimal::ONE,
+        quantity: None,
+        odometer: None,
+        full_tank: false,
+        recurrence: None,
+        note: None,
+        odometer_as_reading: false,
+        confirm_warnings: false,
+    };
+    forbidden(
+        uc.add_asset_cost
+            .execute(t, AssetRef::vehicle(car), entry.clone())
+            .await,
+        "AddAssetCost",
+    );
+    forbidden(
+        uc.update_asset_cost
+            .execute(t, AssetCostId(Uuid::now_v7()), entry)
+            .await,
+        "UpdateAssetCost",
+    );
+    forbidden(
+        uc.delete_asset_cost
+            .execute(t, AssetCostId(Uuid::now_v7()))
+            .await,
+        "DeleteAssetCost",
     );
     forbidden(
         uc.upload_csv.execute(t, Bytes::from_static(b"a;b\n")).await,

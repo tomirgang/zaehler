@@ -133,7 +133,7 @@ use_case!(
     ContractTemplates,
 );
 
-fn money(e: &mut FieldErrors, field: &str, v: Decimal, places: u32) {
+pub(crate) fn money(e: &mut FieldErrors, field: &str, v: Decimal, places: u32) {
     if v.normalize().scale() > places {
         e.add_with(
             field,
@@ -145,7 +145,7 @@ fn money(e: &mut FieldErrors, field: &str, v: Decimal, places: u32) {
     }
 }
 
-fn text_opt(e: &mut FieldErrors, field: &str, v: Option<&String>, max: usize) {
+pub(crate) fn text_opt(e: &mut FieldErrors, field: &str, v: Option<&String>, max: usize) {
     if v.is_some_and(|s| s.trim().chars().count() > max) {
         e.add_with(
             field,
@@ -155,7 +155,7 @@ fn text_opt(e: &mut FieldErrors, field: &str, v: Option<&String>, max: usize) {
     }
 }
 
-fn clean(v: Option<&String>) -> Option<String> {
+pub(crate) fn clean(v: Option<&String>) -> Option<String> {
     v.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
 
@@ -622,7 +622,7 @@ pub(crate) async fn add_component_in(
         .map_err(conflict("contract.component_exists"))
 }
 
-fn conflict(code: &'static str) -> impl Fn(PortError) -> AppError {
+pub(crate) fn conflict(code: &'static str) -> impl Fn(PortError) -> AppError {
     move |e| match e {
         PortError::Conflict(_) => AppError::Conflict(code),
         other => other.into(),

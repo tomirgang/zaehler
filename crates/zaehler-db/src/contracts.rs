@@ -186,7 +186,7 @@ impl SeaOrmUow {
             .collect()
     }
 
-    async fn household_meters(&self, t: &Tenant) -> PortResult<Vec<Uuid>> {
+    pub(super) async fn household_meters(&self, t: &Tenant) -> PortResult<Vec<Uuid>> {
         meter::Entity::find()
             .select_only()
             .column(meter::Column::Id)

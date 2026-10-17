@@ -96,7 +96,7 @@ des Namens wird beim Anlegen vergeben.
 | `…_000010_jobs` | WP_V1_05, WP_V1_06 | `outbox`, `job_runs`, `notification_log`, `notification_settings` (neu) |
 | `…_000011_tariffs` | WP_V1_07 | `contracts`, `cost_positions`, `price_components`, `installments`, `adjustments`, `settlements` (neu; `settlements.document_id` ohne Fremdschlüssel) |
 | `…_000012_documents` | WP_V1_10 | `documents` (neu, mit Status, Modell und Erkennungsergebnis als JSON); `ai_drafts` bleibt unverändert |
-| `…_000013_vehicles` | WP_V1_11, WP_V1_12 | `vehicles`, `vehicle_consumption_profiles`, `vehicle_acquisitions`, `charging_sessions`, `asset_costs` (neu) |
+| `…_000013_vehicles` | WP_V1_11, WP_V1_12 | `vehicles`, `vehicle_consumption_profiles`, `vehicle_acquisitions`, `charging_sessions`, `asset_costs` (neu); als `m20261018_000013_vehicles`, `asset_costs.asset_id` und `document_id` ohne Fremdschlüssel |
 | `…_000014_pv` | WP_V1_15 | `pv_systems`, `pv_system_meters` (neu) |
 | `…_000015_api` | WP_V1_20 | `api_tokens` (neu); `readings.api_token_id` |
 
@@ -628,7 +628,7 @@ und `zaehler_document_analysis_seconds`.
 
 ```{spec} Belegerkennung
 :id: SPEC_AI_RECEIPT
-:status: draft
+:status: implemented
 :satisfies: REQ_AI_004, REQ_CAR_010
 :links: SPEC_AI_EXTRACTION, SPEC_ASSET_COSTS
 
@@ -638,13 +638,20 @@ Kilometerstand, Ladeart. Vorschlag: Ladevorgang (Einheit kWh) oder
 Kostenbuch-Eintrag; das Fahrzeug wird gewählt (vorbelegt, wenn der Haushalt
 genau eines hat). Bestätigung speichert den Eintrag mit Verweis auf das
 Dokument (`source = receipt`).
+
+Umsetzung: Die Dokumentart wird beim Upload gewählt (`documents.kind`);
+das Schema enthält zusätzlich Kilometerstand und Ladeart. Ladebelege
+(Kategorie Laden oder Einheit kWh) werden als Ladevorgang vorgeschlagen,
+alle anderen als Kostenbuch-Eintrag. Speichern und Abschluss des Dokuments
+in einer Unit of Work; ein Kilometerstand kann als Ablesung übernommen
+werden.
 ```
 
 ### Fahrzeuge und Kostenbuch
 
 ```{spec} Fahrzeuge
 :id: SPEC_CAR_VEHICLES
-:status: draft
+:status: implemented
 :satisfies: REQ_CAR_001, REQ_CAR_007, REQ_CAR_004
 :links: SPEC_CAR_DEPRECIATION
 
@@ -657,11 +664,17 @@ Antriebsart nicht mehr änderbar (`Conflict(DriveTypeLocked)`). Optional:
 Heimlade-Zwischenzähler (Strom-Messstelle mit Zweck `wallbox` und
 übergeordneter Messstelle), Verbrauchsprofile mit `valid_from`, PV-Anteil,
 Anschaffung (Kaufdatum, Preis, Restwert, geplantes Ende, Verkauf).
+
+Umsetzung: Migration `m20261018_000013_vehicles`. Die Heimlade-Messstelle
+ist ein Wallbox-Zwischenzähler (Messung) oder die Hausstrom-Messstelle
+selbst (Schätzung über das Profil). Fahrzeug-Messstellen aus dem MVP
+erhalten ihre Fahrzeugdaten über `UpdateVehicle`; bis dahin zeigt die
+Fahrzeugseite einen Hinweis. Konflikt-Code `vehicle.drive_type_locked`.
 ```
 
 ```{spec} Gemeinsames Kostenbuch
 :id: SPEC_ASSET_COSTS
-:status: draft
+:status: implemented
 :satisfies: REQ_CAR_002, REQ_PV_011
 :links: ADR_020
 
@@ -674,11 +687,17 @@ Kraftstoff-Einträge haben Menge (l), Kilometerstand und Kennzeichen
 der Fahrzeug-Messstelle übernommen werden (Plausibilität wie
 {need}`SPEC_RDG_PLAUSIBILITY`). Seiten: Liste je Anlage mit Filter nach Jahr
 und Kategorie, Formular, Jahressumme je Kategorie.
+
+Umsetzung: Wiederholungen werden je Buchung vom ursprünglichen Tag aus
+gerechnet (31.01. ergibt 28.02., 31.03.). Menge und „vollgetankt“ nur bei
+Kraftstoff, Kilometerstand nur bei Fahrzeugen. Die übernommene Ablesung
+liegt um 12:00 Uhr lokal am Buchungstag; bei Warnungen wird nichts
+gespeichert, bis sie bestätigt sind. PV-Anlagen als Anlage folgen mit M8.
 ```
 
 ```{spec} Kraftstoffverbrauch nach Vollbetankungsmethode
 :id: SPEC_CAR_FUEL_CONSUMPTION
-:status: draft
+:status: implemented
 :satisfies: REQ_CAR_003
 
 Zwischen zwei Vollbetankungen *i* < *j* mit Kilometerständen gilt
@@ -687,11 +706,16 @@ mit einer Betankung ohne Kilometerstand oder mit `km_j ≤ km_i` wird
 ausgelassen. Ausgewiesen werden der Wert je Abschnitt und der Durchschnitt je
 Kalenderjahr (Summe Menge / Summe km der vollständigen Abschnitte im Jahr).
 Für Elektro-Energie gilt {need}`SPEC_CAR_ENERGY_COST`.
+
+Umsetzung: Ein Abschnitt entfällt, wenn an einer der beiden begrenzenden
+Vollbetankungen der Kilometerstand fehlt; Teilbetankungen dazwischen zählen
+auch ohne Kilometerstand zur Menge. Ein Abschnitt zählt zum Jahr seiner
+zweiten Vollbetankung.
 ```
 
 ```{spec} Fahrzeugauswertung
 :id: SPEC_CAR_REPORT
-:status: draft
+:status: implemented
 :satisfies: REQ_CAR_005, REQ_CAR_006, REQ_CAR_003
 :links: SPEC_CAR_COST_PER_KM, SPEC_CAR_ENERGY_COST, SPEC_FC_PERIOD_FORECAST
 
@@ -703,6 +727,15 @@ gekennzeichnet), Wertverlust, Kosten je Kategorie. Prognose für das laufende
 Jahr: Fahrleistung über {need}`SPEC_FC_PERIOD_FORECAST`, erwartete
 Jahreskosten = bisherige Fixkosten des Jahres + offene wiederkehrende
 Fixkosten + prognostizierte km × variable Kosten je km der letzten 12 Monate.
+
+Umsetzung: Zeiträume enden heute; Kilometer stammen aus der Messstelle ab
+der ersten Ablesung, außerhalb der Ablesungen geschätzt und gekennzeichnet.
+Die Kategorie „Laden“ enthält Kostenbuch-Einträge und die Ladekosten
+(extern und zu Hause). Die erwarteten Jahreskosten enthalten keinen
+Wertverlust; die Prognose der Fahrleistung rechnet wie die Kostenprognose
+mit der Rate des gemessenen Anteils und dem Saisonprofil. Diagramm der
+Kosten je Jahr (variabel, fix, Wertverlust) über
+`/vehicles/{id}/chart.json`.
 ```
 
 ### Photovoltaik
