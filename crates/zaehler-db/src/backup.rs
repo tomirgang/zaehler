@@ -18,17 +18,19 @@ use sea_orm::{
 use zaehler_app::{
     PortError,
     backup::{
-        BackupData, DeviceRecord, DraftRecord, HouseholdRecord, InvitationRecord, MembershipRecord,
-        MeterRecord, NotificationSettingRecord, ReadingRecord, RegisterRecord, RevisionRecord,
-        UserRecord,
+        AdjustmentRecord, BackupData, ContractRecord, CostPositionRecord, DeviceRecord,
+        DocumentRecord, DraftRecord, HouseholdRecord, InstallmentRecord, InvitationRecord,
+        MembershipRecord, MeterRecord, NotificationSettingRecord, PriceComponentRecord,
+        ReadingRecord, RegisterRecord, RevisionRecord, SettlementRecord, UserRecord,
     },
     port::{BackupRepository, PortResult},
 };
 
 use crate::{
     entity::{
-        ai_draft, household, invitation, membership, meter, meter_device, notification_settings,
-        reading, reading_revision, register, user,
+        adjustment, ai_draft, contract, cost_position, document, household, installment,
+        invitation, membership, meter, meter_device, notification_settings, price_component,
+        reading, reading_revision, register, settlement, user,
     },
     uow::SeaOrmStore,
 };
@@ -297,6 +299,97 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
             })
         })
         .await?,
+        contracts: records(db, "contracts", |r| {
+            Ok(ContractRecord {
+                id: r.get("id")?,
+                meter_id: r.get("meter_id")?,
+                direction: r.get("direction")?,
+                provider: r.get("provider")?,
+                contract_number: r.get("contract_number")?,
+                starts_on: r.get("starts_on")?,
+                ends_on: r.get("ends_on")?,
+                billing_start_month: r.get("billing_start_month")?,
+                billing_start_day: r.get("billing_start_day")?,
+                note: r.get("note")?,
+            })
+        })
+        .await?,
+        cost_positions: records(db, "cost_positions", |r| {
+            Ok(CostPositionRecord {
+                id: r.get("id")?,
+                contract_id: r.get("contract_id")?,
+                name: r.get("name")?,
+                register_id: r.get("register_id")?,
+                factor_micro: r.get("factor_micro")?,
+                vat_pct_milli: r.get("vat_pct_milli")?,
+                sort: r.get("sort")?,
+            })
+        })
+        .await?,
+        price_components: records(db, "price_components", |r| {
+            Ok(PriceComponentRecord {
+                id: r.get("id")?,
+                position_id: r.get("position_id")?,
+                valid_from: r.get("valid_from")?,
+                base_price_micro: r.get("base_price_micro")?,
+                base_interval: r.get("base_interval")?,
+                unit_pricing: r.get("unit_pricing")?,
+                factor_micro: r.get("factor_micro")?,
+            })
+        })
+        .await?,
+        installments: records(db, "installments", |r| {
+            Ok(InstallmentRecord {
+                id: r.get("id")?,
+                contract_id: r.get("contract_id")?,
+                valid_from: r.get("valid_from")?,
+                amount_micro: r.get("amount_micro")?,
+                interval_months: r.get("interval_months")?,
+            })
+        })
+        .await?,
+        adjustments: records(db, "adjustments", |r| {
+            Ok(AdjustmentRecord {
+                id: r.get("id")?,
+                contract_id: r.get("contract_id")?,
+                kind: r.get("kind")?,
+                booked_on: r.get("booked_on")?,
+                amount_micro: r.get("amount_micro")?,
+                note: r.get("note")?,
+            })
+        })
+        .await?,
+        settlements: records(db, "settlements", |r| {
+            Ok(SettlementRecord {
+                id: r.get("id")?,
+                contract_id: r.get("contract_id")?,
+                period_start: r.get("period_start")?,
+                period_end: r.get("period_end")?,
+                amount_micro: r.get("amount_micro")?,
+                document_id: r.get("document_id")?,
+            })
+        })
+        .await?,
+        documents: records(db, "documents", |r| {
+            Ok(DocumentRecord {
+                id: r.get("id")?,
+                household_id: r.get("household_id")?,
+                kind: r.get("kind")?,
+                blob_key: r.get("blob_key")?,
+                media_type: r.get("media_type")?,
+                bytes: r.get("bytes")?,
+                original_name: r.get("original_name")?,
+                created_by: r.get("created_by")?,
+                created_at: r.get("created_at")?,
+                status: r.get("status")?,
+                model: r.get("model")?,
+                extraction: r.get("extraction")?,
+                meter_id: r.get("meter_id")?,
+                analysed_at: r.get("analysed_at")?,
+                finished_at: r.get("finished_at")?,
+            })
+        })
+        .await?,
     };
     // feste Reihenfolge, damit gleiche Daten gleiche Archive ergeben
     data.users.sort_by_key(|x| x.id);
@@ -311,6 +404,13 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
     data.invitations.sort_by_key(|x| x.id);
     data.revisions.sort_by_key(|x| x.id);
     data.notification_settings.sort_by_key(|x| x.user_id);
+    data.contracts.sort_by_key(|x| x.id);
+    data.cost_positions.sort_by_key(|x| x.id);
+    data.price_components.sort_by_key(|x| x.id);
+    data.installments.sort_by_key(|x| x.id);
+    data.adjustments.sort_by_key(|x| x.id);
+    data.settlements.sort_by_key(|x| x.id);
+    data.documents.sort_by_key(|x| x.id);
     Ok(data)
 }
 
@@ -529,6 +629,131 @@ async fn write_all(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> 
                 reminder: Set(x.reminder),
                 alarm: Set(x.alarm),
                 updated_at: Set(x.updated_at),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.documents
+            .iter()
+            .map(|x| document::ActiveModel {
+                id: Set(x.id),
+                household_id: Set(x.household_id),
+                kind: Set(x.kind.clone()),
+                blob_key: Set(x.blob_key.clone()),
+                media_type: Set(x.media_type.clone()),
+                bytes: Set(x.bytes),
+                original_name: Set(x.original_name.clone()),
+                created_by: Set(x.created_by),
+                created_at: Set(x.created_at),
+                status: Set(x.status.clone()),
+                model: Set(x.model.clone()),
+                extraction: Set(x.extraction.clone()),
+                meter_id: Set(x.meter_id),
+                analysed_at: Set(x.analysed_at),
+                finished_at: Set(x.finished_at),
+            })
+            .collect(),
+    )
+    .await?;
+    write_contracts(txn, d).await
+}
+
+/// Verträge mit Positionen, Preisständen und Einträgen (ab
+/// `m20261017_000011_tariffs`).
+async fn write_contracts(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> {
+    insert(
+        txn,
+        d.contracts
+            .iter()
+            .map(|x| contract::ActiveModel {
+                id: Set(x.id),
+                meter_id: Set(x.meter_id),
+                direction: Set(x.direction.clone()),
+                provider: Set(x.provider.clone()),
+                contract_number: Set(x.contract_number.clone()),
+                starts_on: Set(x.starts_on),
+                ends_on: Set(x.ends_on),
+                billing_start_month: Set(x.billing_start_month),
+                billing_start_day: Set(x.billing_start_day),
+                note: Set(x.note.clone()),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.cost_positions
+            .iter()
+            .map(|x| cost_position::ActiveModel {
+                id: Set(x.id),
+                contract_id: Set(x.contract_id),
+                name: Set(x.name.clone()),
+                register_id: Set(x.register_id),
+                factor_micro: Set(x.factor_micro),
+                vat_pct_milli: Set(x.vat_pct_milli),
+                sort: Set(x.sort),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.price_components
+            .iter()
+            .map(|x| price_component::ActiveModel {
+                id: Set(x.id),
+                position_id: Set(x.position_id),
+                valid_from: Set(x.valid_from),
+                base_price_micro: Set(x.base_price_micro),
+                base_interval: Set(x.base_interval.clone()),
+                unit_pricing: Set(x.unit_pricing.clone()),
+                factor_micro: Set(x.factor_micro),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.installments
+            .iter()
+            .map(|x| installment::ActiveModel {
+                id: Set(x.id),
+                contract_id: Set(x.contract_id),
+                valid_from: Set(x.valid_from),
+                amount_micro: Set(x.amount_micro),
+                interval_months: Set(x.interval_months),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.adjustments
+            .iter()
+            .map(|x| adjustment::ActiveModel {
+                id: Set(x.id),
+                contract_id: Set(x.contract_id),
+                kind: Set(x.kind.clone()),
+                booked_on: Set(x.booked_on),
+                amount_micro: Set(x.amount_micro),
+                note: Set(x.note.clone()),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.settlements
+            .iter()
+            .map(|x| settlement::ActiveModel {
+                id: Set(x.id),
+                contract_id: Set(x.contract_id),
+                period_start: Set(x.period_start),
+                period_end: Set(x.period_end),
+                amount_micro: Set(x.amount_micro),
+                document_id: Set(x.document_id),
             })
             .collect(),
     )

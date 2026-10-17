@@ -15,6 +15,10 @@ pub struct OpenRouterConfig {
     pub base_url: String,
     /// Vision-fähiges Modell, z.B. `google/gemini-2.5-flash`.
     pub model: String,
+    /// Modell für Rechnungen und Belege (`ai.document_model`); ohne
+    /// Angabe `model`.
+    #[serde(default)]
+    pub document_model: Option<String>,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
 }
@@ -48,9 +52,19 @@ impl OpenRouter {
         &self.cfg.model
     }
 
+    /// Modell für Rechnungen und Belege.
+    #[must_use]
+    pub fn document_model_name(&self) -> &str {
+        self.cfg
+            .document_model
+            .as_deref()
+            .unwrap_or(&self.cfg.model)
+    }
+
     // @impl SPEC_AI_EXTRACTION
     pub async fn read_meter(&self, doc: &Document) -> Result<MeterReadingSuggestion, AiError> {
         self.extract(
+            self.model_name(),
             MeterReadingSuggestion::PROMPT,
             "meter_reading",
             MeterReadingSuggestion::schema(),
@@ -62,6 +76,7 @@ impl OpenRouter {
     // @impl SPEC_AI_EXTRACTION
     pub async fn read_receipt(&self, doc: &Document) -> Result<ReceiptSuggestion, AiError> {
         self.extract(
+            self.document_model_name(),
             ReceiptSuggestion::PROMPT,
             "receipt",
             ReceiptSuggestion::schema(),
@@ -73,6 +88,7 @@ impl OpenRouter {
     // @impl SPEC_AI_EXTRACTION
     pub async fn read_invoice(&self, doc: &Document) -> Result<InvoiceSuggestion, AiError> {
         self.extract(
+            self.document_model_name(),
             InvoiceSuggestion::PROMPT,
             "invoice",
             InvoiceSuggestion::schema(),
@@ -83,12 +99,13 @@ impl OpenRouter {
 
     async fn extract<T: DeserializeOwned>(
         &self,
+        model: &str,
         prompt: &str,
         name: &str,
         schema: Value,
         doc: &Document,
     ) -> Result<T, AiError> {
-        let body = request_body(&self.cfg.model, prompt, name, &schema, doc);
+        let body = request_body(model, prompt, name, &schema, doc);
         let resp = self
             .http
             .post(format!("{}/chat/completions", self.cfg.base_url))
@@ -106,7 +123,7 @@ impl OpenRouter {
             });
         }
         let completion: Value = resp.json().await?;
-        tracing::debug!(model = %self.cfg.model, kind = name, "ai extraction finished");
+        tracing::debug!(model, kind = name, "ai extraction finished");
         parse_completion(&completion)
     }
 }

@@ -110,6 +110,7 @@ mod tests {
             api_key: "test-key".into(),
             base_url: server.uri(),
             model: "test/vision".into(),
+            document_model: None,
             timeout_secs,
         })
         .unwrap()

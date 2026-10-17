@@ -1,21 +1,25 @@
 //! Datentypen an den Port-Grenzen. Adapter bilden ihre eigenen Typen
 //! (SeaORM-Entities, Formulare) auf diese Typen ab.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Days, NaiveDate, Utc};
 use chrono_tz::Tz;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use zaehler_domain::{
+    cost::ContractTerms,
     forecast::SeasonProfile,
     meter::{Direction, MeterKind, MeterPurpose},
+    period::Period,
     reading::ReadingSource,
     schedule::ReadingSchedule,
+    tariff::{self, CostPosition, PriceComponent},
 };
 
 use crate::{
     ids::{
-        BlobKey, DeviceId, DraftId, HouseholdId, InvitationId, MeterId, OutboxId, ReadingId,
-        RegisterId, RevisionId, UserId,
+        AdjustmentId, BlobKey, ContractId, DeviceId, DraftId, HouseholdId, InstallmentId,
+        InvitationId, MeterId, OutboxId, PositionId, PriceComponentId, ReadingId, RegisterId,
+        RevisionId, SettlementId, UserId,
     },
     tenant::Role,
 };
@@ -650,4 +654,338 @@ pub enum DraftOutcome {
         corrected: Option<bool>,
     },
     Discarded,
+}
+
+/// Preisstand einer Kostenposition (SPEC_TAR_CONTRACTS).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriceComponentRow {
+    pub id: PriceComponentId,
+    pub component: PriceComponent,
+}
+
+/// Kostenposition eines Vertrags; `register_id = None` gilt für alle
+/// Register der Richtung des Vertrags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Position {
+    pub id: PositionId,
+    pub name: String,
+    pub register_id: Option<RegisterId>,
+    /// Umrechnungsfaktor Mess- auf Abrechnungseinheit (Standard 1)
+    pub factor: Decimal,
+    /// MwSt-Satz in Prozent, nur für die Netto-Anzeige (REQ_TAR_010)
+    pub vat_pct: Option<Decimal>,
+    /// Preisstände, aufsteigend nach `valid_from`
+    pub components: Vec<PriceComponentRow>,
+}
+
+/// Änderbare Daten eines Vertrags; Positionen und Preisstände werden beim
+/// Ändern vollständig ersetzt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractData {
+    pub direction: Direction,
+    pub provider: String,
+    pub contract_number: Option<String>,
+    pub starts_on: NaiveDate,
+    /// Letzter Tag (einschließlich); `None` = unbefristet
+    pub ends_on: Option<NaiveDate>,
+    /// Beginn des Abrechnungszeitraums (12 Monate)
+    pub billing_start: MonthDay,
+    pub note: Option<String>,
+    pub positions: Vec<Position>,
+}
+
+/// Abschlagsstand; gilt bis zum nächsten Stand (REQ_TAR_008).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallmentRow {
+    pub id: InstallmentId,
+    pub installment: tariff::Installment,
+}
+
+/// Bonus oder Gutschrift (REQ_TAR_005).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdjustmentRow {
+    pub id: AdjustmentId,
+    pub adjustment: tariff::Adjustment,
+    pub note: Option<String>,
+}
+
+/// Betrag einer tatsächlichen Jahresabrechnung (SPEC_TAR_ACTUAL_SETTLEMENT).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettlementRow {
+    pub id: SettlementId,
+    pub period_start: NaiveDate,
+    /// Letzter Tag (einschließlich)
+    pub period_end: NaiveDate,
+    pub amount: Decimal,
+    /// Beleg (Rechnungsimport, WP_V1_10)
+    pub document_id: Option<uuid::Uuid>,
+}
+
+impl SettlementRow {
+    /// Abgerechneter Zeitraum als halboffener Zeitraum.
+    #[must_use]
+    pub fn period(&self) -> Period {
+        Period::new(self.period_start, self.period_end + Days::new(1))
+    }
+}
+
+/// Eintrag eines Vertrags, der einzeln gelöscht werden kann.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContractEntry {
+    Installment(InstallmentId),
+    Adjustment(AdjustmentId),
+    Settlement(SettlementId),
+}
+
+/// Vertrag mit Positionen, Preisständen, Abschlägen, Anpassungen und
+/// Abrechnungen; Listen nach Datum aufsteigend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contract {
+    pub id: ContractId,
+    pub meter_id: MeterId,
+    pub data: ContractData,
+    pub installments: Vec<InstallmentRow>,
+    pub adjustments: Vec<AdjustmentRow>,
+    pub settlements: Vec<SettlementRow>,
+}
+
+impl Contract {
+    /// Positionen im Domain-Modell, in derselben Reihenfolge.
+    #[must_use]
+    pub fn cost_positions(&self) -> Vec<CostPosition> {
+        self.data
+            .positions
+            .iter()
+            .map(|p| CostPosition {
+                name: p.name.clone(),
+                conversion_factor: p.factor,
+                components: p.components.iter().map(|c| c.component.clone()).collect(),
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn adjustment_values(&self) -> Vec<tariff::Adjustment> {
+        self.adjustments
+            .iter()
+            .map(|a| a.adjustment.clone())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn installment_values(&self) -> Vec<tariff::Installment> {
+        self.installments
+            .iter()
+            .map(|i| i.installment.clone())
+            .collect()
+    }
+
+    /// Vertragsbedingungen für die Kostenrechnung.
+    #[must_use]
+    pub fn terms<'a>(
+        &self,
+        positions: &'a [CostPosition],
+        adjustments: &'a [tariff::Adjustment],
+    ) -> ContractTerms<'a> {
+        ContractTerms {
+            starts_on: self.data.starts_on,
+            ends_on: self.data.ends_on,
+            billing_start: (
+                u32::from(self.data.billing_start.month),
+                u32::from(self.data.billing_start.day),
+            ),
+            positions,
+            adjustments,
+        }
+    }
+
+    /// Laufzeit `[starts_on, ends_on + 1)`; unbefristet bis `NaiveDate::MAX`.
+    #[must_use]
+    pub fn validity(&self) -> Period {
+        Period::new(
+            self.data.starts_on,
+            self.data
+                .ends_on
+                .map_or(NaiveDate::MAX, |d| d + Days::new(1)),
+        )
+    }
+
+    /// Der Vertrag gilt am Tag `date`.
+    #[must_use]
+    pub fn active_on(&self, date: NaiveDate) -> bool {
+        let v = self.validity();
+        date >= v.start && date < v.end
+    }
+
+    /// Abschlagsstand, der am Tag `date` gilt.
+    #[must_use]
+    pub fn installment_on(&self, date: NaiveDate) -> Option<&InstallmentRow> {
+        self.installments
+            .iter()
+            .rev()
+            .find(|i| i.installment.valid_from <= date)
+    }
+}
+
+/// Dateiart eines Dokuments (SPEC_DOC_UPLOADS).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentType {
+    Pdf,
+    /// Normalisiertes Foto
+    Jpeg,
+}
+
+impl DocumentType {
+    #[must_use]
+    pub fn media_type(self) -> &'static str {
+        match self {
+            Self::Pdf => "application/pdf",
+            Self::Jpeg => "image/jpeg",
+        }
+    }
+
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Pdf => "pdf",
+            Self::Jpeg => "jpg",
+        }
+    }
+
+    #[must_use]
+    pub fn from_media_type(s: &str) -> Option<Self> {
+        match s {
+            "application/pdf" => Some(Self::Pdf),
+            "image/jpeg" => Some(Self::Jpeg),
+            _ => None,
+        }
+    }
+}
+
+/// Zustand eines Dokuments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentStatus {
+    /// Gespeichert, Erkennung steht aus
+    Uploaded,
+    /// Vorschlag liegt vor
+    Analysed,
+    /// Erkennung fehlgeschlagen oder nicht konfiguriert
+    Failed,
+    /// Vorschläge übernommen
+    Confirmed,
+    Discarded,
+}
+
+impl DocumentStatus {
+    pub const ALL: [Self; 5] = [
+        Self::Uploaded,
+        Self::Analysed,
+        Self::Failed,
+        Self::Confirmed,
+        Self::Discarded,
+    ];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Uploaded => "uploaded",
+            Self::Analysed => "analysed",
+            Self::Failed => "failed",
+            Self::Confirmed => "confirmed",
+            Self::Discarded => "discarded",
+        }
+    }
+
+    /// Weder übernommen noch verworfen.
+    #[must_use]
+    pub fn is_open(self) -> bool {
+        !matches!(self, Self::Confirmed | Self::Discarded)
+    }
+}
+
+impl std::str::FromStr for DocumentStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|x| x.as_str() == s)
+            .ok_or_else(|| format!("unbekannter Status: {s}"))
+    }
+}
+
+/// Zählerstand aus einer Rechnung.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvoiceReading {
+    pub serial_number: Option<String>,
+    pub register: Option<String>,
+    pub date: NaiveDate,
+    pub value: Decimal,
+}
+
+/// Preisstand einer Position aus einer Rechnung (brutto).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvoicePrice {
+    pub position: String,
+    pub valid_from: Option<NaiveDate>,
+    pub base_price: Option<Decimal>,
+    pub base_interval: Option<tariff::BasePriceInterval>,
+    pub unit_price: Option<Decimal>,
+}
+
+/// Neuer Abschlag aus einer Rechnung.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvoiceInstallment {
+    pub amount: Decimal,
+    pub every_months: u8,
+    pub valid_from: Option<NaiveDate>,
+}
+
+/// Vorschlag der Rechnungserkennung (SPEC_AI_INVOICE); nicht lesbare
+/// Felder sind leer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvoiceExtraction {
+    pub provider: Option<String>,
+    pub contract_number: Option<String>,
+    pub period_start: Option<NaiveDate>,
+    pub period_end: Option<NaiveDate>,
+    pub readings: Vec<InvoiceReading>,
+    pub prices: Vec<InvoicePrice>,
+    pub installment: Option<InvoiceInstallment>,
+    /// Rechnungsbetrag (Kosten des Zeitraums, brutto)
+    pub total_amount: Option<Decimal>,
+    /// Selbsteinschätzung 0..1
+    pub confidence: Decimal,
+}
+
+/// Hochgeladenes Dokument mit Erkennungsergebnis (SPEC_DOC_UPLOADS,
+/// SPEC_AI_INVOICE).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Document {
+    pub id: crate::ids::DocumentId,
+    pub blob_key: BlobKey,
+    pub media_type: DocumentType,
+    pub bytes: i64,
+    /// Dateiname beim Upload, nur zur Anzeige
+    pub original_name: String,
+    pub created_by: UserId,
+    pub created_at: DateTime<Utc>,
+    pub status: DocumentStatus,
+    /// Modell der Erkennung; `None` ohne AI-Konfiguration
+    pub model: Option<String>,
+    pub extraction: Option<InvoiceExtraction>,
+    /// Über die Zählernummer zugeordnete Messstelle
+    pub meter_id: Option<MeterId>,
+    pub analysed_at: Option<DateTime<Utc>>,
+}
+
+/// Ergebnis der Erkennung eines Dokuments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentAnalysis {
+    pub model: Option<String>,
+    pub extraction: Option<InvoiceExtraction>,
+    pub meter_id: Option<MeterId>,
+    /// `Analysed` mit Vorschlag, sonst `Failed`
+    pub status: DocumentStatus,
+    pub at: DateTime<Utc>,
 }

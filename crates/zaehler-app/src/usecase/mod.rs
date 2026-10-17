@@ -4,14 +4,17 @@
 use std::sync::Arc;
 
 use crate::port::{
-    BackupRepository, BlobStore, Clock, IdGenerator, ImageNormalizer, JobRepository,
-    MeterRecognizer, Notifier, UnitOfWorkFactory,
+    BackupRepository, BlobStore, Clock, DocumentExtractor, IdGenerator, ImageNormalizer,
+    JobRepository, MeterRecognizer, Notifier, UnitOfWorkFactory,
 };
 
 pub mod analysis;
 pub mod auth;
 pub mod backup;
 pub mod capture;
+pub mod contract;
+pub mod cost;
+pub mod document;
 pub mod household;
 pub mod housekeeping;
 pub mod import;
@@ -22,6 +25,10 @@ pub mod notify;
 pub mod reading;
 mod validate;
 
+#[cfg(test)]
+mod contract_tests;
+#[cfg(test)]
+mod document_tests;
 #[cfg(test)]
 mod expectation_tests;
 #[cfg(test)]
@@ -47,6 +54,8 @@ pub struct Ports {
     pub images: Arc<dyn ImageNormalizer>,
     /// `None` ohne AI-Konfiguration (REQ_AI_006)
     pub recognizer: Option<Arc<dyn MeterRecognizer>>,
+    /// Rechnungserkennung; `None` ohne AI-Konfiguration (REQ_AI_006)
+    pub extractor: Option<Arc<dyn DocumentExtractor>>,
     pub backup: Arc<dyn BackupRepository>,
     /// Abfragen der Jobs ohne Haushaltsbezug (SPEC_JOB_OUTBOX)
     pub jobs: Arc<dyn JobRepository>,
@@ -63,13 +72,20 @@ pub struct Settings {
     /// Öffentliche Basis-URL ohne abschließenden Schrägstrich für Links in
     /// E-Mails (`server.public_url`)
     pub public_url: String,
+    /// Größtes Dokument in Bytes (`upload.max_document_bytes`,
+    /// SPEC_DOC_UPLOADS)
+    pub max_document_bytes: usize,
 }
+
+/// Vorgabe für `upload.max_document_bytes` (10 MiB).
+pub const DEFAULT_MAX_DOCUMENT_BYTES: usize = 10 * 1024 * 1024;
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             invitation_ttl: chrono::Duration::days(7),
             public_url: "http://localhost:8080".into(),
+            max_document_bytes: DEFAULT_MAX_DOCUMENT_BYTES,
         }
     }
 }
@@ -79,13 +95,13 @@ macro_rules! use_case {
         $(#[$doc])*
         #[derive(Clone)]
         pub struct $name {
-            p: crate::usecase::Ports,
+            p: std::sync::Arc<crate::usecase::Ports>,
         }
 
         impl $name {
             #[must_use]
             pub fn new(p: crate::usecase::Ports) -> Self {
-                Self { p }
+                Self { p: std::sync::Arc::new(p) }
             }
         }
     )+};
@@ -145,6 +161,26 @@ pub struct UseCases {
     pub accept_invitation: member::AcceptInvitation,
     pub get_notification_settings: notify::GetNotificationSettings,
     pub update_notification_settings: notify::UpdateNotificationSettings,
+    pub create_contract: contract::CreateContract,
+    pub update_contract: contract::UpdateContract,
+    pub delete_contract: contract::DeleteContract,
+    pub get_contract: contract::GetContract,
+    pub meter_contracts: contract::MeterContracts,
+    pub add_price_component: contract::AddPriceComponent,
+    pub set_installment: contract::SetInstallment,
+    pub add_adjustment: contract::AddAdjustment,
+    pub record_settlement: contract::RecordSettlement,
+    pub delete_contract_entry: contract::DeleteContractEntry,
+    pub contract_templates: contract::ContractTemplates,
+    pub meter_costs: cost::MeterCosts,
+    pub household_costs: cost::HouseholdCosts,
+    pub upload_document: document::UploadDocument,
+    pub analyse_document: document::AnalyseDocument,
+    pub list_documents: document::ListDocuments,
+    pub get_document: document::GetDocument,
+    pub get_document_file: document::GetDocumentFile,
+    pub discard_document: document::DiscardDocument,
+    pub confirm_invoice: document::ConfirmInvoice,
 }
 
 impl UseCases {
@@ -200,6 +236,26 @@ impl UseCases {
             accept_invitation: member::AcceptInvitation::new(p.clone()),
             get_notification_settings: notify::GetNotificationSettings::new(p.clone()),
             update_notification_settings: notify::UpdateNotificationSettings::new(p.clone()),
+            create_contract: contract::CreateContract::new(p.clone()),
+            update_contract: contract::UpdateContract::new(p.clone()),
+            delete_contract: contract::DeleteContract::new(p.clone()),
+            get_contract: contract::GetContract::new(p.clone()),
+            meter_contracts: contract::MeterContracts::new(p.clone()),
+            add_price_component: contract::AddPriceComponent::new(p.clone()),
+            set_installment: contract::SetInstallment::new(p.clone()),
+            add_adjustment: contract::AddAdjustment::new(p.clone()),
+            record_settlement: contract::RecordSettlement::new(p.clone()),
+            delete_contract_entry: contract::DeleteContractEntry::new(p.clone()),
+            contract_templates: contract::ContractTemplates::new(p.clone()),
+            meter_costs: cost::MeterCosts::new(p.clone()),
+            household_costs: cost::HouseholdCosts::new(p.clone()),
+            upload_document: document::UploadDocument::new(p.clone()),
+            analyse_document: document::AnalyseDocument::new(p.clone()),
+            list_documents: document::ListDocuments::new(p.clone()),
+            get_document: document::GetDocument::new(p.clone()),
+            get_document_file: document::GetDocumentFile::new(p.clone()),
+            discard_document: document::DiscardDocument::new(p.clone()),
+            confirm_invoice: document::ConfirmInvoice::new(p.clone()),
         }
     }
 }

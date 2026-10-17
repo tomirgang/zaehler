@@ -66,6 +66,7 @@ pub fn traffic_view(
     let source = match e.source {
         BandSource::History => "history",
         BandSource::Target => "target",
+        BandSource::Installment => "installment",
     };
     Some(TrafficView {
         css,

@@ -199,6 +199,10 @@ struct DetailPage {
     /// Es gibt Revisionen (auch gelöschter Ablesungen)
     has_history: bool,
     analysis: AnalysisView,
+    /// Verträge der Messstelle (SPEC_TAR_CONTRACTS)
+    contracts: Vec<super::contracts::ContractRow>,
+    /// Vorlagen für „Vertrag anlegen“ (nur Owner)
+    templates: Vec<(String, String)>,
 }
 
 pub struct SwapRow {
@@ -727,6 +731,7 @@ pub struct MonthQuery {
 
 /// Detailseite mit Auswertung; `?month=2026-03` wählt den Bezugsmonat.
 // @impl SPEC_ANA_COMPARE_VIEW
+#[allow(clippy::too_many_lines)] // Abbildung aller Abschnitte der Detailseite
 pub async fn detail(
     State(state): State<WebState>,
     ctx: Ctx,
@@ -754,6 +759,23 @@ pub async fn detail(
         .map(|e| e.revision.reading_id)
         .collect();
     let has_history = !changed.is_empty();
+    let contracts = state
+        .uc
+        .meter_contracts
+        .execute(&ctx.tenant, id)
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    let templates = if ctx.page.is_owner {
+        let (_, t) = state
+            .uc
+            .contract_templates
+            .execute(&ctx.tenant, id)
+            .await
+            .map_err(|e| ctx.fail(e))?;
+        super::contracts::template_links(ctx.page.lang, &t)
+    } else {
+        Vec::new()
+    };
     let names: std::collections::HashMap<MeterId, String> = state
         .uc
         .list_meters
@@ -822,6 +844,12 @@ pub async fn detail(
         readings,
         has_history,
         analysis,
+        contracts: super::contracts::contract_rows(
+            lang,
+            &contracts,
+            Utc::now().with_timezone(&tz).date_naive(),
+        ),
+        templates,
         ctx: ctx.page,
     };
     Ok(render(&page))

@@ -410,7 +410,7 @@ impl AnalysePhoto {
     // @impl SPEC_AI_FLOW, SPEC_AI_DRAFTS, SPEC_IMG_PROCESSING
     #[tracing::instrument(name = "AnalysePhoto", skip_all)]
     pub async fn execute(&self, t: &Tenant, photo: Bytes) -> Result<DraftId, AppError> {
-        let queued = QueuePhotos::new(self.p.clone())
+        let queued = QueuePhotos::new((*self.p).clone())
             .execute(t, vec![photo])
             .await?;
         let Some(&id) = queued.drafts.first() else {
@@ -418,7 +418,7 @@ impl AnalysePhoto {
                 queued.rejected.into_iter().map(|(_, e)| e).collect(),
             )));
         };
-        AnalyseQueued::new(self.p.clone()).draft(t, id).await?;
+        AnalyseQueued::new((*self.p).clone()).draft(t, id).await?;
         Ok(id)
     }
 }

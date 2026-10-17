@@ -6,7 +6,10 @@
 pub mod analysis;
 pub mod backup;
 pub mod capture;
+pub mod contracts;
+pub mod costs;
 pub mod dashboard;
+pub mod documents;
 pub mod import;
 pub mod members;
 pub mod meters;

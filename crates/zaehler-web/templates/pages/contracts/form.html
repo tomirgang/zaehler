@@ -1,0 +1,180 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{% if editing %}{{ ctx.lang.t("contract-edit") }}{% else %}{{ ctx.lang.t("contract-new") }}{% endif %}</h1>
+  <div class="actions"><a class="button secondary" href="/meters/{{ meter_id }}">{{ meter_name }}</a></div>
+</div>
+
+{% if let Some(c) = conflict %}<p class="callout warning" role="alert">{{ c }}</p>{% endif %}
+
+{% if !templates.is_empty() %}
+<nav class="template-list" aria-label="{{ ctx.lang.t("contract-templates") }}">
+  <span class="muted">{{ ctx.lang.t("contract-templates") }}:</span>
+  {% for (code, label) in templates %}
+  <a class="tag{% if *code == form.template %} active{% endif %}" href="/meters/{{ meter_id }}/contracts/new?template={{ code }}">{{ label }}</a>
+  {% endfor %}
+</nav>
+{% endif %}
+
+<form method="post" action="{{ action }}" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <input type="hidden" name="template" value="{{ form.template }}">
+  <input type="hidden" name="positions" value="{{ form.positions.len() }}">
+
+  <div class="grid">
+    <div class="field{% if self.has_errs("provider") %} has-error{% endif %}">
+      <label for="provider">{{ ctx.lang.t("contract-provider") }}</label>
+      <input id="provider" name="provider" value="{{ form.provider }}" maxlength="80" required>
+      {% for e in self.errs("provider") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("contract_number") %} has-error{% endif %}">
+      <label for="contract_number">{{ ctx.lang.t("contract-number") }}</label>
+      <input id="contract_number" name="contract_number" value="{{ form.contract_number }}" maxlength="40">
+      {% for e in self.errs("contract_number") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("direction") %} has-error{% endif %}">
+      <label for="direction">{{ ctx.lang.t("contract-direction") }}</label>
+      <select id="direction" name="direction">
+        {% for (value, label) in directions %}
+        <option value="{{ value }}"{% if *value == form.direction %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {% for e in self.errs("direction") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="field{% if self.has_errs("starts_on") %} has-error{% endif %}">
+      <label for="starts_on">{{ ctx.lang.t("contract-starts-on") }}</label>
+      <input id="starts_on" name="starts_on" type="date" value="{{ form.starts_on }}" required>
+      {% for e in self.errs("starts_on") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("ends_on") %} has-error{% endif %}">
+      <label for="ends_on">{{ ctx.lang.t("contract-ends-on") }}</label>
+      <input id="ends_on" name="ends_on" type="date" value="{{ form.ends_on }}">
+      <p class="hint">{{ ctx.lang.t("contract-ends-on-hint") }}</p>
+      {% for e in self.errs("ends_on") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <fieldset class="field{% if self.has_errs("billing_start") %} has-error{% endif %}">
+      <legend>{{ ctx.lang.t("contract-billing-start") }}</legend>
+      <div class="inline-inputs">
+        <label class="visually-hidden" for="billing_day">{{ ctx.lang.t("meter-billing-day") }}</label>
+        <input id="billing_day" name="billing_day" value="{{ form.billing_day }}" inputmode="numeric" size="2" placeholder="{{ ctx.lang.t("meter-billing-day") }}">
+        <label class="visually-hidden" for="billing_month">{{ ctx.lang.t("meter-billing-month") }}</label>
+        <input id="billing_month" name="billing_month" value="{{ form.billing_month }}" inputmode="numeric" size="2" placeholder="{{ ctx.lang.t("meter-billing-month") }}">
+      </div>
+      <p class="hint">{{ ctx.lang.t("contract-billing-start-hint") }}</p>
+      {% for e in self.errs("billing_start") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </fieldset>
+  </div>
+
+  <h2>{{ ctx.lang.t("contract-positions") }}</h2>
+  <p class="hint">{{ ctx.lang.t("contract-positions-hint") }}</p>
+  {% for e in self.errs("positions") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  {% for p in form.positions %}
+  <fieldset class="card position">
+    <legend>{{ ctx.lang.t("contract-position") }} {{ p.idx + 1 }}</legend>
+    <input type="hidden" name="{{ p.key }}_id" value="{{ p.id }}">
+    <input type="hidden" name="{{ p.key }}_components" value="{{ p.components.len() }}">
+    <div class="grid">
+      <div class="field">
+        <label for="{{ p.key }}_name">{{ ctx.lang.t("contract-position-name") }}</label>
+        <input id="{{ p.key }}_name" name="{{ p.key }}_name" value="{{ p.name }}" maxlength="60">
+        {% for e in self.ferrs(p.key, "name") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="{{ p.key }}_register">{{ ctx.lang.t("contract-position-register") }}</label>
+        <select id="{{ p.key }}_register" name="{{ p.key }}_register">
+          <option value="">{{ ctx.lang.t("contract-all-registers") }}</option>
+          {% for (rid, label) in registers %}
+          <option value="{{ rid }}"{% if *rid == p.register %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% for e in self.ferrs(p.key, "register") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="{{ p.key }}_factor">{{ ctx.lang.t("contract-factor") }}</label>
+        <input id="{{ p.key }}_factor" name="{{ p.key }}_factor" value="{{ p.factor }}" inputmode="decimal">
+        <p class="hint">{{ ctx.lang.t("contract-factor-hint") }}</p>
+        {% for e in self.ferrs(p.key, "factor") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="{{ p.key }}_vat">{{ ctx.lang.t("contract-vat") }}</label>
+        <input id="{{ p.key }}_vat" name="{{ p.key }}_vat" value="{{ p.vat }}" inputmode="decimal">
+        {% for e in self.ferrs(p.key, "vat") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    {% for e in self.ferrs(p.key, "components") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    <table class="table">
+      <caption class="visually-hidden">{{ ctx.lang.t("contract-components") }}</caption>
+      <thead>
+        <tr>
+          <th>{{ ctx.lang.t("contract-valid-from") }}</th>
+          <th>{{ ctx.lang.t("contract-base-price") }}</th>
+          <th>{{ ctx.lang.t("contract-work-price") }}</th>
+          <th>{{ ctx.lang.t("contract-tiers") }}</th>
+          <th>{{ ctx.lang.t("contract-component-factor") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in p.components %}
+        <tr>
+          <td>
+            <input type="hidden" name="{{ c.key }}_id" value="{{ c.id }}">
+            <label class="visually-hidden" for="{{ c.key }}_valid_from">{{ ctx.lang.t("contract-valid-from") }}</label>
+            <input id="{{ c.key }}_valid_from" name="{{ c.key }}_valid_from" type="date" value="{{ c.valid_from }}">
+            {% for e in self.ferrs(c.key, "valid_from") %}<p class="field-error">{{ e }}</p>{% endfor %}
+          </td>
+          <td>
+            <label class="visually-hidden" for="{{ c.key }}_base">{{ ctx.lang.t("contract-base-price") }}</label>
+            <input id="{{ c.key }}_base" name="{{ c.key }}_base" value="{{ c.base }}" inputmode="decimal" size="8">
+            <label class="visually-hidden" for="{{ c.key }}_interval">{{ ctx.lang.t("contract-base-interval") }}</label>
+            <select id="{{ c.key }}_interval" name="{{ c.key }}_interval">
+              {% for (value, label) in intervals %}
+              <option value="{{ value }}"{% if *value == c.interval %} selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+            {% for e in self.ferrs(c.key, "base") %}<p class="field-error">{{ e }}</p>{% endfor %}
+          </td>
+          <td>
+            <label class="visually-hidden" for="{{ c.key }}_price">{{ ctx.lang.t("contract-work-price") }}</label>
+            <input id="{{ c.key }}_price" name="{{ c.key }}_price" value="{{ c.price }}" inputmode="decimal" size="8">
+            {% for e in self.ferrs(c.key, "price") %}<p class="field-error">{{ e }}</p>{% endfor %}
+          </td>
+          <td>
+            <label class="visually-hidden" for="{{ c.key }}_tiers">{{ ctx.lang.t("contract-tiers") }}</label>
+            <textarea id="{{ c.key }}_tiers" name="{{ c.key }}_tiers" rows="2" cols="14">{{ c.tiers }}</textarea>
+            {% for e in self.ferrs(c.key, "tiers") %}<p class="field-error">{{ e }}</p>{% endfor %}
+          </td>
+          <td>
+            <label class="visually-hidden" for="{{ c.key }}_factor">{{ ctx.lang.t("contract-component-factor") }}</label>
+            <input id="{{ c.key }}_factor" name="{{ c.key }}_factor" value="{{ c.factor }}" inputmode="decimal" size="6">
+            {% for e in self.ferrs(c.key, "factor") %}<p class="field-error">{{ e }}</p>{% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="actions">
+      <button type="submit" name="action" value="add_component:{{ p.idx }}" class="secondary">{{ ctx.lang.t("contract-add-component") }}</button>
+      <button type="submit" name="action" value="remove_position:{{ p.idx }}" class="link danger">{{ ctx.lang.t("contract-remove-position") }}</button>
+    </div>
+  </fieldset>
+  {% endfor %}
+  <p class="hint">{{ ctx.lang.t("contract-tiers-hint") }}</p>
+  <div class="actions">
+    <button type="submit" name="action" value="add_position" class="secondary">{{ ctx.lang.t("contract-add-position") }}</button>
+  </div>
+
+  <div class="field{% if self.has_errs("note") %} has-error{% endif %}">
+    <label for="note">{{ ctx.lang.t("contract-note") }}</label>
+    <textarea id="note" name="note" rows="2" maxlength="500">{{ form.note }}</textarea>
+    {% for e in self.errs("note") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </div>
+
+  <div class="actions">
+    <button type="submit" name="action" value="save">{{ ctx.lang.t("action-save") }}</button>
+  </div>
+</form>
+{% endblock %}

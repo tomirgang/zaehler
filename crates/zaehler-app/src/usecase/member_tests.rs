@@ -4,19 +4,29 @@
 
 use bytes::Bytes;
 use chrono::{Duration, Utc};
+use rust_decimal::Decimal;
 use uuid::Uuid;
 use zaehler_domain::{
-    meter::{MeterKind, MeterPurpose},
+    meter::{Direction, MeterKind, MeterPurpose},
     reading::ReadingSource,
+    tariff::{AdjustmentKind, BasePriceInterval, UnitPricing},
 };
 
 use crate::{
     AppError, Role, Tenant,
-    ids::{BlobKey, DraftId, HouseholdId, InvitationId, MeterId, ReadingId, UserId},
-    model::{HouseholdData, Identity},
+    ids::{
+        BlobKey, ContractId, DocumentId, DraftId, HouseholdId, InstallmentId, InvitationId,
+        MeterId, PositionId, ReadingId, SettlementId, UserId,
+    },
+    model::{ContractEntry, HouseholdData, Identity},
     testing::memory_ports,
     usecase::{
         UseCases,
+        contract::{
+            AdjustmentInput, ComponentInput, ContractInput, InstallmentInput, PositionInput,
+            SettlementInput,
+        },
+        document::{ContractChoice, InvoiceConfirmation},
         import::{DateFormat, DecimalSeparator, ImportMapping},
         member::InvitationInput,
         meter::{MeterInput, SwapInput},
@@ -191,7 +201,99 @@ async fn role_matrix() {
                 .await,
             &at("RevokeInvitation"),
         );
+        let contract = ContractId(Uuid::now_v7());
+        forbidden(
+            uc.create_contract.execute(t, m, contract_input()).await,
+            &at("CreateContract"),
+        );
+        forbidden(
+            uc.update_contract
+                .execute(t, contract, contract_input())
+                .await,
+            &at("UpdateContract"),
+        );
+        forbidden(
+            uc.delete_contract.execute(t, contract).await,
+            &at("DeleteContract"),
+        );
+        forbidden(
+            uc.add_price_component
+                .execute(
+                    t,
+                    contract,
+                    PositionId(Uuid::now_v7()),
+                    contract_input().positions[0].components[0].clone(),
+                )
+                .await,
+            &at("AddPriceComponent"),
+        );
+        forbidden(
+            uc.set_installment
+                .execute(
+                    t,
+                    contract,
+                    InstallmentInput {
+                        valid_from: contract_input().starts_on,
+                        amount: Decimal::ONE,
+                        every_months: 1,
+                    },
+                )
+                .await,
+            &at("SetInstallment"),
+        );
+        forbidden(
+            uc.delete_contract_entry
+                .execute(
+                    t,
+                    contract,
+                    ContractEntry::Installment(InstallmentId(Uuid::now_v7())),
+                )
+                .await,
+            &at("DeleteContractEntry(Installment)"),
+        );
     }
+
+    // Verträge ab Member
+    let contract = ContractId(Uuid::now_v7());
+    forbidden(
+        uc.add_adjustment
+            .execute(
+                &viewer,
+                contract,
+                AdjustmentInput {
+                    kind: AdjustmentKind::Bonus,
+                    booked_on: contract_input().starts_on,
+                    amount: Decimal::ONE,
+                    note: None,
+                },
+            )
+            .await,
+        "AddAdjustment",
+    );
+    forbidden(
+        uc.record_settlement
+            .execute(
+                &viewer,
+                contract,
+                SettlementInput {
+                    period_start: contract_input().starts_on,
+                    period_end: contract_input().starts_on,
+                    amount: Decimal::ONE,
+                },
+            )
+            .await,
+        "RecordSettlement",
+    );
+    forbidden(
+        uc.delete_contract_entry
+            .execute(
+                &viewer,
+                contract,
+                ContractEntry::Settlement(SettlementId(Uuid::now_v7())),
+            )
+            .await,
+        "DeleteContractEntry(Settlement)",
+    );
 
     // ab Member
     let t = &viewer;
@@ -224,6 +326,41 @@ async fn role_matrix() {
     );
     forbidden(uc.discard_draft.execute(t, d).await, "DiscardDraft");
     forbidden(uc.get_draft_photo.execute(t, d).await, "GetDraftPhoto");
+    let doc = DocumentId(Uuid::now_v7());
+    let invoice = |contract| InvoiceConfirmation {
+        meter_id: m,
+        readings: Vec::new(),
+        confirm_warnings: false,
+        contract,
+        installment: None,
+        settlement: None,
+    };
+    forbidden(
+        uc.upload_document
+            .execute(t, Bytes::from_static(b"%PDF-1.7"), "x.pdf")
+            .await,
+        "UploadDocument",
+    );
+    forbidden(uc.analyse_document.execute(t, doc).await, "AnalyseDocument");
+    forbidden(uc.list_documents.execute(t).await, "ListDocuments");
+    forbidden(uc.discard_document.execute(t, doc).await, "DiscardDocument");
+    forbidden(
+        uc.confirm_invoice
+            .execute(t, doc, invoice(ContractChoice::None))
+            .await,
+        "ConfirmInvoice",
+    );
+    // Vertrag aus der Rechnung nur als Owner
+    forbidden(
+        uc.confirm_invoice
+            .execute(
+                &member,
+                doc,
+                invoice(ContractChoice::Create(contract_input())),
+            )
+            .await,
+        "ConfirmInvoice(Create) als member",
+    );
     forbidden(
         uc.upload_csv.execute(t, Bytes::from_static(b"a;b\n")).await,
         "UploadCsv",
@@ -240,6 +377,46 @@ async fn role_matrix() {
     // lesend und Austritt bleiben für Viewer erlaubt
     assert!(uc.list_members.execute(&viewer).await.is_ok());
     assert!(uc.dashboard.execute(&viewer).await.is_ok());
+    assert!(uc.household_costs.execute(&viewer, None).await.is_ok());
+    // unbekannte Messstelle: nicht gefunden statt verboten
+    assert!(matches!(
+        uc.meter_costs.execute(&viewer, m).await,
+        Err(AppError::NotFound)
+    ));
+    assert!(matches!(
+        uc.contract_templates.execute(&viewer, m).await,
+        Err(AppError::NotFound)
+    ));
+}
+
+fn contract_input() -> ContractInput {
+    let start = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap_or_default();
+    ContractInput {
+        direction: Direction::Import,
+        provider: "Stadtwerke".into(),
+        contract_number: None,
+        starts_on: start,
+        ends_on: None,
+        billing_start: None,
+        note: None,
+        positions: vec![PositionInput {
+            id: None,
+            name: "Strom".into(),
+            register_id: None,
+            factor: Decimal::ONE,
+            vat_pct: None,
+            components: vec![ComponentInput {
+                id: None,
+                valid_from: start,
+                base_price: Decimal::from(120),
+                base_interval: BasePriceInterval::Year,
+                unit_pricing: UnitPricing::Flat {
+                    price: Decimal::new(30, 2),
+                },
+                factor: None,
+            }],
+        }],
+    }
 }
 
 // @test SPEC_TEN_ROLES

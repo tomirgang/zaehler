@@ -150,13 +150,21 @@ Anteil berücksichtigt, sodass unterjährige Teilrechnungen konsistent summieren
 
 ```{spec} Gesamtkosten eines Zeitraums
 :id: SPEC_TAR_COST_CALC
-:status: draft
+:status: implemented
 :satisfies: REQ_TAR_002, REQ_TAR_005, REQ_TAR_010, REQ_FC_002
 
 Kosten = Σ Positionen [ Σ Preisstände (Grundpreis anteilig + Menge · Faktor ·
 Arbeitspreis) ] - Boni. Ein Zeitraum wird an jedem `valid_from` einer
 Preiskomponente geteilt; die Menge je Teilstück stammt aus
 {need}`SPEC_CONS_INTERPOLATION` bzw. für die Zukunft aus der Prognose.
+
+Umsetzung (`zaehler_domain::cost`): Geteilt wird zusätzlich an den Grenzen
+der Abrechnungszeiträume, an Vertragsbeginn und -ende und am Ende des
+gemessenen Abschnitts. Die Interpolation rechnet in lokaler Kalenderzeit
+(jeder Tag gleich lang). Staffeln beziehen sich auf die kumulierte Menge ab
+Beginn des Abrechnungszeitraums. Golden-Tests für Strom, Gas und Wasser
+vergleichen je Position auf 1 Cent; Property-Test zur Additivität
+angrenzender Zeiträume.
 ```
 
 ```{spec} Abschläge und erwartete Abrechnung
@@ -168,6 +176,11 @@ Fälligkeiten: `valid_from + k · Turnus`, bis zum nächsten Abschlagsstand.
 Saldo = prognostizierte Kosten - gezahlte Abschläge (positiv = Nachzahlung).
 Vorschlag neuer Monatsabschlag = prognostizierte Jahreskosten / 12, auf volle
 Euro aufgerundet.
+
+Umsetzung: Der Vorschlag gilt je Turnus des aktuellen Abschlags
+(prognostizierte Jahreskosten · Turnus in Monaten / 12, aufgerundet); ohne
+Abschlag monatlich. Abschläge, Boni und Gutschriften stehen in
+`installments` und `adjustments` des Vertrags.
 ```
 
 ## Fahrzeug

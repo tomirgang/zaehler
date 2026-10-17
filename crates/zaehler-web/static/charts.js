@@ -171,6 +171,41 @@
       });
       return { ...base(data), series };
     },
+    // Monatskosten: Bezug gemessen und prognostiziert (schraffiert)
+    // gestapelt, Einspeisevergütung als negativer Balken (SPEC_TAR_COST_VIEW)
+    costs(data) {
+      const s = data.series;
+      const accent = css("--accent");
+      const series = [
+        {
+          id: "measured",
+          type: "bar",
+          stack: "import",
+          name: s.measured.name,
+          data: s.measured.data,
+          itemStyle: { color: accent },
+        },
+        {
+          id: "costs-estimate",
+          type: "bar",
+          stack: "import",
+          name: s.estimated.name,
+          data: s.estimated.data,
+          itemStyle: { color: accent, opacity: 0.55, decal: hatch },
+        },
+      ];
+      if (present(s.export)) {
+        series.push({
+          id: "export",
+          type: "bar",
+          stack: "import",
+          name: s.export.name,
+          data: s.export.data,
+          itemStyle: { color: css("--muted") },
+        });
+      }
+      return { ...base(data), series };
+    },
   };
 
   // `requests`: ein Abruf je URL für alle Diagrammbereiche einer Seite

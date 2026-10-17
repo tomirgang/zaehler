@@ -21,10 +21,10 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-
 pub async fn security_headers(req: Request, next: Next) -> Response {
     let mut res = next.run(req).await;
     let h = res.headers_mut();
-    h.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(CSP),
-    );
+    // Eine strengere Richtlinie des Handlers bleibt erhalten (Dokumente mit
+    // `sandbox`, SPEC_DOC_UPLOADS).
+    h.entry(header::CONTENT_SECURITY_POLICY)
+        .or_insert(HeaderValue::from_static(CSP));
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -115,7 +115,12 @@ fn origin_allowed(origin: &str, public_origin: &str) -> bool {
 }
 
 /// Routen mit Multipart-Body; ihre Handler prüfen das Feld `_csrf` selbst.
-const MULTIPART_ROUTES: [&str; 3] = ["/capture", "/import/upload", "/settings/import"];
+const MULTIPART_ROUTES: [&str; 4] = [
+    "/capture",
+    "/import/upload",
+    "/settings/import",
+    "/documents",
+];
 
 /// Antwort bei fehlgeschlagener CSRF-Prüfung.
 #[must_use]

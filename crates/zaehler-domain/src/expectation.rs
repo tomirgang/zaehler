@@ -86,6 +86,9 @@ pub enum BandSource {
     History,
     /// Jahresziel, verteilt mit dem Saisonprofil
     Target,
+    /// Menge, die der Abschlag beim aktuellen Arbeitspreis deckt, verteilt
+    /// mit dem Saisonprofil
+    Installment,
 }
 
 /// Erwartung und Ampel eines Monats.
@@ -98,11 +101,13 @@ pub struct MonthExpectation {
     pub status: Option<Status>,
 }
 
-/// Jahresziel mit Toleranz in Prozent.
+/// Jahresmenge mit Toleranz in Prozent: Jahresziel oder Abschlagsbasis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Target {
     pub annual: Decimal,
     pub tolerance_pct: Decimal,
+    /// `Target` oder `Installment`
+    pub source: BandSource,
 }
 
 /// Erwartung je Monat der Reihe: mit mindestens zwei Werten desselben
@@ -132,10 +137,7 @@ pub fn expectations(
             } else {
                 let t = target?;
                 let expected = (t.annual * profile.share_of_year(m.month)).round_dp(3);
-                (
-                    Band::from_target(expected, t.tolerance_pct),
-                    BandSource::Target,
-                )
+                (Band::from_target(expected, t.tolerance_pct), t.source)
             };
             Some(MonthExpectation {
                 month: m.month,
@@ -199,6 +201,7 @@ mod tests {
         let target = Target {
             annual: dec!(1000),
             tolerance_pct: dec!(20),
+            source: BandSource::Target,
         };
         let with = expectations(&series, &gas, Some(target));
         let feb = with[4].expect("Ziel");

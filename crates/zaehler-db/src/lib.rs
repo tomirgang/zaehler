@@ -188,6 +188,7 @@ mod tests {
         let store = super::SeaOrmStore::new(db);
         zaehler_app::testing::suite::run(&store).await;
         zaehler_app::testing::suite::drafts(&store, &store).await;
+        zaehler_app::testing::suite::documents(&store, &store).await;
         zaehler_app::testing::suite::jobs(&store, &store, &store).await;
 
         // Export und Import verlustfrei auch auf PostgreSQL (SPEC_BACKUP_DATA)
@@ -242,6 +243,7 @@ mod tests {
         let store = super::SeaOrmStore::new(db);
         zaehler_app::testing::suite::run(&store).await;
         zaehler_app::testing::suite::drafts(&store, &store).await;
+        zaehler_app::testing::suite::documents(&store, &store).await;
         zaehler_app::testing::suite::jobs(&store, &store, &store).await;
         std::fs::remove_dir_all(dir).ok();
     }

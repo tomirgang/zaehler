@@ -83,17 +83,27 @@ impl ReceiptSuggestion {
     }
 }
 
-/// Jahres-/Schlussrechnung eines Versorgers.
+/// Jahres-/Schlussrechnung eines Versorgers (SPEC_AI_INVOICE).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct InvoiceSuggestion {
     pub provider: Option<String>,
+    pub contract_number: Option<String>,
     pub period_start: Option<String>,
     pub period_end: Option<String>,
     pub readings: Vec<InvoiceReading>,
     pub prices: Vec<InvoicePrice>,
-    pub installments_paid: Option<String>,
-    pub new_installment: Option<String>,
+    pub installment: Option<InvoiceInstallment>,
+    /// Rechnungsbetrag (Kosten des Zeitraums, brutto)
+    pub total_amount: Option<String>,
     pub confidence: f64,
+}
+
+/// Neuer Abschlag laut Rechnung.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct InvoiceInstallment {
+    pub amount: String,
+    pub interval_months: u8,
+    pub valid_from: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -115,31 +125,53 @@ pub struct InvoicePrice {
 }
 
 impl InvoiceSuggestion {
-    pub(crate) const PROMPT: &'static str = "Extrahiere aus der Versorgerrechnung: Anbieter, Abrechnungszeitraum, \
-        alle Zählerstände (Zählernummer, Register, Datum ISO 8601, Stand), alle Preispositionen brutto \
-        (Grundpreis mit Intervall, Arbeitspreis, Gültigkeit), Summe gezahlter Abschläge und den neuen Abschlag. \
-        Beträge als Dezimalstring mit Punkt. Erfinde keine Werte.";
+    pub(crate) const PROMPT: &'static str = "Extrahiere aus der Versorgerrechnung (Strom, Gas, Wasser, Wärme): \
+        Anbieter, Vertragsnummer, Abrechnungszeitraum (erster und letzter Tag, ISO 8601), \
+        alle Zählerstände mit Zählernummer, Register, Datum (ISO 8601) und Stand, jeweils Anfangs- und Endstand, \
+        alle Preispositionen brutto mit Grundpreis, Intervall des Grundpreises (day, month oder year), \
+        Arbeitspreis je Einheit und Gültigkeitsbeginn, den künftigen Abschlag mit Betrag, Turnus in Monaten und Beginn, \
+        sowie den Rechnungsbetrag (Bruttokosten des Zeitraums vor Abzug der Abschläge). \
+        Beträge, Preise und Stände als Dezimalstring mit Punkt. Unlesbares als null. Erfinde keine Werte.";
 
     pub(crate) fn schema() -> Value {
         let s = json!({"type": ["string", "null"]});
+        let date = json!({"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"});
+        let decimal = json!({"type": ["string", "null"], "pattern": "^-?[0-9]+(\\.[0-9]+)?$"});
         json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["provider", "period_start", "period_end", "readings", "prices", "installments_paid", "new_installment", "confidence"],
+            "required": ["provider", "contract_number", "period_start", "period_end", "readings", "prices", "installment", "total_amount", "confidence"],
             "properties": {
-                "provider": s, "period_start": s, "period_end": s,
-                "installments_paid": s, "new_installment": s,
+                "provider": s, "contract_number": s,
+                "period_start": date, "period_end": date,
+                "total_amount": decimal,
                 "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
                 "readings": { "type": "array", "items": {
                     "type": "object", "additionalProperties": false,
                     "required": ["serial_number", "register", "date", "value"],
-                    "properties": { "serial_number": s, "register": s, "date": {"type": "string"}, "value": {"type": "string"} }
+                    "properties": {
+                        "serial_number": s, "register": s,
+                        "date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+                        "value": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$"}
+                    }
                 }},
                 "prices": { "type": "array", "items": {
                     "type": "object", "additionalProperties": false,
                     "required": ["position", "valid_from", "base_price", "base_interval", "unit_price"],
-                    "properties": { "position": {"type": "string"}, "valid_from": s, "base_price": s, "base_interval": s, "unit_price": s }
-                }}
+                    "properties": {
+                        "position": {"type": "string"}, "valid_from": date,
+                        "base_price": decimal, "unit_price": decimal,
+                        "base_interval": {"type": ["string", "null"], "enum": ["day", "month", "year", null]}
+                    }
+                }},
+                "installment": { "type": ["object", "null"], "additionalProperties": false,
+                    "required": ["amount", "interval_months", "valid_from"],
+                    "properties": {
+                        "amount": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$"},
+                        "interval_months": {"type": "integer", "minimum": 1, "maximum": 12},
+                        "valid_from": date
+                    }
+                }
             }
         })
     }

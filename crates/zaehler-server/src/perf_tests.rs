@@ -23,6 +23,7 @@ use zaehler_app::{
     model::Identity,
     usecase::{
         UseCases,
+        contract::{ComponentInput, ContractInput, InstallmentInput, PositionInput},
         meter::{MeterInput, RegisterInput},
         reading::ReadingsInput,
     },
@@ -30,6 +31,7 @@ use zaehler_app::{
 use zaehler_domain::{
     meter::{Direction, MeterKind},
     reading::ReadingSource,
+    tariff::{BasePriceInterval, UnitPricing},
 };
 
 use crate::config::{Config, StorageConfig};
@@ -41,7 +43,8 @@ const REQUESTS: usize = 200;
 const BUDGET: Duration = Duration::from_millis(300);
 
 /// Ein Haushalt, 20 Messstellen mit je 2 Registern, 10 Jahre monatliche
-/// Ablesungen (4 800 Ablesungen).
+/// Ablesungen (4 800 Ablesungen) und je ein Vertrag mit zwei Preiswechseln
+/// je Jahr.
 async fn seed(uc: &UseCases, name: &str) -> MeterId {
     let identity = Identity {
         issuer: "dev".into(),
@@ -103,9 +106,80 @@ async fn seed(uc: &UseCases, name: &str) -> MeterId {
                 .await
                 .unwrap();
         }
+        seed_contract(uc, &tenant, id, &registers).await;
         first.get_or_insert(id);
     }
     first.unwrap()
+}
+
+/// Vertrag HT/NT ab 2016 mit zwei Preiswechseln je Jahr und jährlich neuem
+/// Abschlag (SPEC_PERF_BUDGET, SPEC_TAR_COST_VIEW).
+async fn seed_contract(
+    uc: &UseCases,
+    tenant: &zaehler_app::Tenant,
+    meter: MeterId,
+    registers: &[zaehler_app::ids::RegisterId],
+) {
+    let day = |y: i32, m: u32| chrono::NaiveDate::from_ymd_opt(y, m, 1).unwrap();
+    let components = |base: i64, cents: i64| -> Vec<ComponentInput> {
+        (2016..2026)
+            .flat_map(|y| [day(y, 1), day(y, 7)])
+            .enumerate()
+            .map(|(i, valid_from)| ComponentInput {
+                id: None,
+                valid_from,
+                base_price: Decimal::from(base),
+                base_interval: BasePriceInterval::Year,
+                unit_pricing: UnitPricing::Flat {
+                    price: Decimal::new(cents + i64::try_from(i).unwrap(), 2),
+                },
+                factor: None,
+            })
+            .collect()
+    };
+    let position = |name: &str, register, base, cents| PositionInput {
+        id: None,
+        name: name.into(),
+        register_id: Some(register),
+        factor: Decimal::ONE,
+        vat_pct: Some(Decimal::from(19)),
+        components: components(base, cents),
+    };
+    let contract = uc
+        .create_contract
+        .execute(
+            tenant,
+            meter,
+            ContractInput {
+                direction: Direction::Import,
+                provider: "Stadtwerke".into(),
+                contract_number: None,
+                starts_on: day(2016, 1),
+                ends_on: None,
+                billing_start: None,
+                note: None,
+                positions: vec![
+                    position("HT", registers[0], 120, 25),
+                    position("NT", registers[1], 0, 20),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    for y in 2016..=2026 {
+        uc.set_installment
+            .execute(
+                tenant,
+                contract,
+                InstallmentInput {
+                    valid_from: day(y, 2),
+                    amount: Decimal::from(60 + (y - 2016) * 2),
+                    every_months: 1,
+                },
+            )
+            .await
+            .unwrap();
+    }
 }
 
 async fn get(app: &Router, path: &str, cookie: &str) -> (StatusCode, Duration) {
@@ -125,8 +199,8 @@ fn p95(mut samples: Vec<Duration>) -> Duration {
     samples[(samples.len() * 95).div_ceil(100) - 1]
 }
 
-/// Misst Dashboard, Auswertungsseite und `chart.json`; meldet p95 und
-/// scheitert bei Überschreitung des Budgets.
+/// Misst Dashboard, Auswertungsseite, `chart.json` und die Kostenansichten;
+/// meldet p95 und scheitert bei Überschreitung des Budgets.
 async fn measure(database_url: &str, backend: &str) {
     let dir = tempfile::tempdir().unwrap();
     let mut config = Config::default();
@@ -168,6 +242,8 @@ async fn measure(database_url: &str, backend: &str) {
         ("Dashboard", "/".to_owned()),
         ("Auswertung", format!("/meters/{meter}")),
         ("chart.json", format!("/meters/{meter}/chart.json")),
+        ("Kostenansicht", format!("/meters/{meter}/costs")),
+        ("Haushaltskosten", "/costs".to_owned()),
     ] {
         for _ in 0..WARMUP {
             get(&app.router, &path, &cookie).await;

@@ -8,8 +8,10 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use zaehler_app::{
     backup::{
-        BackupData, DeviceRecord, DraftRecord, HouseholdRecord, InvitationRecord, MembershipRecord,
-        MeterRecord, ReadingRecord, RegisterRecord, RevisionRecord, UserRecord,
+        AdjustmentRecord, BackupData, ContractRecord, CostPositionRecord, DeviceRecord,
+        DocumentRecord, DraftRecord, HouseholdRecord, InstallmentRecord, InvitationRecord,
+        MembershipRecord, MeterRecord, PriceComponentRecord, ReadingRecord, RegisterRecord,
+        RevisionRecord, SettlementRecord, UserRecord,
     },
     port::BackupRepository,
 };
@@ -244,10 +246,7 @@ fn expected_core() -> BackupData {
             created_at: at(2, 7),
             updated_at: None,
         }],
-        drafts: Vec::new(),
-        invitations: Vec::new(),
-        revisions: Vec::new(),
-        notification_settings: Vec::new(),
+        ..BackupData::default()
     }
 }
 
@@ -436,7 +435,132 @@ pub(crate) fn fixture() -> BackupData {
         accepted_at: Some(at(4, 7)),
         revoked_at: None,
     });
+    contracts_fixture(&mut data);
     data
+}
+
+/// Vertrag mit zwei Positionen, Staffel, Faktor je Preisstand, Abschlägen,
+/// Bonus und Abrechnung (ab `m20261017_000011_tariffs`).
+#[allow(clippy::too_many_lines)] // vollständiger Datensatz
+fn contracts_fixture(data: &mut BackupData) {
+    let day = |m: u32, d: u32| chrono::NaiveDate::from_ymd_opt(2026, m, d).unwrap();
+    data.contracts.push(ContractRecord {
+        id: id(30),
+        meter_id: id(3),
+        direction: "import".into(),
+        provider: "Stadtwerke Süd".into(),
+        contract_number: Some("V-4711".into()),
+        starts_on: day(1, 1),
+        ends_on: Some(day(12, 31)),
+        billing_start_month: 4,
+        billing_start_day: 1,
+        note: Some("Ökostrom".into()),
+    });
+    data.contracts.push(ContractRecord {
+        id: id(31),
+        meter_id: id(3),
+        direction: "export".into(),
+        provider: "Netzbetreiber".into(),
+        contract_number: None,
+        starts_on: day(2, 1),
+        ends_on: None,
+        billing_start_month: 1,
+        billing_start_day: 1,
+        note: None,
+    });
+    data.cost_positions.push(CostPositionRecord {
+        id: id(32),
+        contract_id: id(30),
+        name: "Arbeitspreis".into(),
+        register_id: Some(id(5)),
+        factor_micro: 1_000_000,
+        vat_pct_milli: Some(19_000),
+        sort: 0,
+    });
+    data.cost_positions.push(CostPositionRecord {
+        id: id(33),
+        contract_id: id(30),
+        name: "Messstellenbetrieb".into(),
+        register_id: None,
+        factor_micro: 1_000_000,
+        vat_pct_milli: None,
+        sort: 1,
+    });
+    data.price_components.push(PriceComponentRecord {
+        id: id(34),
+        position_id: id(32),
+        valid_from: day(1, 1),
+        base_price_micro: 12_950_000,
+        base_interval: "month".into(),
+        unit_pricing: r#"{"kind":"tiered","tiers":[{"up_to":"1000","price":"0.30"},{"up_to":null,"price":"0.32"}]}"#.into(),
+        factor_micro: None,
+    });
+    data.price_components.push(PriceComponentRecord {
+        id: id(35),
+        position_id: id(32),
+        valid_from: day(7, 1),
+        base_price_micro: 13_500_000,
+        base_interval: "month".into(),
+        unit_pricing: r#"{"kind":"flat","price":"0.3149"}"#.into(),
+        factor_micro: Some(1_002_500),
+    });
+    data.price_components.push(PriceComponentRecord {
+        id: id(36),
+        position_id: id(33),
+        valid_from: day(1, 1),
+        base_price_micro: 20_000_000,
+        base_interval: "year".into(),
+        unit_pricing: r#"{"kind":"flat","price":"0"}"#.into(),
+        factor_micro: None,
+    });
+    data.installments.push(InstallmentRecord {
+        id: id(37),
+        contract_id: id(30),
+        valid_from: day(1, 15),
+        amount_micro: 85_000_000,
+        interval_months: 1,
+    });
+    data.installments.push(InstallmentRecord {
+        id: id(38),
+        contract_id: id(30),
+        valid_from: day(7, 15),
+        amount_micro: 92_000_000,
+        interval_months: 2,
+    });
+    data.adjustments.push(AdjustmentRecord {
+        id: id(39),
+        contract_id: id(30),
+        kind: "bonus".into(),
+        booked_on: day(3, 1),
+        amount_micro: 50_000_000,
+        note: Some("Neukundenbonus".into()),
+    });
+    data.settlements.push(SettlementRecord {
+        id: id(40),
+        contract_id: id(30),
+        period_start: day(1, 1),
+        period_end: day(3, 31),
+        amount_micro: 312_450_000,
+        document_id: Some(id(41)),
+    });
+    // Rechnung als PDF, bestätigt (ab `m20261017_000012_documents`)
+    data.documents.push(DocumentRecord {
+        id: id(41),
+        household_id: id(2),
+        kind: "invoice".into(),
+        blob_key: format!("households/{}/documents/{}.pdf", id(2), id(41)),
+        media_type: "application/pdf".into(),
+        bytes: 48_213,
+        original_name: "Jahresabrechnung Süd.pdf".into(),
+        created_by: id(1),
+        created_at: at(4, 1),
+        status: "confirmed".into(),
+        model: Some("google/gemini-2.5-flash".into()),
+        extraction: Some(r#"{"provider":"Stadtwerke Süd","total_amount":"312.45"}"#.into()),
+        meter_id: Some(id(3)),
+        analysed_at: Some(at(4, 2)),
+        finished_at: Some(at(4, 3)),
+    });
 }
 
 // @test SPEC_BACKUP_DATA

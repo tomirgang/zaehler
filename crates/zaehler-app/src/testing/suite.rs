@@ -139,7 +139,15 @@ pub async fn run(f: &dyn UnitOfWorkFactory) {
     members(f).await;
     invitations(f).await;
     revisions(f).await;
+    contracts::contracts(f).await;
 }
+
+#[path = "suite_documents.rs"]
+mod documents_suite;
+pub use documents_suite::documents;
+
+#[path = "suite_contracts.rs"]
+mod contracts;
 
 /// Korrektur und Revisionen: Tenant-Isolation, Eindeutigkeit, Erhalt nach
 /// dem Löschen der Ablesung.

@@ -37,7 +37,7 @@ fn milli(d: Decimal) -> i64 {
 #[allow(clippy::too_many_lines)] // eine Abbildung je Datensatzart
 fn export(s: &State) -> BackupData {
     let epoch = DateTime::<Utc>::UNIX_EPOCH;
-    BackupData {
+    let mut data = BackupData {
         users: s
             .users
             .iter()
@@ -218,7 +218,11 @@ fn export(s: &State) -> BackupData {
                 updated_at: *at,
             })
             .collect(),
-    }
+        ..BackupData::default()
+    };
+    super::contracts_impl::export(s, &mut data);
+    super::documents_impl::export(s, &mut data);
+    data
 }
 
 fn blob_key(k: &str) -> PortResult<BlobKey> {
@@ -426,7 +430,8 @@ fn import_v1(s: &mut State, d: &BackupData) -> PortResult<()> {
             ),
         );
     }
-    Ok(())
+    super::contracts_impl::import(s, d)?;
+    super::documents_impl::import(s, d)
 }
 
 #[async_trait]

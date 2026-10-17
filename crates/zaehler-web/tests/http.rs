@@ -1772,3 +1772,416 @@ async fn notification_settings_page() {
     assert!(html.contains(r#"name="alarm" value="true" checked"#));
     assert!(html.contains("Benachrichtigungen gespeichert."));
 }
+
+/// Felder eines Stromvertrags mit einer Position.
+fn contract_fields<'a>(
+    csrf: &'a str,
+    provider: &'a str,
+    start: &'a str,
+) -> Vec<(&'a str, &'a str)> {
+    vec![
+        ("_csrf", csrf),
+        ("template", "electricity"),
+        ("positions", "1"),
+        ("direction", "import"),
+        ("provider", provider),
+        ("contract_number", "V-1"),
+        ("starts_on", start),
+        ("ends_on", ""),
+        ("billing_month", ""),
+        ("billing_day", ""),
+        ("note", ""),
+        ("pos0_id", ""),
+        ("pos0_name", "Strom"),
+        ("pos0_register", ""),
+        ("pos0_factor", "1"),
+        ("pos0_vat", "19"),
+        ("pos0_components", "1"),
+        ("pos0_c0_id", ""),
+        ("pos0_c0_valid_from", start),
+        ("pos0_c0_base", "119"),
+        ("pos0_c0_interval", "year"),
+        ("pos0_c0_price", "0,357"),
+        ("pos0_c0_tiers", ""),
+        ("pos0_c0_factor", ""),
+        ("action", "save"),
+    ]
+}
+
+// @test SPEC_TAR_CONTRACTS, SPEC_TAR_COST_VIEW, SPEC_TAR_ACTUAL_SETTLEMENT, SPEC_SEC_TENANT_SCOPE
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
+async fn contracts_and_cost_pages() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let id = create_meter(&mut c, &csrf, "Hausstrom").await;
+    let detail = text(c.get(&format!("/meters/{id}")).await).await;
+    assert!(detail.contains(&format!("/meters/{id}/contracts/new?template=electricity")));
+    assert!(
+        !detail.contains("href=\"/costs\""),
+        "Navigation ohne Verträge"
+    );
+
+    // Vorlage, Zeile hinzufügen ohne Speichern
+    let form = text(
+        c.get(&format!("/meters/{id}/contracts/new?template=electricity"))
+            .await,
+    )
+    .await;
+    assert!(form.contains(r#"name="pos0_name" value="Strom""#), "{form}");
+    let mut add = contract_fields(&csrf, "Stadtwerke", "2026-01-01");
+    add.retain(|(k, _)| *k != "action");
+    add.push(("action", "add_position"));
+    let res = c.post(&format!("/meters/{id}/contracts/new"), &add).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(text(res).await.contains(r#"name="pos1_name""#));
+
+    // Anlegen
+    let res = c
+        .post(
+            &format!("/meters/{id}/contracts/new"),
+            &contract_fields(&csrf, "Stadtwerke", "2026-01-01"),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let contract = location(&res);
+    assert!(contract.starts_with("/contracts/"));
+    let html = text(c.get(&contract).await).await;
+    assert!(html.contains("Stadtwerke") && html.contains("Vertrag angelegt."));
+    assert!(html.contains("0,357 €"), "Arbeitspreis");
+    assert!(html.contains("Arbeitspreis 0,3000 €"), "netto bei 19 %");
+    assert!(html.contains("href=\"/costs\""), "Navigation mit Verträgen");
+
+    // Überlappung
+    let res = c
+        .post(
+            &format!("/meters/{id}/contracts/new"),
+            &contract_fields(&csrf, "Anderer", "2026-06-01"),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(text(res).await.contains("überschneidet"));
+    // ungültige Eingabe
+    let mut bad = contract_fields(&csrf, "", "2026-01-01");
+    bad.retain(|(k, _)| *k != "pos0_c0_price");
+    bad.push(("pos0_c0_price", "abc"));
+    let res = c.post(&format!("/meters/{id}/contracts/new"), &bad).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("Keine gültige Zahl."));
+
+    // Abschlag, Fehler und Erfolg
+    let res = c
+        .post(
+            &format!("{contract}/installments"),
+            &[
+                ("_csrf", &csrf),
+                ("installment_valid_from", "2026-01-15"),
+                ("installment_amount", "abc"),
+                ("installment_interval", "1"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("Keine gültige Zahl."));
+    let res = c
+        .post(
+            &format!("{contract}/installments"),
+            &[
+                ("_csrf", &csrf),
+                ("installment_valid_from", "2026-01-15"),
+                ("installment_amount", "100"),
+                ("installment_interval", "1"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(text(c.get(&contract).await).await.contains("100,00 €"));
+
+    // Kosten ohne Ablesung im Zeitraum, dann mit
+    let html = text(c.get(&format!("/meters/{id}/costs")).await).await;
+    assert!(html.contains("Ohne Ablesungen"), "{html}");
+    let register =
+        detail_register_id(&text(c.get(&format!("/meters/{id}/readings/new")).await).await);
+    let value_field = format!("value_{register}");
+    let res = c
+        .post(
+            &format!("/meters/{id}/readings"),
+            &[
+                ("_csrf", &csrf),
+                ("at", "2026-01-11T00:00"),
+                (&value_field, "1100"),
+                ("note", ""),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let html = text(c.get(&format!("/meters/{id}/costs")).await).await;
+    assert!(html.contains("Abrechnungszeitraum"), "{html}");
+    assert!(html.contains("prognostiziert"));
+    assert!(html.contains("erwartete"), "Saldo");
+    let res = c.get(&format!("/meters/{id}/costs.json")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(text(res).await.contains("\"labels\""));
+    let household = text(c.get("/costs").await).await;
+    assert!(household.contains("Hausstrom") && household.contains("Kosten des Haushalts"));
+    assert_eq!(
+        c.get("/costs.json?year=2026").await.status(),
+        StatusCode::OK
+    );
+
+    // Abrechnung
+    let res = c
+        .post(
+            &format!("{contract}/settlements"),
+            &[
+                ("_csrf", &csrf),
+                ("settlement_period_start", "2026-01-01"),
+                ("settlement_period_end", "2026-01-10"),
+                ("settlement_amount", "45,20"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let html = text(c.get(&format!("/meters/{id}/costs")).await).await;
+    assert!(html.contains("45,20 €"), "abgerechnet");
+
+    // fremder Haushalt
+    let mut bob = Client::new(&app);
+    bob.login("bob").await;
+    let bob_csrf = bob.csrf().await;
+    assert_eq!(bob.get(&contract).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        bob.get(&format!("/meters/{id}/costs")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        bob.post(&format!("{contract}/delete"), &[("_csrf", &bob_csrf)])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Löschen
+    let res = c
+        .post(&format!("{contract}/delete"), &[("_csrf", &csrf)])
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&res), format!("/meters/{id}"));
+    assert_eq!(c.get(&contract).await.status(), StatusCode::NOT_FOUND);
+}
+
+fn document_app() -> Router {
+    use chrono::NaiveDate;
+    use rust_decimal::Decimal;
+    use zaehler_app::{
+        model::{InvoiceExtraction, InvoiceInstallment, InvoicePrice, InvoiceReading},
+        testing::StubExtractor,
+    };
+    use zaehler_domain::tariff::BasePriceInterval;
+
+    let day = |m, d| NaiveDate::from_ymd_opt(2026, m, d).unwrap();
+    let (mut ports, store, _clock) = memory_ports();
+    ports.extractor = Some(Arc::new(StubExtractor(Ok(InvoiceExtraction {
+        provider: Some("Stadtwerke Süd".into()),
+        contract_number: Some("V-1".into()),
+        period_start: Some(day(1, 1)),
+        period_end: Some(day(1, 9)),
+        readings: vec![InvoiceReading {
+            serial_number: None,
+            register: Some("main".into()),
+            date: day(1, 9),
+            value: Decimal::from(1080),
+        }],
+        prices: vec![
+            InvoicePrice {
+                position: "Arbeitspreis".into(),
+                valid_from: Some(day(1, 1)),
+                base_price: None,
+                base_interval: None,
+                unit_price: Some(Decimal::new(35, 2)),
+            },
+            InvoicePrice {
+                position: "Grundpreis".into(),
+                valid_from: Some(day(1, 1)),
+                base_price: Some(Decimal::from(120)),
+                base_interval: Some(BasePriceInterval::Year),
+                unit_price: None,
+            },
+        ],
+        installment: Some(InvoiceInstallment {
+            amount: Decimal::from(50),
+            every_months: 1,
+            valid_from: Some(day(2, 1)),
+        }),
+        total_amount: Some(Decimal::from(30)),
+        confidence: Decimal::new(9, 1),
+    }))));
+    let state = WebState {
+        uc: Arc::new(UseCases::new(&ports)),
+        readiness: store,
+        cfg: Arc::new(
+            WebConfig::new("http://localhost:8080", true, false, 24, "test")
+                .with_max_document_bytes(64 * 1024),
+        ),
+        oidc: None,
+        analysis: Arc::default(),
+    };
+    router(state, MemoryStore::default())
+}
+
+async fn upload_document(c: &mut Client, csrf: Option<&str>, file: &[u8]) -> Response {
+    let (content_type, body) = multipart_file(csrf, "file", file);
+    let req = Request::post("/documents")
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap();
+    c.send(req).await
+}
+
+// @test SPEC_DOC_UPLOADS, SPEC_AI_INVOICE, SPEC_SEC_UPLOADS, SPEC_SEC_SESSION_CSRF
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
+async fn invoice_import_workflow() {
+    let app = document_app();
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let meter = create_meter(&mut c, &csrf, "Hausstrom").await;
+    let page = text(c.get("/documents").await).await;
+    assert!(page.contains("enctype=\"multipart/form-data\""));
+    assert!(page.contains("Keine offenen Dokumente."));
+
+    // ohne CSRF-Token, kein PDF, zu groß
+    let pdf = b"%PDF-1.7 Rechnung";
+    assert_eq!(
+        upload_document(&mut c, None, pdf).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let res = upload_document(&mut c, Some(&csrf), b"kein Dokument").await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("Nur PDF-Dateien und Fotos"));
+    let mut big = pdf.to_vec();
+    big.resize(200 * 1024, b' ');
+    let res = upload_document(&mut c, Some(&csrf), &big).await;
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    // Hochladen und Erkennen; einzige Messstelle ist vorausgewählt
+    let res = upload_document(&mut c, Some(&csrf), pdf).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let doc = location(&res);
+    assert!(doc.starts_with("/documents/"));
+    let page = text(c.get(&doc).await).await;
+    assert!(page.contains("Stadtwerke Süd"), "{page}");
+    assert!(
+        page.contains(r#"name="r0_at" value="2026-01-10T00:00""#),
+        "Folgetag"
+    );
+    assert!(page.contains(r#"name="contract_mode" value="new" checked"#));
+    assert!(page.contains(&format!(r#"name="meter_id" value="{meter}""#)));
+    let start = page.find(r#"name="r0_register""#).unwrap();
+    let opt = start + page[start..].find("<option value=\"").unwrap() + 15;
+    let register = page[opt..opt + page[opt..].find('"').unwrap()].to_owned();
+    assert!(!register.is_empty());
+
+    // Datei nur als Download in einer Sandbox
+    let res = c.get(&format!("{doc}/file")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "application/pdf");
+    assert!(
+        res.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .starts_with("attachment")
+    );
+    assert!(
+        res.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap()
+            .starts_with("sandbox")
+    );
+
+    let mut fields = vec![
+        ("_csrf", csrf.as_str()),
+        ("meter_id", meter.as_str()),
+        ("readings", "1"),
+        ("r0_use", "1"),
+        ("r0_register", register.as_str()),
+        ("r0_at", "2026-01-10T00:00"),
+        ("r0_value", "1080"),
+        ("contract_mode", "new"),
+        ("provider", "Stadtwerke Süd"),
+        ("contract_number", "V-1"),
+        ("starts_on", "2026-01-01"),
+        ("prices", "2"),
+        ("price0_use", "1"),
+        ("price0_name", "Arbeitspreis"),
+        ("price0_position", ""),
+        ("price0_valid_from", "2026-01-01"),
+        ("price0_base", ""),
+        ("price0_interval", "year"),
+        ("price0_price", "0,35"),
+        ("price1_use", "1"),
+        ("price1_name", "Grundpreis"),
+        ("price1_position", ""),
+        ("price1_valid_from", "2026-01-01"),
+        ("price1_base", "120"),
+        ("price1_interval", "year"),
+        ("price1_price", ""),
+        ("installment", "1"),
+        ("inst_amount", "50"),
+        ("inst_every", "1"),
+        ("inst_from", "2026-02-01"),
+        ("settlement", "1"),
+        ("settle_from", "2026-01-01"),
+        ("settle_to", "2026-01-09"),
+        ("settle_amount", "abc"),
+    ];
+    // Fehler: nichts gespeichert, Formular mit Meldung
+    let res = c.post(&format!("{doc}/confirm"), &fields).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("Keine gültige Zahl."));
+    fields.pop();
+    fields.push(("settle_amount", "30"));
+    let res = c.post(&format!("{doc}/confirm"), &fields).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let contract = location(&res);
+    assert!(contract.starts_with("/contracts/"));
+    let html = text(c.get(&contract).await).await;
+    assert!(html.contains("Stadtwerke Süd") && html.contains("Rechnung übernommen."));
+    assert!(
+        html.contains(&format!("{doc}/file")),
+        "Beleg der Abrechnung"
+    );
+    assert!(html.contains("50,00 €"), "Abschlag");
+    let detail = text(c.get(&format!("/meters/{meter}")).await).await;
+    assert!(detail.contains("1080,0"), "Ablesung aus der Rechnung");
+    // übernommen: nicht mehr offen
+    assert!(
+        text(c.get("/documents").await)
+            .await
+            .contains("Keine offenen Dokumente.")
+    );
+    assert_eq!(
+        c.post(&format!("{doc}/discard"), &[("_csrf", &csrf)])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // zweites Dokument verwerfen; anderer Haushalt sieht nichts
+    let res = upload_document(&mut c, Some(&csrf), pdf).await;
+    let second = location(&res);
+    let res = c
+        .post(&format!("{second}/discard"), &[("_csrf", &csrf)])
+        .await;
+    assert_eq!(location(&res), "/documents");
+    let mut bob = Client::new(&app);
+    bob.login("bob").await;
+    assert_eq!(bob.get(&doc).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        bob.get(&format!("{doc}/file")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}

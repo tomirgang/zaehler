@@ -25,6 +25,8 @@ pub struct Resolved {
     pub tenant: Tenant,
     pub user: User,
     pub households: Vec<HouseholdSummary>,
+    /// Der Haushalt hat Verträge; die Navigation zeigt dann „Kosten“
+    pub has_contracts: bool,
 }
 
 use_case!(
@@ -110,16 +112,18 @@ impl ResolveTenant {
             create_default_household(&mut *uow, &self.p, &user).await?;
             households = uow.memberships().households_of(user.id).await?;
         }
-        uow.commit().await?;
         let chosen = preferred
             .and_then(|id| households.iter().find(|h| h.id == id))
             .or_else(|| households.first())
             .ok_or(AppError::Internal("kein Haushalt".into()))?;
         let tenant = Tenant::new(user.id, chosen.id, chosen.role);
+        let has_contracts = uow.contracts().any(&tenant).await?;
+        uow.commit().await?;
         Ok(Resolved {
             tenant,
             user,
             households,
+            has_contracts,
         })
     }
 }

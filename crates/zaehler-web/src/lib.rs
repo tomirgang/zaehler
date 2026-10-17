@@ -74,6 +74,55 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
             get(pages::readings::edit_form).post(pages::readings::edit),
         )
         .route("/meters/{id}/history", get(pages::readings::history))
+        .route(
+            "/meters/{id}/contracts/new",
+            get(pages::contracts::new_form).post(pages::contracts::create),
+        )
+        .route("/meters/{id}/costs", get(pages::costs::meter))
+        .route("/meters/{id}/costs.json", get(pages::costs::meter_chart))
+        .route("/costs", get(pages::costs::household))
+        .route("/costs.json", get(pages::costs::household_chart))
+        .route(
+            "/documents",
+            get(pages::documents::list)
+                .post(pages::documents::upload)
+                // Reserve für die übrigen Multipart-Felder; die Grenze der
+                // Datei selbst prüft der Anwendungsfall (SPEC_DOC_UPLOADS)
+                .layer(DefaultBodyLimit::max(
+                    state.cfg.max_document_bytes.saturating_add(64 * 1024),
+                )),
+        )
+        .route("/documents/{id}", get(pages::documents::show))
+        .route("/documents/{id}/file", get(pages::documents::file))
+        .route("/documents/{id}/confirm", post(pages::documents::confirm))
+        .route("/documents/{id}/analyse", post(pages::documents::analyse))
+        .route("/documents/{id}/discard", post(pages::documents::discard))
+        .route("/contracts/{id}", get(pages::contracts::detail))
+        .route(
+            "/contracts/{id}/edit",
+            get(pages::contracts::edit_form).post(pages::contracts::update),
+        )
+        .route("/contracts/{id}/delete", post(pages::contracts::delete))
+        .route(
+            "/contracts/{id}/positions/{position}/components",
+            post(pages::contracts::add_component),
+        )
+        .route(
+            "/contracts/{id}/installments",
+            post(pages::contracts::add_installment),
+        )
+        .route(
+            "/contracts/{id}/adjustments",
+            post(pages::contracts::add_adjustment),
+        )
+        .route(
+            "/contracts/{id}/settlements",
+            post(pages::contracts::add_settlement),
+        )
+        .route(
+            "/contracts/{id}/{kind}/{entry}/delete",
+            post(pages::contracts::delete_entry),
+        )
         .route("/readings/{id}/photo", get(pages::readings::photo))
         .route(
             "/capture",

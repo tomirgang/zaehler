@@ -1,0 +1,227 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("document-invoice-title") }}</h1>
+  <div class="actions"><a class="button secondary" href="/documents/{{ doc_id }}/file">{{ ctx.lang.t("document-download") }}</a></div>
+</div>
+<p class="muted">{{ doc_name }} · {{ status }}</p>
+
+{% if let Some(s) = summary %}
+<dl class="facts">
+  <dt>{{ ctx.lang.t("contract-provider") }}</dt><dd>{{ s.provider }}</dd>
+  <dt>{{ ctx.lang.t("contract-number") }}</dt><dd>{{ s.contract_number }}</dd>
+  <dt>{{ ctx.lang.t("settlement-period") }}</dt><dd>{{ s.period }}</dd>
+  <dt>{{ ctx.lang.t("settlement-amount") }}</dt><dd>{{ s.total }}</dd>
+  <dt>{{ ctx.lang.t("capture-confidence") }}</dt><dd>{{ s.confidence }} %</dd>
+</dl>
+<p class="hint">{{ ctx.lang.t("document-suggestion-hint") }}</p>
+{% endif %}
+
+{% if open %}
+{% if failed %}
+<div class="callout warning">
+  <p>{{ ctx.lang.t("document-manual") }}</p>
+  {% if ai_enabled %}
+  <form method="post" action="/documents/{{ doc_id }}/analyse" class="inline">
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <button type="submit" class="secondary">{{ ctx.lang.t("document-retry") }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+<form method="get" action="/documents/{{ doc_id }}" class="form">
+  <div class="field">
+    <label for="meter">{{ ctx.lang.t("capture-meter") }}</label>
+    <select id="meter" name="meter">
+      {% if meter_id.is_empty() %}<option value="">{{ ctx.lang.t("capture-meter-choose") }}</option>{% endif %}
+      {% for m in meters %}
+      <option value="{{ m.id }}"{% if m.id == meter_id %} selected{% endif %}>{{ m.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="actions">
+    <button type="submit" class="secondary">{{ ctx.lang.t("capture-meter-select") }}</button>
+  </div>
+</form>
+
+{% if !meter_id.is_empty() %}
+<form method="post" action="/documents/{{ doc_id }}/confirm" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <input type="hidden" name="meter_id" value="{{ meter_id }}">
+  <input type="hidden" name="readings" value="{{ form.readings.len() }}">
+  <input type="hidden" name="prices" value="{{ form.prices.len() }}">
+
+  {% if !messages.is_empty() %}
+  <div class="callout warning" role="alert">
+    {% for m in messages %}<p>{{ m }}</p>{% endfor %}
+  </div>
+  {% endif %}
+
+  <h2>{{ ctx.lang.t("document-readings") }}</h2>
+  <p class="hint">{{ ctx.lang.t("document-readings-hint") }}</p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("document-apply") }}</th>
+        <th>{{ ctx.lang.t("capture-serial") }}</th>
+        <th>{{ ctx.lang.t("reading-register") }}</th>
+        <th>{{ ctx.lang.t("reading-at") }}</th>
+        <th>{{ ctx.lang.t("reading-value") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in form.readings %}
+      <tr>
+        <td><input type="checkbox" name="{{ r.key }}_use" value="1" aria-label="{{ ctx.lang.t("document-apply") }}"{% if r.selected %} checked{% endif %}></td>
+        <td>
+          {{ r.serial }}
+          <input type="hidden" name="{{ r.key }}_serial" value="{{ r.serial }}">
+          <input type="hidden" name="{{ r.key }}_hint" value="{{ r.register_hint }}">
+        </td>
+        <td class="{% if self.row_errs(r.key, "register") %}has-error{% endif %}">
+          <select name="{{ r.key }}_register" aria-label="{{ ctx.lang.t("reading-register") }}">
+            {% for g in registers %}
+            <option value="{{ g.id }}"{% if g.id == r.register %} selected{% endif %}>{{ g.label }}</option>
+            {% endfor %}
+          </select>
+          {% if !r.register_hint.is_empty() %}<p class="hint">{{ r.register_hint }}</p>{% endif %}
+        </td>
+        <td class="{% if self.row_errs(r.key, "at") %}has-error{% endif %}"><input type="datetime-local" name="{{ r.key }}_at" value="{{ r.at }}" aria-label="{{ ctx.lang.t("reading-at") }}"></td>
+        <td class="{% if self.row_errs(r.key, "value") %}has-error{% endif %}"><input name="{{ r.key }}_value" value="{{ r.value }}" inputmode="decimal" aria-label="{{ ctx.lang.t("reading-value") }}"></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>{{ ctx.lang.t("document-contract") }}</h2>
+  <fieldset class="field{% if self.has_errs("contract") || self.has_errs("contract_id") %} has-error{% endif %}">
+    <legend class="visually-hidden">{{ ctx.lang.t("document-contract") }}</legend>
+    <label><input type="radio" name="contract_mode" value="none"{% if form.contract_mode == "none" %} checked{% endif %}> {{ ctx.lang.t("document-contract-none") }}</label>
+    {% if !contracts.is_empty() %}
+    <label><input type="radio" name="contract_mode" value="existing"{% if form.contract_mode == "existing" %} checked{% endif %}> {{ ctx.lang.t("document-contract-existing") }}</label>
+    <select name="contract_id" aria-label="{{ ctx.lang.t("document-contract-existing") }}">
+      {% for c in contracts %}
+      <option value="{{ c.id }}"{% if c.id == form.contract_id %} selected{% endif %}>{{ c.label }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    {% if ctx.is_owner %}
+    <label><input type="radio" name="contract_mode" value="new"{% if form.contract_mode == "new" %} checked{% endif %}> {{ ctx.lang.t("document-contract-new") }}</label>
+    {% endif %}
+  </fieldset>
+
+  {% if ctx.is_owner %}
+  <div class="grid">
+    <div class="field{% if self.has_errs("provider") %} has-error{% endif %}">
+      <label for="provider">{{ ctx.lang.t("contract-provider") }}</label>
+      <input id="provider" name="provider" value="{{ form.provider }}" maxlength="80">
+    </div>
+    <div class="field">
+      <label for="contract_number">{{ ctx.lang.t("contract-number") }}</label>
+      <input id="contract_number" name="contract_number" value="{{ form.contract_number }}" maxlength="40">
+    </div>
+    <div class="field{% if self.has_errs("starts_on") %} has-error{% endif %}">
+      <label for="starts_on">{{ ctx.lang.t("contract-starts-on") }}</label>
+      <input id="starts_on" name="starts_on" type="date" value="{{ form.starts_on }}">
+    </div>
+  </div>
+  <p class="hint">{{ ctx.lang.t("document-contract-hint") }}</p>
+
+  {% if !form.prices.is_empty() %}
+  <h3>{{ ctx.lang.t("contract-components") }}</h3>
+  <p class="hint">{{ ctx.lang.t("document-prices-hint") }}</p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("document-apply") }}</th>
+        <th>{{ ctx.lang.t("contract-position-name") }}</th>
+        <th>{{ ctx.lang.t("document-position") }}</th>
+        <th>{{ ctx.lang.t("contract-valid-from") }}</th>
+        <th>{{ ctx.lang.t("contract-base-price") }}</th>
+        <th>{{ ctx.lang.t("contract-base-interval") }}</th>
+        <th>{{ ctx.lang.t("contract-work-price") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in form.prices %}
+      <tr>
+        <td><input type="checkbox" name="{{ p.key }}_use" value="1" aria-label="{{ ctx.lang.t("document-apply") }}"{% if p.selected %} checked{% endif %}></td>
+        <td class="{% if self.row_errs(p.key, "name") %}has-error{% endif %}"><input name="{{ p.key }}_name" value="{{ p.name }}" maxlength="60" aria-label="{{ ctx.lang.t("contract-position-name") }}"></td>
+        <td class="{% if self.row_errs(p.key, "position") %}has-error{% endif %}">
+          <select name="{{ p.key }}_position" aria-label="{{ ctx.lang.t("document-position") }}">
+            <option value="">{{ ctx.lang.t("document-position-choose") }}</option>
+            {% for o in positions %}
+            <option value="{{ o.id }}"{% if o.id == p.position %} selected{% endif %}>{{ o.label }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td class="{% if self.row_errs(p.key, "valid_from") %}has-error{% endif %}"><input type="date" name="{{ p.key }}_valid_from" value="{{ p.valid_from }}" aria-label="{{ ctx.lang.t("contract-valid-from") }}"></td>
+        <td class="{% if self.row_errs(p.key, "base") %}has-error{% endif %}"><input name="{{ p.key }}_base" value="{{ p.base }}" inputmode="decimal" aria-label="{{ ctx.lang.t("contract-base-price") }}"></td>
+        <td>
+          <select name="{{ p.key }}_interval" aria-label="{{ ctx.lang.t("contract-base-interval") }}">
+            {% for (value, label) in intervals %}
+            <option value="{{ value }}"{% if *value == p.interval %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td class="{% if self.row_errs(p.key, "price") %}has-error{% endif %}"><input name="{{ p.key }}_price" value="{{ p.price }}" inputmode="decimal" aria-label="{{ ctx.lang.t("contract-work-price") }}"></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h3><label><input type="checkbox" name="installment" value="1"{% if form.installment %} checked{% endif %}> {{ ctx.lang.t("document-installment") }}</label></h3>
+  <div class="grid">
+    <div class="field{% if self.has_errs("inst_amount") %} has-error{% endif %}">
+      <label for="inst_amount">{{ ctx.lang.t("installment-amount") }}</label>
+      <input id="inst_amount" name="inst_amount" value="{{ form.inst_amount }}" inputmode="decimal">
+    </div>
+    <div class="field{% if self.has_errs("inst_every") %} has-error{% endif %}">
+      <label for="inst_every">{{ ctx.lang.t("installment-interval-months") }}</label>
+      <input id="inst_every" name="inst_every" value="{{ form.inst_every }}" inputmode="numeric" size="2">
+    </div>
+    <div class="field{% if self.has_errs("inst_from") %} has-error{% endif %}">
+      <label for="inst_from">{{ ctx.lang.t("contract-valid-from") }}</label>
+      <input id="inst_from" name="inst_from" type="date" value="{{ form.inst_from }}">
+    </div>
+  </div>
+  {% endif %}
+
+  <h3><label><input type="checkbox" name="settlement" value="1"{% if form.settlement %} checked{% endif %}> {{ ctx.lang.t("document-settlement") }}</label></h3>
+  <div class="grid">
+    <div class="field{% if self.has_errs("settle_from") %} has-error{% endif %}">
+      <label for="settle_from">{{ ctx.lang.t("settlement-start") }}</label>
+      <input id="settle_from" name="settle_from" type="date" value="{{ form.settle_from }}">
+    </div>
+    <div class="field{% if self.has_errs("settle_to") %} has-error{% endif %}">
+      <label for="settle_to">{{ ctx.lang.t("settlement-end") }}</label>
+      <input id="settle_to" name="settle_to" type="date" value="{{ form.settle_to }}">
+    </div>
+    <div class="field{% if self.has_errs("settle_amount") %} has-error{% endif %}">
+      <label for="settle_amount">{{ ctx.lang.t("settlement-amount") }}</label>
+      <input id="settle_amount" name="settle_amount" value="{{ form.settle_amount }}" inputmode="decimal">
+    </div>
+  </div>
+
+  {% if needs_confirm %}
+  <div class="callout warning">
+    <p>{{ ctx.lang.t("readings-warnings") }}</p>
+    {% for w in warnings %}<p>{{ w }}</p>{% endfor %}
+    <label><input type="checkbox" name="confirm_warnings" value="true"> {{ ctx.lang.t("readings-confirm") }}</label>
+  </div>
+  {% endif %}
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("document-confirm") }}</button>
+  </div>
+</form>
+{% endif %}
+
+<form method="post" action="/documents/{{ doc_id }}/discard" class="inline">
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <button type="submit" class="link danger">{{ ctx.lang.t("document-discard") }}</button>
+</form>
+{% endif %}
+{% endblock %}

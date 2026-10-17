@@ -178,6 +178,13 @@ pub struct UploadConfig {
     /// Haushaltsarchive inklusive Fotos (SPEC_BACKUP_HOUSEHOLD)
     #[serde(default = "default_max_backup_bytes")]
     pub max_backup_bytes: usize,
+    /// Rechnungen als PDF oder Foto (SPEC_DOC_UPLOADS)
+    #[serde(default = "default_max_document_bytes")]
+    pub max_document_bytes: usize,
+}
+
+const fn default_max_document_bytes() -> usize {
+    zaehler_app::usecase::DEFAULT_MAX_DOCUMENT_BYTES
 }
 
 const fn default_max_backup_bytes() -> usize {
@@ -198,6 +205,7 @@ impl Default for UploadConfig {
             max_photo_bytes: default_max_photo_bytes(),
             max_csv_bytes: default_max_csv_bytes(),
             max_backup_bytes: default_max_backup_bytes(),
+            max_document_bytes: default_max_document_bytes(),
         }
     }
 }
@@ -427,6 +435,9 @@ impl Config {
         }
         if self.upload.max_backup_bytes == 0 {
             return Err("upload.max_backup_bytes muss größer 0 sein".into());
+        }
+        if self.upload.max_document_bytes == 0 {
+            return Err("upload.max_document_bytes muss größer 0 sein".into());
         }
         if self.scheduler.tick_seconds == 0 {
             return Err("scheduler.tick_seconds muss größer 0 sein".into());

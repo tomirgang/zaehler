@@ -1,0 +1,190 @@
+{% extends "layout/base.html" %}
+
+{% macro contract_costs(c, title) %}
+<section class="card" aria-labelledby="costs-{{ c.id }}">
+  <h2 id="costs-{{ c.id }}">{{ title }}: <a href="/contracts/{{ c.id }}">{{ c.provider }}</a></h2>
+  <p class="hint">{{ ctx.lang.t("costs-billing-period") }} {{ c.period }}</p>
+  {% if c.missing %}
+  <p class="muted">{{ ctx.lang.t("costs-no-readings") }}</p>
+  {% else %}
+  <dl class="facts">
+    <dt>{{ ctx.lang.t("costs-measured") }}</dt><dd>{{ c.measured }}</dd>
+    <dt>{{ ctx.lang.t("costs-estimated") }}</dt><dd>{{ c.estimated }}</dd>
+    {% if let Some(a) = c.adjustments %}<dt>{{ ctx.lang.t("adjustments-title") }}</dt><dd>{{ a }}</dd>{% endif %}
+    <dt>{{ ctx.lang.t("costs-total") }}</dt><dd><strong>{{ c.total }}</strong>{% if c.has_estimate %} <span class="tag">{{ ctx.lang.t("costs-tag-estimated") }}</span>{% endif %}</dd>
+    <dt>{{ ctx.lang.t("forecast-coverage") }}</dt><dd>{{ c.coverage }}</dd>
+    {% if let Some(q) = c.quantity %}<dt>{{ ctx.lang.t("costs-quantity") }}</dt><dd>{{ q }}</dd>{% endif %}
+    {% if let Some(p) = c.unit_price %}<dt>{{ ctx.lang.t("costs-unit-price") }}</dt><dd>{{ p }}</dd>{% endif %}
+  </dl>
+  {% if let Some(i) = c.installments %}
+  <h3>{{ ctx.lang.t("installments-title") }}</h3>
+  <dl class="facts">
+    <dt>{{ ctx.lang.t("costs-installment") }}</dt><dd>{{ i.current }}</dd>
+    <dt>{{ ctx.lang.t("costs-paid") }}</dt><dd>{{ i.paid }}</dd>
+    <dt>{{ ctx.lang.t("costs-open") }}</dt><dd>{{ i.open }}</dd>
+    {% if let Some(b) = i.balance %}<dt>{{ i.balance_label }}</dt><dd><strong>{{ b }}</strong> <span class="tag">{{ ctx.lang.t("costs-tag-estimated") }}</span></dd>{% endif %}
+    {% if let Some(s) = i.suggestion %}<dt>{{ ctx.lang.t("costs-suggestion") }}</dt><dd>{{ s }}</dd>{% endif %}
+  </dl>
+  {% endif %}
+  <details>
+    <summary>{{ ctx.lang.t("costs-breakdown") }}</summary>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{ ctx.lang.t("contract-position") }}</th>
+          <th>{{ ctx.lang.t("analysis-period") }}</th>
+          <th class="num">{{ ctx.lang.t("costs-quantity") }}</th>
+          <th class="num">{{ ctx.lang.t("contract-factor") }}</th>
+          <th class="num">{{ ctx.lang.t("contract-base-price") }}</th>
+          <th class="num">{{ ctx.lang.t("contract-work-price") }}</th>
+          <th class="num">{{ ctx.lang.t("costs-total") }}</th>
+          <th>{{ ctx.lang.t("costs-basis") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in c.rows %}
+        <tr{% if r.estimated %} class="estimated"{% endif %}>
+          <td>{{ r.position }}</td>
+          <td>{{ r.period }}</td>
+          <td class="num">{{ r.quantity }}</td>
+          <td class="num">{{ r.factor }}</td>
+          <td class="num">{{ r.base }}</td>
+          <td class="num">{{ r.work }}</td>
+          <td class="num">{{ r.total }}</td>
+          <td>{% if r.estimated %}{{ ctx.lang.t("costs-tag-estimated") }}{% else %}{{ ctx.lang.t("costs-tag-measured") }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</section>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("costs-title") }}: {{ name }}</h1>
+  <div class="actions">
+    <a class="button secondary" href="/meters/{{ id }}">{{ name }}</a>
+    {% if ctx.has_contracts %}<a class="button secondary" href="/costs">{{ ctx.lang.t("costs-household") }}</a>{% endif %}
+  </div>
+</div>
+
+{% if let Some((parent_name, share, period)) = parent %}
+<section class="card" aria-labelledby="parent-share">
+  <h2 id="parent-share">{{ ctx.lang.t("costs-as-submeter") }}</h2>
+  <p>{{ ctx.lang.t("costs-as-submeter-hint") }} <a href="/meters/{{ share.id }}/costs">{{ parent_name }}</a></p>
+  <p class="hint">{{ ctx.lang.t("costs-billing-period") }} {{ period }}</p>
+  <dl class="facts">
+    <dt>{{ ctx.lang.t("costs-quantity") }}</dt><dd>{{ share.quantity }}</dd>
+    <dt>{{ ctx.lang.t("costs-unit-price") }}</dt><dd>{{ share.unit_price }}</dd>
+    <dt>{{ ctx.lang.t("costs-total") }}</dt><dd><strong>{{ share.cost }}</strong>{% if share.estimated %} <span class="tag">{{ ctx.lang.t("costs-tag-estimated") }}</span>{% endif %}</dd>
+  </dl>
+</section>
+{% endif %}
+
+{% if !has_contracts %}
+{% if parent.is_none() %}
+<div class="callout">
+  <p>{{ ctx.lang.t("costs-no-contract") }}</p>
+  {% if ctx.is_owner %}
+  <p>{% for (code, label) in templates %}<a class="button secondary" href="/meters/{{ id }}/contracts/new?template={{ code }}">{{ ctx.lang.t("contract-new") }}: {{ label }}</a> {% endfor %}</p>
+  {% endif %}
+</div>
+{% endif %}
+{% else %}
+
+{% if let Some(c) = import %}{% call contract_costs(c, ctx.lang.t("costs-import")) %}{% endcall %}{% endif %}
+{% if let Some(c) = export %}{% call contract_costs(c, ctx.lang.t("costs-export")) %}{% endcall %}{% endif %}
+
+{% if !submeters.is_empty() %}
+<section aria-labelledby="submeter-shares">
+  <h2 id="submeter-shares">{{ ctx.lang.t("costs-submeters") }}</h2>
+  <p class="hint">{{ ctx.lang.t("costs-submeters-hint") }}</p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("nav-meters") }}</th>
+        <th class="num">{{ ctx.lang.t("costs-quantity") }}</th>
+        <th class="num">{{ ctx.lang.t("costs-unit-price") }}</th>
+        <th class="num">{{ ctx.lang.t("costs-total") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in submeters %}
+      <tr>
+        <td><a href="/meters/{{ s.id }}/costs">{{ s.name }}</a></td>
+        <td class="num">{{ s.quantity }}{% if s.estimated %} <span class="tag">{{ ctx.lang.t("costs-tag-estimated") }}</span>{% endif %}</td>
+        <td class="num">{{ s.unit_price }}</td>
+        <td class="num">{{ s.cost }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section aria-labelledby="costs-year">
+  <h2 id="costs-year">{{ ctx.lang.t("costs-calendar-year") }} {{ year }}</h2>
+  <dl class="facts">
+    {% if let Some(i) = year_view.import %}<dt>{{ ctx.lang.t("costs-import") }}</dt><dd>{{ i }}{% if year_view.import_estimated %} <span class="tag">{{ ctx.lang.t("costs-tag-estimated") }}</span>{% endif %}</dd>{% endif %}
+    {% if let Some(e) = year_view.export %}<dt>{{ ctx.lang.t("costs-export") }}</dt><dd>{{ e }}</dd>{% endif %}
+    <dt>{{ ctx.lang.t("forecast-coverage") }}</dt><dd>{{ year_view.coverage }}</dd>
+  </dl>
+  {% if year_view.without_contract %}<p class="hint">{{ ctx.lang.t("costs-without-contract") }}</p>{% endif %}
+  <div class="charts" data-chart-url="/meters/{{ id }}/costs.json" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
+    <h3 id="costs-chart-title">{{ ctx.lang.t("costs-chart") }}</h3>
+    <div class="chart" data-chart="costs" role="img" aria-labelledby="costs-chart-title"></div>
+    <details>
+      <summary>{{ ctx.lang.t("chart-table") }}</summary>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{ ctx.lang.t("analysis-month") }}</th>
+            <th class="num">{{ ctx.lang.t("costs-measured") }} (€)</th>
+            <th class="num">{{ ctx.lang.t("costs-estimated") }} (€)</th>
+            <th class="num">{{ ctx.lang.t("costs-export") }} (€)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for m in months %}
+          <tr><td>{{ m.label }}</td><td class="num">{{ m.measured }}</td><td class="num">{{ m.estimated }}</td><td class="num">{{ m.export }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  </div>
+</section>
+
+{% if !settlements.is_empty() %}
+<section aria-labelledby="settlement-checks">
+  <h2 id="settlement-checks">{{ ctx.lang.t("settlements-title") }}</h2>
+  <p class="hint">{{ ctx.lang.t("settlements-check-hint") }}</p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("settlement-period") }}</th>
+        <th class="num">{{ ctx.lang.t("settlement-amount") }}</th>
+        <th class="num">{{ ctx.lang.t("settlement-calculated") }}</th>
+        <th class="num">{{ ctx.lang.t("analysis-diff") }}</th>
+        <th class="num">{{ ctx.lang.t("analysis-diff-rel") }}</th>
+        <th class="num">{{ ctx.lang.t("settlement-forecast") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in settlements %}
+      <tr>
+        <td>{{ s.period }}<br><span class="hint">{{ s.provider }}</span></td>
+        <td class="num">{{ s.amount }}</td>
+        <td class="num">{% if let Some(c) = s.calculated %}{{ c }}{% if s.calculated_estimated %} <span class="tag">{{ ctx.lang.t("costs-tag-estimated") }}</span>{% endif %}{% else %}<span class="muted">{{ ctx.lang.t("analysis-incomplete-short") }}</span>{% endif %}</td>
+        <td class="num">{% if let Some(d) = s.difference %}{{ d }}{% endif %}</td>
+        <td class="num">{% if let Some(d) = s.difference_rel %}{{ d }}{% endif %}</td>
+        <td class="num">{% if let Some(f) = s.forecast %}{{ f }}{% else %}<span class="muted">{{ ctx.lang.t("analysis-incomplete-short") }}</span>{% endif %}<br><span class="hint">{{ ctx.lang.t("settlement-forecast-on") }} {{ s.forecast_on }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

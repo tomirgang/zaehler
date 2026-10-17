@@ -34,10 +34,10 @@ use zaehler_app::{
         schedule_columns, schedule_from_columns, season_weights_from_json, season_weights_to_json,
     },
     port::{
-        DraftRepository, HouseholdRepository, InvitationRepository, MaintenanceRepository,
-        MembershipRepository, MeterRepository, NotificationSettingsRepository, OutboxRepository,
-        PortResult, Readiness, ReadingRepository, RevisionRepository, UnitOfWork,
-        UnitOfWorkFactory, UserRepository,
+        ContractRepository, DraftRepository, HouseholdRepository, InvitationRepository,
+        MaintenanceRepository, MembershipRepository, MeterRepository,
+        NotificationSettingsRepository, OutboxRepository, PortResult, Readiness, ReadingRepository,
+        RevisionRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
     },
     secret,
 };
@@ -166,6 +166,11 @@ impl MaintenanceRepository for SeaOrmStore {
             .map_err(db_err)?;
         Ok(res.rows_affected)
     }
+
+    // @impl SPEC_OPS_HOUSEKEEPING, SPEC_DOC_UPLOADS
+    async fn expire_documents(&self, cutoff: DateTime<Utc>) -> PortResult<Vec<BlobKey>> {
+        self.expire_documents_impl(cutoff).await
+    }
 }
 
 struct SeaOrmUow {
@@ -203,6 +208,12 @@ impl UnitOfWork for SeaOrmUow {
         self
     }
     fn notification_settings(&mut self) -> &mut dyn NotificationSettingsRepository {
+        self
+    }
+    fn contracts(&mut self) -> &mut dyn ContractRepository {
+        self
+    }
+    fn documents(&mut self) -> &mut dyn zaehler_app::port::DocumentRepository {
         self
     }
     async fn commit(self: Box<Self>) -> PortResult<()> {
@@ -1590,3 +1601,9 @@ impl DraftRepository for SeaOrmUow {
         Ok(())
     }
 }
+
+#[path = "contracts.rs"]
+mod contracts;
+
+#[path = "documents.rs"]
+mod documents;

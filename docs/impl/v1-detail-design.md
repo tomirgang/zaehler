@@ -94,8 +94,8 @@ des Namens wird beim Anlegen vergeben.
 | `…_000008_meter_v1` | WP_V1_03 | `meters.purpose`, `meters.schedule_kind`, `meters.schedule_value`, `meters.archived_at`; `meter_devices.parent_meter_id` |
 | `…_000009_expectation` | WP_V1_04 | `meters.season_weights` (TEXT JSON, NULL), `meters.annual_target_milli`, `meters.target_tolerance_pct` |
 | `…_000010_jobs` | WP_V1_05, WP_V1_06 | `outbox`, `job_runs`, `notification_log`, `notification_settings` (neu) |
-| `…_000011_tariffs` | WP_V1_07 | `contracts`, `cost_positions`, `price_components`, `installments`, `adjustments`, `settlements` (neu) |
-| `…_000012_documents` | WP_V1_10 | `documents` (neu); `ai_drafts.kind`, `ai_drafts.document_id` |
+| `…_000011_tariffs` | WP_V1_07 | `contracts`, `cost_positions`, `price_components`, `installments`, `adjustments`, `settlements` (neu; `settlements.document_id` ohne Fremdschlüssel) |
+| `…_000012_documents` | WP_V1_10 | `documents` (neu, mit Status, Modell und Erkennungsergebnis als JSON); `ai_drafts` bleibt unverändert |
 | `…_000013_vehicles` | WP_V1_11, WP_V1_12 | `vehicles`, `vehicle_consumption_profiles`, `vehicle_acquisitions`, `charging_sessions`, `asset_costs` (neu) |
 | `…_000014_pv` | WP_V1_15 | `pv_systems`, `pv_system_meters` (neu) |
 | `…_000015_api` | WP_V1_20 | `api_tokens` (neu); `readings.api_token_id` |
@@ -374,8 +374,9 @@ Monatswert undefiniert. Die Art „Sonstiges“ mit freier Einheit
 
 Umsetzung: Die Umschaltung wirkt auf Monatstabelle und Vergleiche;
 Prognosen und Diagramme enthalten weiterhin den Verbrauch der
-Zwischenzähler. Die Regel zu Verträgen folgt mit den Verträgen
-(WP_V1_08). `meter_devices.parent_meter_id` hat keinen Fremdschlüssel, weil
+Zwischenzähler. Die Regel zu Verträgen prüfen `CreateContract`,
+`UpdateContract`, `UpdateMeter` und `SwapDevice` (Code `contract.submeter`).
+`meter_devices.parent_meter_id` hat keinen Fremdschlüssel, weil
 SQLite ihn nicht nachträglich anlegen kann; die Prüfung liegt im Anwendungsfall.
 ```
 
@@ -405,9 +406,13 @@ Ampel den Gesamtverbrauch ({need}`SPEC_PV_KPI`). Angezeigt wird die Ampel des
 Bezugsmonats auf der Detailseite und im Dashboard sowie je Monat in der
 Tabelle.
 
-Umsetzung: Bezugsmonat ist der letzte vollständige Monat. Die Variante
-„Abschlagsbasis“ folgt mit den Verträgen (WP_V1_09), die Bewertung des
-Gesamtverbrauchs bei PV-Anlagen mit M8.
+Umsetzung: Bezugsmonat ist der letzte vollständige Monat. „Abschlagsbasis“
+nutzt den heute gültigen Bezugsvertrag: Jahresbetrag der Abschläge, abzüglich
+der Grundpreise, umgerechnet mit den heute gültigen Arbeitspreisen (auch
+Staffeln und Faktoren) in eine Jahresmenge; Positionen auf einem einzelnen
+Register zählen näherungsweise mit dem Anteil 1 / Anzahl der Bezugsregister.
+Die Quelle wird als „Abschlag“ angezeigt. Die Bewertung des
+Gesamtverbrauchs bei PV-Anlagen folgt mit M8.
 ```
 
 ### Benachrichtigungen
@@ -479,7 +484,7 @@ Alarm aus.
 
 ```{spec} Verträge und Preisstände
 :id: SPEC_TAR_CONTRACTS
-:status: draft
+:status: implemented
 :satisfies: REQ_TAR_001, REQ_TAR_002, REQ_TAR_003, REQ_TAR_004, REQ_TAR_010
 :links: ADR_008, SPEC_TAR_TIERED, SPEC_TAR_BASE_PRORATION
 
@@ -500,11 +505,20 @@ Brennwert × Zustandszahl), Wasser (Frischwasser, Schmutzwasser, Zählermiete),
 Wärme, Einspeisung (negativer Arbeitspreis). Vertragsänderungen nach dem
 Beginn eines Abrechnungszeitraums wirken über neue Preisstände, nicht über
 Ändern alter.
+
+Umsetzung: Migration `m20261017_000011_tariffs`; Beträge und Preise als
+Festkomma 10⁻⁶, Mengen 10⁻³. Konflikte als `Conflict` mit den Codes
+`contract.overlap` und `contract.submeter`. Zusätzlich zu den Vorlagen der
+Spezifikation gibt es „Sonstiges“ (eine Position „Kosten“); die Gas-Vorlage
+lässt den Faktor leer, damit er aus der Rechnung eingetragen wird. Neue
+Preisstände ergänzt `AddPriceComponent` auf der Vertragsseite; `UpdateContract`
+ersetzt Positionen und Preisstände vollständig. Für Fahrzeuge gibt es keine
+Verträge (`contract.meter_kind_invalid`).
 ```
 
 ```{spec} Kosten von Zwischenzählern
 :id: SPEC_TAR_SUBMETER_COST
-:status: draft
+:status: implemented
 :satisfies: REQ_MTR_008, REQ_CAR_008
 :links: SPEC_MTR_SUBMETER, SPEC_CAR_ENERGY_COST
 
@@ -515,11 +529,16 @@ Zwischenzählers in *P* × `p_haus` der übergeordneten Messstelle in *P*
 gilt, rechnet der eigene Vertrag. Die Kostenansicht der übergeordneten
 Messstelle weist den Anteil der Zwischenzähler getrennt aus; die Summe bleibt
 der Rechnungsbetrag des Vertrags.
+
+Umsetzung: `p_haus` ist der durchschnittliche Arbeitspreis des Bezugsvertrags
+der übergeordneten Messstelle im jeweiligen Abrechnungsabschnitt. Die
+Haushaltssumme zählt Zwischenzähler nicht doppelt; sie erscheinen dort mit
+dem Hinweis „enthalten in“.
 ```
 
 ```{spec} Kostenansicht und Kostenprognose
 :id: SPEC_TAR_COST_VIEW
-:status: draft
+:status: implemented
 :satisfies: REQ_FC_002, REQ_TAR_005, REQ_TAR_009, REQ_MTR_004
 :links: SPEC_TAR_COST_CALC, SPEC_TAR_INSTALLMENT_SETTLEMENT, SPEC_FC_PERIOD_FORECAST
 
@@ -543,11 +562,21 @@ Alle Beträge tragen die Kennzeichnung gemessen oder prognostiziert; der
 Abdeckungsgrad wird mit angezeigt. Ohne Vertrag zeigt die Seite einen Verweis
 auf „Vertrag anlegen“. `HouseholdCosts` summiert alle Messstellen des
 Haushalts für das Kalenderjahr.
+
+Umsetzung: Die Prognose nutzt nicht `forecast::project`, sondern
+`cost::Quantities`: Menge je Teilzeitraum = Gewicht des Saisonprofils ×
+Rate des gemessenen Anteils im Abrechnungszeitraum (ohne Messung darin: die
+letzten bis zu 365 gemessenen Tage). Damit sind Ist und Prognose an jeder
+Grenze von Preisständen additiv (Property-Test). Mengen werden auf lokaler
+Kalenderzeit interpoliert (jeder Tag gleich lang), damit Zeitumstellungen den
+Tagesanteil nicht verschieben. Zusätzlich: Monatsdiagramm je Messstelle und
+Haushalt (`/meters/{id}/costs.json`, `/costs.json`), Kalenderjahre über
+`?year=`.
 ```
 
 ```{spec} Erfassung der tatsächlichen Abrechnung
 :id: SPEC_TAR_ACTUAL_SETTLEMENT
-:status: draft
+:status: implemented
 :satisfies: REQ_TAR_011
 
 `RecordSettlement` speichert Zeitraum und Betrag einer Jahresabrechnung,
@@ -557,13 +586,18 @@ Betrag, die Differenz absolut und in Prozent sowie die Prognose, die zum
 Stand von 6 Monaten vor Ende des Zeitraums berechnet worden wäre
 (Prognosegüte; berechnet aus den Ablesungen bis zu diesem Stichtag, nicht
 gespeichert).
+
+Umsetzung: Erfassung auf der Vertragsseite oder über den Rechnungsimport
+({need}`SPEC_AI_INVOICE`), dann mit Verweis `settlements.document_id` auf das
+Dokument (Download als „Beleg“). Der Vergleich steht auf der Vertragsseite
+und in der Kostenansicht.
 ```
 
 ### Dokumente und AI
 
 ```{spec} Rechnungsimport
 :id: SPEC_AI_INVOICE
-:status: draft
+:status: implemented
 :satisfies: REQ_AI_005
 :links: SPEC_AI_EXTRACTION, SPEC_DOC_UPLOADS, SPEC_TAR_CONTRACTS
 
@@ -578,6 +612,18 @@ wie {need}`SPEC_RDG_PLAUSIBILITY`), Abschlag, Abrechnungsbetrag
 ({need}`SPEC_TAR_ACTUAL_SETTLEMENT`). Speichern in einer Unit of Work, Dokument
 am Abrechnungseintrag. Ohne AI-Konfiguration ist nur die Ablage des Dokuments
 möglich.
+
+Umsetzung: Die Erkennung läuft synchron im Request des Uploads; Fehler oder
+fehlende AI-Konfiguration hinterlassen ein offenes Dokument mit Status
+`failed`, dessen Formular manuell ausgefüllt werden kann (mehr als „nur
+Ablage“), erneute Erkennung über `/documents/{id}/analyse`. Ein Stand zum
+letzten Tag des Abrechnungszeitraums wird als Ablesung am Folgetag 0:00 Uhr
+lokal vorgeschlagen. Für einen neuen Vertrag bilden Preiszeilen gleicher
+Bezeichnung eine Position (Richtung `import`, Faktor 1); Faktor und MwSt
+werden danach im Vertrag ergänzt. Vertrag, Preisstände und Abschlag
+erfordern die Rolle Owner, Ablesungen und Abrechnung Member. Modell über
+`ai.document_model` (sonst `ai.model`); Metriken `zaehler_documents_total`
+und `zaehler_document_analysis_seconds`.
 ```
 
 ```{spec} Belegerkennung

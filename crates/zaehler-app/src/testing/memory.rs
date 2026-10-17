@@ -19,7 +19,7 @@ use crate::{
         ReadingId, RegisterId, UserId,
     },
     model::{
-        Device, DeviceData, Draft, DraftAnalysis, DraftOutcome, DraftStatus, Household,
+        Contract, Device, DeviceData, Draft, DraftAnalysis, DraftOutcome, DraftStatus, Household,
         HouseholdData, HouseholdSummary, Identity, Invitation, JobRun, Member, Meter,
         MeterAggregate, MeterData, MeterSummary, NewInvitation, Notification, NotificationKind,
         NotificationLogEntry, NotificationSettings, OutboxEntry, OutboxEvent, OutboxResult,
@@ -27,11 +27,12 @@ use crate::{
         Revision, User,
     },
     port::{
-        BlobStore, Clock, DraftRepository, HouseholdRepository, ImageNormalizer,
-        InvitationRepository, JobRepository, MaintenanceRepository, MembershipRepository,
-        MeterRecognizer, MeterRepository, NormalizedJpeg, NotificationSettingsRepository, Notifier,
-        OutboxRepository, PhotoTime, PortResult, Readiness, ReadingRepository, RecognitionError,
-        RevisionRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
+        BlobStore, Clock, ContractRepository, DraftRepository, HouseholdRepository,
+        ImageNormalizer, InvitationRepository, JobRepository, MaintenanceRepository,
+        MembershipRepository, MeterRecognizer, MeterRepository, NormalizedJpeg,
+        NotificationSettingsRepository, Notifier, OutboxRepository, PhotoTime, PortResult,
+        Readiness, ReadingRepository, RecognitionError, RevisionRepository, UnitOfWork,
+        UnitOfWorkFactory, UserRepository,
     },
 };
 
@@ -61,6 +62,8 @@ struct State {
     notification_settings: BTreeMap<UserId, (NotificationSettings, DateTime<Utc>)>,
     /// (Nutzer, Art, Schlüssel) des Versandprotokolls
     notification_log: Vec<(UserId, &'static str, String)>,
+    contracts: Vec<Contract>,
+    documents: Vec<(HouseholdId, crate::model::Document)>,
 }
 
 /// Outbox-Eintrag mit Zustand (nur für Tests einsehbar).
@@ -220,6 +223,11 @@ impl MaintenanceRepository for InMemoryStore {
             !(o.status == OutboxStatus::Done && o.finished_at.is_some_and(|f| f < before))
         });
         Ok((count - s.outbox.len()) as u64)
+    }
+
+    async fn expire_documents(&self, cutoff: DateTime<Utc>) -> PortResult<Vec<BlobKey>> {
+        let mut s = self.shared.lock().map_err(poisoned)?;
+        Ok(documents_impl::expire(&mut s, cutoff))
     }
 }
 
@@ -728,6 +736,12 @@ impl UnitOfWork for MemoryUow {
     fn notification_settings(&mut self) -> &mut dyn NotificationSettingsRepository {
         self
     }
+    fn contracts(&mut self) -> &mut dyn ContractRepository {
+        self
+    }
+    fn documents(&mut self) -> &mut dyn crate::port::DocumentRepository {
+        self
+    }
     async fn commit(self: Box<Self>) -> PortResult<()> {
         let mut shared = self.shared.lock().map_err(poisoned)?;
         // Einlösen wie das bedingte Update der Datenbank: eine parallel
@@ -988,8 +1002,12 @@ impl HouseholdRepository for MemoryUow {
             .retain(|r| !registers.contains(&r.register_id));
         self.state.registers.retain(|(m, _)| !meters.contains(m));
         self.state.devices.retain(|(m, _)| !meters.contains(m));
+        self.state
+            .contracts
+            .retain(|c| !meters.contains(&c.meter_id));
         self.state.meters.retain(|(h, _)| *h != hid);
         self.state.drafts.retain(|d| d.household != hid);
+        self.state.documents.retain(|(h, _)| *h != hid);
         self.state.invitations.retain(|i| i.household != hid);
         self.state.revisions.retain(|(h, _)| *h != hid);
         self.state.outbox.retain(|o| o.entry.household_id != hid);
@@ -1407,3 +1425,11 @@ impl RevisionRepository for MemoryUow {
 
 #[path = "memory_backup.rs"]
 mod backup_impl;
+
+#[path = "memory_contracts.rs"]
+mod contracts_impl;
+
+#[path = "memory_documents.rs"]
+mod documents_impl;
+
+pub use documents_impl::StubExtractor;

@@ -30,6 +30,8 @@ pub struct PageCtx {
     pub tz: Tz,
     pub is_owner: bool,
     pub can_write: bool,
+    /// Navigation „Kosten“ nur mit Verträgen (SPEC_TAR_COST_VIEW)
+    pub has_contracts: bool,
     pub flash: Option<String>,
     pub static_prefix: String,
     pub version: &'static str,
@@ -172,6 +174,7 @@ impl FromRequestParts<WebState> for Ctx {
             tz,
             is_owner: resolved.tenant.role() >= Role::Owner,
             can_write: resolved.tenant.role() >= Role::Member,
+            has_contracts: resolved.has_contracts,
             flash,
             static_prefix: format!("/static/{}", state.cfg.version),
             version: state.cfg.version,

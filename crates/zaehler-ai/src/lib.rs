@@ -3,6 +3,7 @@
 //! Die AI liefert ausschließlich **Vorschläge** (ADR_005); Zuordnung zum
 //! Zähler, Plausibilisierung und Bestätigung erfolgen in der Anwendung.
 
+mod extractor;
 mod openrouter;
 mod recognizer;
 mod schema;

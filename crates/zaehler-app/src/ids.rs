@@ -54,6 +54,20 @@ id_type!(
     RevisionId,
     /// Eintrag der Outbox
     OutboxId,
+    /// Vertrag einer Messstelle
+    ContractId,
+    /// Kostenposition eines Vertrags
+    PositionId,
+    /// Preisstand einer Kostenposition
+    PriceComponentId,
+    /// Abschlagsstand eines Vertrags
+    InstallmentId,
+    /// Bonus oder Gutschrift
+    AdjustmentId,
+    /// Erfasste Jahresabrechnung
+    SettlementId,
+    /// Hochgeladenes Dokument (Rechnung)
+    DocumentId,
 );
 
 /// Schlüssel im Objektspeicher, immer unter `households/{household_id}/`.
@@ -79,17 +93,36 @@ pub enum BlobKind {
     DraftPhoto,
     /// Temporäre Datei des CSV-Imports (`tmp/{id}.csv`)
     Tmp,
+    /// Dokument als PDF (`documents/{id}.pdf`, SPEC_DOC_UPLOADS)
+    DocumentPdf,
+    /// Dokument als normalisiertes Foto (`documents/{id}.jpg`)
+    DocumentJpeg,
 }
 
 impl BlobKind {
-    const ALL: [Self; 3] = [Self::ReadingPhoto, Self::DraftPhoto, Self::Tmp];
+    const ALL: [Self; 5] = [
+        Self::ReadingPhoto,
+        Self::DraftPhoto,
+        Self::Tmp,
+        Self::DocumentPdf,
+        Self::DocumentJpeg,
+    ];
 
     fn dir_and_ext(self) -> (&'static str, &'static str) {
         match self {
             Self::ReadingPhoto => ("readings", "jpg"),
             Self::DraftPhoto => ("drafts", "jpg"),
             Self::Tmp => ("tmp", "csv"),
+            Self::DocumentPdf => ("documents", "pdf"),
+            Self::DocumentJpeg => ("documents", "jpg"),
         }
+    }
+
+    /// Dauerhaft gespeicherte Datei, die in Archive gehört (Fotos und
+    /// Dokumente, keine temporären Dateien).
+    #[must_use]
+    pub fn archived(self) -> bool {
+        !matches!(self, Self::Tmp)
     }
 }
 
@@ -117,6 +150,17 @@ impl BlobKey {
     #[must_use]
     pub fn tmp(household: HouseholdId, id: Uuid) -> Self {
         Self::build(household, BlobKind::Tmp, id)
+    }
+
+    /// Hochgeladenes Dokument; PDF oder normalisiertes Foto (SPEC_DOC_UPLOADS).
+    #[must_use]
+    pub fn document(household: HouseholdId, document: DocumentId, pdf: bool) -> Self {
+        let kind = if pdf {
+            BlobKind::DocumentPdf
+        } else {
+            BlobKind::DocumentJpeg
+        };
+        Self::build(household, kind, document.0)
     }
 
     /// Präfix aller Objekte eines Haushalts, mit abschließendem `/`.

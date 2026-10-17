@@ -20,6 +20,8 @@ pub struct HousekeepingReport {
     pub sessions: u64,
     /// Erledigte Outbox-Einträge (SPEC_JOB_OUTBOX)
     pub outbox: u64,
+    /// Dokumente ohne Verweis (SPEC_DOC_UPLOADS)
+    pub documents: u64,
 }
 
 /// Wird von einem Intervall in der Composition Root in jeder Instanz
@@ -78,6 +80,10 @@ impl Housekeeping {
             Ok(n) => report.outbox = n,
             Err(e) => first_error = first_error.or(Some(e.into())),
         }
+        match self.expire_documents(now - self.draft_ttl).await {
+            Ok(n) => report.documents = n,
+            Err(e) => first_error = first_error.or(Some(e)),
+        }
 
         metrics::counter!("zaehler_housekeeping_removed_total", "kind" => "draft")
             .increment(report.drafts);
@@ -87,6 +93,8 @@ impl Housekeeping {
             .increment(report.sessions);
         metrics::counter!("zaehler_housekeeping_removed_total", "kind" => "outbox")
             .increment(report.outbox);
+        metrics::counter!("zaehler_housekeeping_removed_total", "kind" => "document")
+            .increment(report.documents);
         match first_error {
             Some(e) => Err(e),
             None => Ok(report),
@@ -99,6 +107,23 @@ impl Housekeeping {
             .maintenance
             .expire_drafts(now - self.draft_ttl, now)
             .await?;
+        for key in &keys {
+            self.blobs
+                .delete(key)
+                .await
+                .map_err(AppError::from_storage)?;
+        }
+        Ok(keys.len() as u64)
+    }
+
+    /// Dokumente ohne Verweis entfernen, danach ihre Dateien löschen
+    /// (SPEC_DOC_UPLOADS).
+    // @impl SPEC_DOC_UPLOADS
+    async fn expire_documents(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, AppError> {
+        let keys = self.maintenance.expire_documents(cutoff).await?;
         for key in &keys {
             self.blobs
                 .delete(key)

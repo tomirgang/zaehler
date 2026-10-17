@@ -8,8 +8,8 @@ use axum::Router;
 use zaehler_ai::OpenRouter;
 use zaehler_app::{
     port::{
-        BlobStore, DisabledNotifier, LeaderLock, MeterRecognizer, Notifier, SingleInstance,
-        SystemClock, UuidV7,
+        BlobStore, DisabledNotifier, DocumentExtractor, LeaderLock, MeterRecognizer, Notifier,
+        SingleInstance, SystemClock, UuidV7,
     },
     usecase::{
         Ports, Settings, UseCases,
@@ -85,11 +85,9 @@ fn notifier(config: &Config) -> anyhow::Result<Arc<dyn Notifier>> {
     ))
 }
 
-/// Erzeugt die Adapter; `recognizer` nur für den Webserver.
-pub async fn adapters(
-    config: &Config,
-    recognizer: Option<Arc<dyn MeterRecognizer>>,
-) -> anyhow::Result<Adapters> {
+/// Erzeugt die Adapter; `ai` (Zählerstände, Rechnungen) nur für den
+/// Webserver.
+pub async fn adapters(config: &Config, ai: Option<Arc<OpenRouter>>) -> anyhow::Result<Adapters> {
     config.validate().map_err(anyhow::Error::msg)?;
     let db = zaehler_db::connect(&config.database.url, config.database.max_connections)
         .await
@@ -105,13 +103,15 @@ pub async fn adapters(
             max_pixels: config.image.max_pixels,
             jpeg_quality: config.image.jpeg_quality,
         })),
-        recognizer,
+        recognizer: ai.clone().map(|a| a as Arc<dyn MeterRecognizer>),
+        extractor: ai.map(|a| a as Arc<dyn DocumentExtractor>),
         backup: store.clone(),
         jobs: store.clone(),
         notifier: notifier(config)?,
         settings: Settings {
             invitation_ttl: chrono::Duration::days(i64::from(config.invitations.ttl_days)),
             public_url: config.server.public_url.trim_end_matches('/').to_owned(),
+            max_document_bytes: config.upload.max_document_bytes,
         },
     };
     Ok(Adapters {
@@ -190,16 +190,21 @@ async fn scheduler(config: &Config, a: &Adapters) -> anyhow::Result<Scheduler> {
 /// Baut den HTTP-Router und den Scheduler mit allen Adaptern; `traces`
 /// übernimmt den Trace-Context eingehender Requests (SPEC_OPS_OTEL).
 pub async fn build(config: &Config, traces: bool) -> anyhow::Result<App> {
-    let recognizer: Option<Arc<dyn MeterRecognizer>> = if let Some(ai) = &config.ai {
-        tracing::info!(model = %ai.model, "AI-Erkennung aktiv");
-        Some(Arc::new(
-            OpenRouter::new(ai.clone()).context("AI-Client nicht erzeugbar")?,
-        ))
+    let ai = if let Some(ai) = &config.ai {
+        let client = OpenRouter::new(ai.clone()).context("AI-Client nicht erzeugbar")?;
+        tracing::info!(
+            model = %ai.model,
+            document_model = %client.document_model_name(),
+            "AI-Erkennung aktiv"
+        );
+        Some(Arc::new(client))
     } else {
-        tracing::info!("AI-Erkennung nicht konfiguriert; Foto-Erfassung mit manueller Eingabe");
+        tracing::info!(
+            "AI-Erkennung nicht konfiguriert; Foto-Erfassung und Rechnungsimport mit manueller Eingabe"
+        );
         None
     };
-    let a = adapters(config, recognizer).await?;
+    let a = adapters(config, ai).await?;
     if config.database.auto_migrate {
         prepare_database(config, &a).await?;
     } else {
@@ -242,7 +247,8 @@ pub async fn build(config: &Config, traces: bool) -> anyhow::Result<App> {
             )
             .with_max_photo_bytes(config.upload.max_photo_bytes)
             .with_max_csv_bytes(config.upload.max_csv_bytes)
-            .with_max_backup_bytes(config.upload.max_backup_bytes);
+            .with_max_backup_bytes(config.upload.max_backup_bytes)
+            .with_max_document_bytes(config.upload.max_document_bytes);
             if traces {
                 web.with_trace_parent(crate::telemetry::set_remote_parent)
             } else {

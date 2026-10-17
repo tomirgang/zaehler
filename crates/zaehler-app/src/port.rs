@@ -13,15 +13,17 @@ use crate::{
     backup::BackupData,
     error::PortError,
     ids::{
-        BlobKey, DeviceId, DraftId, HouseholdId, InvitationId, MeterId, OutboxId, ReadingId,
-        RegisterId, UserId,
+        BlobKey, ContractId, DeviceId, DocumentId, DraftId, HouseholdId, InvitationId, MeterId,
+        OutboxId, PositionId, ReadingId, RegisterId, UserId,
     },
     model::{
-        DeviceData, Draft, DraftAnalysis, DraftOutcome, Household, HouseholdData, HouseholdSummary,
-        Identity, Invitation, JobRun, Member, MeterAggregate, MeterData, MeterSummary,
-        NewInvitation, Notification, NotificationKind, NotificationLogEntry, NotificationSettings,
-        OutboxEntry, OutboxEvent, OutboxResult, Reading, ReadingUpdate, Recipient, Recognition,
-        RegisterData, Revision, User,
+        AdjustmentRow, Contract, ContractData, ContractEntry, DeviceData, Document,
+        DocumentAnalysis, DocumentStatus, DocumentType, Draft, DraftAnalysis, DraftOutcome,
+        Household, HouseholdData, HouseholdSummary, Identity, InstallmentRow, Invitation,
+        InvoiceExtraction, JobRun, Member, MeterAggregate, MeterData, MeterSummary, NewInvitation,
+        Notification, NotificationKind, NotificationLogEntry, NotificationSettings, OutboxEntry,
+        OutboxEvent, OutboxResult, PriceComponentRow, Reading, ReadingUpdate, Recipient,
+        Recognition, RegisterData, Revision, SettlementRow, User,
     },
     tenant::{Role, Tenant},
 };
@@ -49,6 +51,8 @@ pub trait UnitOfWork: Send {
     fn revisions(&mut self) -> &mut dyn RevisionRepository;
     fn outbox(&mut self) -> &mut dyn OutboxRepository;
     fn notification_settings(&mut self) -> &mut dyn NotificationSettingsRepository;
+    fn contracts(&mut self) -> &mut dyn ContractRepository;
+    fn documents(&mut self) -> &mut dyn DocumentRepository;
     async fn commit(self: Box<Self>) -> PortResult<()>;
 }
 
@@ -71,6 +75,110 @@ pub trait MembershipRepository: Send {
     /// Legt eine Mitgliedschaft an (nur beim Einlösen einer Einladung);
     /// besteht sie bereits, bleibt die höhere Rolle.
     async fn add(&mut self, household: HouseholdId, user: UserId, role: Role) -> PortResult<()>;
+}
+
+/// Verträge mit Positionen, Preisständen, Abschlägen, Anpassungen und
+/// Abrechnungen (SPEC_TAR_CONTRACTS). Der Haushalt ergibt sich aus der
+/// Messstelle; fremde IDs ergeben `PortError::NotFound`.
+// @impl SPEC_TAR_CONTRACTS, SPEC_SEC_TENANT_SCOPE
+#[async_trait]
+pub trait ContractRepository: Send {
+    /// Der Haushalt hat mindestens einen Vertrag.
+    async fn any(&mut self, t: &Tenant) -> PortResult<bool>;
+    /// Alle Verträge des Haushalts, nach Messstelle und Beginn sortiert.
+    async fn list(&mut self, t: &Tenant) -> PortResult<Vec<Contract>>;
+    /// Verträge der Messstelle, nach Beginn sortiert.
+    async fn for_meter(&mut self, t: &Tenant, meter: MeterId) -> PortResult<Vec<Contract>>;
+    async fn get(&mut self, t: &Tenant, id: ContractId) -> PortResult<Option<Contract>>;
+    /// Register der Positionen müssen zur Messstelle gehören.
+    async fn create(
+        &mut self,
+        t: &Tenant,
+        id: ContractId,
+        meter: MeterId,
+        data: &ContractData,
+    ) -> PortResult<()>;
+    /// Ersetzt Stammdaten, Positionen und Preisstände.
+    async fn update(&mut self, t: &Tenant, id: ContractId, data: &ContractData) -> PortResult<()>;
+    /// Löscht den Vertrag mit allen Einträgen.
+    async fn delete(&mut self, t: &Tenant, id: ContractId) -> PortResult<()>;
+    /// `PortError::Conflict` bei gleichem `valid_from` in der Position.
+    async fn add_component(
+        &mut self,
+        t: &Tenant,
+        position: PositionId,
+        c: &PriceComponentRow,
+    ) -> PortResult<()>;
+    /// `PortError::Conflict` bei gleichem `valid_from` im Vertrag.
+    async fn add_installment(
+        &mut self,
+        t: &Tenant,
+        contract: ContractId,
+        i: &InstallmentRow,
+    ) -> PortResult<()>;
+    async fn add_adjustment(
+        &mut self,
+        t: &Tenant,
+        contract: ContractId,
+        a: &AdjustmentRow,
+    ) -> PortResult<()>;
+    async fn add_settlement(
+        &mut self,
+        t: &Tenant,
+        contract: ContractId,
+        s: &SettlementRow,
+    ) -> PortResult<()>;
+    /// `PortError::NotFound`, wenn der Eintrag nicht zum Vertrag gehört.
+    async fn delete_entry(
+        &mut self,
+        t: &Tenant,
+        contract: ContractId,
+        entry: ContractEntry,
+    ) -> PortResult<()>;
+}
+
+/// Hochgeladene Dokumente (SPEC_DOC_UPLOADS, SPEC_AI_INVOICE).
+// @impl SPEC_DOC_UPLOADS, SPEC_SEC_TENANT_SCOPE
+#[async_trait]
+pub trait DocumentRepository: Send {
+    /// Legt das Dokument im Haushalt des Tenants an (Status `uploaded`).
+    async fn create(&mut self, t: &Tenant, d: &Document) -> PortResult<()>;
+    async fn get(&mut self, t: &Tenant, id: DocumentId) -> PortResult<Option<Document>>;
+    /// Offene Dokumente des Haushalts, neueste zuerst.
+    async fn list_open(&mut self, t: &Tenant) -> PortResult<Vec<Document>>;
+    /// Speichert das Erkennungsergebnis eines offenen Dokuments;
+    /// `PortError::NotFound`, wenn es nicht (mehr) offen ist.
+    async fn record_analysis(
+        &mut self,
+        t: &Tenant,
+        id: DocumentId,
+        a: &DocumentAnalysis,
+    ) -> PortResult<()>;
+    /// Schließt ein offenes Dokument ab (`confirmed` oder `discarded`);
+    /// `PortError::NotFound`, wenn es nicht (mehr) offen ist.
+    async fn finish(
+        &mut self,
+        t: &Tenant,
+        id: DocumentId,
+        status: DocumentStatus,
+        at: DateTime<Utc>,
+    ) -> PortResult<()>;
+}
+
+/// Inhalt eines Dokuments für die Erkennung.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentContent {
+    pub media_type: DocumentType,
+    pub bytes: Bytes,
+}
+
+/// Liest Rechnungen strukturiert aus (AI). Übertragen wird nur das
+/// Dokument, keine Nutzer- oder Haushaltsdaten (REQ_AI_006).
+#[async_trait]
+pub trait DocumentExtractor: Send + Sync {
+    /// Bezeichnung des Modells (für Dokumente und Metriken).
+    fn model(&self) -> &str;
+    async fn invoice(&self, doc: &DocumentContent) -> Result<InvoiceExtraction, RecognitionError>;
 }
 
 /// Einladungen (SPEC_TEN_INVITES).
@@ -360,6 +468,10 @@ pub trait MaintenanceRepository: Send + Sync {
     async fn delete_expired_sessions(&self, now: DateTime<Utc>) -> PortResult<u64>;
     /// Entfernt erledigte Outbox-Einträge, abgeschlossen vor `before`.
     async fn purge_outbox(&self, before: DateTime<Utc>) -> PortResult<u64>;
+    /// Entfernt Dokumente, angelegt vor `cutoff`, auf die kein Eintrag
+    /// verweist (verworfen, nicht bestätigt oder Abrechnung gelöscht), und
+    /// liefert ihre Dateien (SPEC_DOC_UPLOADS).
+    async fn expire_documents(&self, cutoff: DateTime<Utc>) -> PortResult<Vec<BlobKey>>;
 }
 
 /// Vollständiger Export und Import aller Datensätze (SPEC_BACKUP_DATA). Ohne

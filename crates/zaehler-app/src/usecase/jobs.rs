@@ -172,7 +172,7 @@ impl DispatchOutbox {
     ) -> Result<(), AppError> {
         let t = Tenant::for_job(household);
         let mut uow = self.p.uow.begin().await?;
-        let (detail, cal) = match load_for_job(uow.as_mut(), &t, meter).await {
+        let (detail, contracts, cal) = match load_for_job(uow.as_mut(), &t, meter).await {
             Ok(x) => x,
             // Messstelle oder Haushalt inzwischen gelöscht
             Err(AppError::NotFound) => return Ok(()),
@@ -186,7 +186,7 @@ impl DispatchOutbox {
         let today = cal.local_date(self.p.clock.now());
         let Some((reading, finding)) = readings
             .iter()
-            .find_map(|id| check_alarm(&detail, cal, today, *id).map(|f| (*id, f)))
+            .find_map(|id| check_alarm(&detail, &contracts, cal, today, *id).map(|f| (*id, f)))
         else {
             return Ok(());
         };

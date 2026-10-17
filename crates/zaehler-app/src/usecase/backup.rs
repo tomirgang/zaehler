@@ -15,7 +15,7 @@ use crate::{
         ArchiveError, ArchiveReader, ArchiveWriter, BackupData, Counts, FORMAT, FORMAT_VERSION,
         Manifest, MembershipRecord, Scope,
     },
-    ids::{BlobKey, DraftId, HouseholdId, ReadingId},
+    ids::{BlobKey, BlobKind, DocumentId, DraftId, HouseholdId, ReadingId},
     usecase::{Ports, use_case},
 };
 
@@ -272,6 +272,41 @@ pub fn remap_household(
         // gelöschte Ablesungen haben keine neue ID; sie erhalten eine eigene
         r.reading_id = map(r.reading_id, &mut ids);
         r.changed_by = owner;
+    }
+    for d in &mut data.documents {
+        d.id = map(d.id, &mut ids);
+        d.household_id = new_household;
+        d.created_by = owner;
+        d.meter_id = d.meter_id.and_then(|m| ids.get(&m).copied());
+        let old = BlobKey::parse(&d.blob_key).ok_or_else(invalid)?;
+        let key = BlobKey::document(hh, DocumentId(d.id), old.kind() == BlobKind::DocumentPdf);
+        keys.insert(std::mem::replace(&mut d.blob_key, key.to_string()), key);
+    }
+    for c in &mut data.contracts {
+        c.meter_id = known(c.meter_id, &ids)?;
+        c.id = map(c.id, &mut ids);
+    }
+    for p in &mut data.cost_positions {
+        p.contract_id = known(p.contract_id, &ids)?;
+        p.register_id = p.register_id.map(|r| known(r, &ids)).transpose()?;
+        p.id = map(p.id, &mut ids);
+    }
+    for c in &mut data.price_components {
+        c.position_id = known(c.position_id, &ids)?;
+        c.id = map(c.id, &mut ids);
+    }
+    for x in &mut data.installments {
+        x.contract_id = known(x.contract_id, &ids)?;
+        x.id = map(x.id, &mut ids);
+    }
+    for x in &mut data.adjustments {
+        x.contract_id = known(x.contract_id, &ids)?;
+        x.id = map(x.id, &mut ids);
+    }
+    for x in &mut data.settlements {
+        x.contract_id = known(x.contract_id, &ids)?;
+        x.id = map(x.id, &mut ids);
+        x.document_id = x.document_id.and_then(|d| ids.get(&d).copied());
     }
     data.users.clear();
     data.invitations.clear();

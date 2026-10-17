@@ -24,6 +24,7 @@
     <nav>
       <a href="/">{{ ctx.lang.t("nav-overview") }}</a>
       <a href="/meters">{{ ctx.lang.t("nav-meters") }}</a>
+      {% if ctx.has_contracts %}<a href="/costs">{{ ctx.lang.t("nav-costs") }}</a>{% endif %}
       {% if ctx.can_write %}<a href="/capture">{{ ctx.lang.t("nav-capture") }}</a>{% endif %}
       {% if ctx.can_write %}<a href="/import">{{ ctx.lang.t("nav-import") }}</a>{% endif %}
       <a href="/settings">{{ ctx.lang.t("nav-settings") }}</a>

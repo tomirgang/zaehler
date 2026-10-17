@@ -39,6 +39,7 @@ zugleich ist unzulässig.
 | `housekeeping.draft_ttl_hours` | `ZAEHLER_HOUSEKEEPING__DRAFT_TTL_HOURS` | `24` |
 | `upload.max_photo_bytes` | `ZAEHLER_UPLOAD__MAX_PHOTO_BYTES` | `15728640` (15 MiB) |
 | `upload.max_csv_bytes` | `ZAEHLER_UPLOAD__MAX_CSV_BYTES` | `5242880` (5 MiB) |
+| `upload.max_document_bytes` | `ZAEHLER_UPLOAD__MAX_DOCUMENT_BYTES` | `10485760` (10 MiB), Rechnungen als PDF oder Foto |
 | `upload.max_backup_bytes` | `ZAEHLER_UPLOAD__MAX_BACKUP_BYTES` | `1073741824` (1 GiB), Haushaltsarchive |
 | `backup.before_migrate` | `ZAEHLER_BACKUP__BEFORE_MIGRATE` | `true`; Archiv vor ausstehenden Migrationen |
 | `backup.dir` | `ZAEHLER_BACKUP__DIR` | `data/backups` |
@@ -48,6 +49,7 @@ zugleich ist unzulässig.
 | `session.ttl_hours` | `ZAEHLER_SESSION__TTL_HOURS` | `720` (gleitend) |
 | `session.cookie_secure` | `ZAEHLER_SESSION__COOKIE_SECURE` | aus dem Schema von `public_url` |
 | `ai.api_key`, `ai.model`, `ai.base_url`, `ai.timeout_secs` | `ZAEHLER_AI__…` | Base-URL `https://openrouter.ai/api/v1`, 60 s |
+| `ai.document_model` | `ZAEHLER_AI__DOCUMENT_MODEL` | ohne Angabe `ai.model`; Modell für Rechnungen (PDF als `file`-Part) |
 | `notify.smtp.host`, `port`, `security`, `username`, `password`, `from` | `ZAEHLER_NOTIFY__SMTP__…` | ohne `host` kein Versand; Port `587`, `security` `starttls` (`tls`, `none` nur mit `localhost`) |
 | `otel.endpoint` | `ZAEHLER_OTEL__ENDPOINT` | leer; ohne Angabe `OTEL_EXPORTER_OTLP_ENDPOINT`, sonst kein Trace-Export |
 | `otel.service_name` | `ZAEHLER_OTEL__SERVICE_NAME` | `zaehler` |

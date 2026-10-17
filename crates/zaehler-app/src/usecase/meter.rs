@@ -15,7 +15,7 @@ use crate::{
         DeviceData, Draft, DraftOutcome, MeterAggregate, MeterData, MeterSummary, MeterTargets,
         MonthDay, Reading, RegisterData,
     },
-    usecase::{Ports, use_case, validate},
+    usecase::{Ports, contract::contract_overlaps, use_case, validate},
 };
 
 pub const MAX_METER_NAME: usize = 80;
@@ -545,6 +545,12 @@ impl UpdateMeter {
         )
         .await?;
         check_parent(&mut *uow, t, Some(id), input.parent_meter_id).await?;
+        if input.parent_meter_id.is_some()
+            && let Some(device) = &active
+            && contract_overlaps(&mut *uow, t, id, device.data.installed_at, None).await?
+        {
+            return Err(AppError::Conflict("contract.submeter"));
+        }
 
         uow.meters().update(t, id, &data).await?;
         for r in &input.registers {
@@ -603,6 +609,7 @@ impl SwapDevice {
     /// Endstände des alten und Startstände des neuen Geräts zum selben Zeitpunkt.
     // @impl SPEC_MTR_SWAP_FLOW, SPEC_CONS_DEVICE_SWAP
     #[tracing::instrument(name = "SwapDevice", skip_all)]
+    #[allow(clippy::too_many_lines)] // Prüfung je Register und Gerät in einem Ablauf
     pub async fn execute(
         &self,
         t: &Tenant,
@@ -678,6 +685,11 @@ impl SwapDevice {
             return Err(AppError::field("serial_number", "meter.serial_taken"));
         }
         check_parent(&mut *uow, t, Some(id), input.parent_meter_id).await?;
+        if input.parent_meter_id.is_some()
+            && contract_overlaps(&mut *uow, t, id, input.at, None).await?
+        {
+            return Err(AppError::Conflict("contract.submeter"));
+        }
 
         let ends: Vec<Reading> = input
             .end_values

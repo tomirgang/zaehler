@@ -11,7 +11,7 @@ use zaehler_domain::{
     calendar::Calendar,
     comparison::{Comparison, compare},
     consumption::{ConsumptionError, Interval, intervals},
-    expectation::{DEFAULT_TOLERANCE_PCT, MonthExpectation, Target, expectations},
+    expectation::{BandSource, DEFAULT_TOLERANCE_PCT, MonthExpectation, Target, expectations},
     forecast::SeasonProfile,
     meter::Direction,
     period::Period,
@@ -26,10 +26,11 @@ use zaehler_domain::{
 use crate::{
     AppError, Role, Tenant,
     ids::MeterId,
-    model::{Meter, MeterAggregate, Reading, Register},
+    model::{Contract, Meter, MeterAggregate, Reading, Register},
     port::UnitOfWork,
     usecase::{
         Ports,
+        cost::installment_target,
         meter::{MeterDetail, last_of},
         use_case,
     },
@@ -259,7 +260,20 @@ pub fn target_of(meter: &Meter) -> Option<Target> {
     t.annual_target.map(|annual| Target {
         annual,
         tolerance_pct: Decimal::from(t.tolerance_pct.unwrap_or(DEFAULT_TOLERANCE_PCT)),
+        source: BandSource::Target,
     })
+}
+
+/// Grundlage der Ampel ohne Historie: Jahresziel, sonst die Menge, die der
+/// Abschlag des heute gültigen Bezugsvertrags deckt (SPEC_ANA_TRAFFIC_LIGHT).
+// @impl SPEC_ANA_TRAFFIC_LIGHT
+#[must_use]
+pub fn target_for(
+    agg: &MeterAggregate,
+    contracts: &[Contract],
+    today: NaiveDate,
+) -> Option<Target> {
+    target_of(&agg.meter).or_else(|| installment_target(agg, contracts, today))
 }
 
 /// Monatsreihe der Register von der ersten Ablesung bis heute.
@@ -489,6 +503,7 @@ impl MeterAnalysis {
             .map(|first| months_between(cal.local_date(first.read_at), today))
             .unwrap_or_default();
         let submeters = load_submeters(uow.as_mut(), t, id, &months, cal).await?;
+        let contracts = uow.contracts().for_meter(t, id).await?;
         drop(uow);
         let agg = &detail.aggregate;
         let per_register = register_intervals(agg, &detail.readings);
@@ -528,7 +543,7 @@ impl MeterAnalysis {
             .or_else(|| last_complete(main));
         let unit = &agg.meter.data.unit;
         let (profile, profile_source) = choose_profile(&agg.meter, main);
-        let expectations = expectations(main, &profile, target_of(&agg.meter));
+        let expectations = expectations(main, &profile, target_for(agg, &contracts, today));
         let registers = per_register
             .iter()
             .map(|r| {
@@ -640,7 +655,12 @@ impl DashboardCard {
 }
 
 // @impl SPEC_UI_DASHBOARD
-fn card(detail: &MeterDetail, cal: Calendar, now: DateTime<Utc>) -> DashboardCard {
+fn card(
+    detail: &MeterDetail,
+    contracts: &[Contract],
+    cal: Calendar,
+    now: DateTime<Utc>,
+) -> DashboardCard {
     let agg = &detail.aggregate;
     let today = cal.local_date(now);
     let last_reading_at = detail.readings.iter().map(|r| r.read_at).max();
@@ -672,7 +692,7 @@ fn card(detail: &MeterDetail, cal: Calendar, now: DateTime<Utc>) -> DashboardCar
     let (profile, _) = choose_profile(&agg.meter, &series);
     let traffic = last_complete(&series).and_then(|m| {
         let i = series.iter().position(|x| x.month == m)?;
-        expectations(&series, &profile, target_of(&agg.meter))
+        expectations(&series, &profile, target_for(agg, contracts, today))
             .get(i)
             .copied()
             .flatten()
@@ -716,11 +736,12 @@ impl Dashboard {
                 continue;
             };
             let readings = uow.readings().list_for_meter(t, id).await?;
+            let contracts = uow.contracts().for_meter(t, id).await?;
             let detail = MeterDetail {
                 aggregate,
                 readings,
             };
-            cards.push(card(&detail, cal, now));
+            cards.push(card(&detail, &contracts, cal, now));
         }
         let urgency = |c: &DashboardCard| match c.due {
             Some(Due::Overdue(_)) => 0,
@@ -759,6 +780,7 @@ pub struct AlarmFinding {
 #[must_use]
 pub fn check_alarm(
     detail: &MeterDetail,
+    contracts: &[Contract],
     cal: Calendar,
     today: NaiveDate,
     reading: crate::ids::ReadingId,
@@ -785,7 +807,7 @@ pub fn check_alarm(
     let consumption = total_in(&regs, from, r.read_at)?;
     let series = full_series(detail, &regs, cal, today);
     let (profile, _) = choose_profile(&agg.meter, &series);
-    let bands = expectations(&series, &profile, target_of(&agg.meter));
+    let bands = expectations(&series, &profile, target_for(agg, contracts, today));
     let window = Period::new(cal.local_date(from), cal.local_date(r.read_at));
     let (mut expected, mut lower, mut upper) = (Decimal::ZERO, Decimal::ZERO, Decimal::ZERO);
     for (m, e) in series.iter().zip(&bands) {
@@ -823,15 +845,17 @@ pub(crate) async fn load_for_job(
     uow: &mut dyn UnitOfWork,
     t: &Tenant,
     id: MeterId,
-) -> Result<(MeterDetail, Calendar), AppError> {
+) -> Result<(MeterDetail, Vec<Contract>, Calendar), AppError> {
     let household = uow.households().get(t).await?;
     let aggregate = uow.meters().get(t, id).await?.ok_or(AppError::NotFound)?;
     let readings = uow.readings().list_for_meter(t, id).await?;
+    let contracts = uow.contracts().for_meter(t, id).await?;
     Ok((
         MeterDetail {
             aggregate,
             readings,
         },
+        contracts,
         Calendar::new(household.data.timezone),
     ))
 }

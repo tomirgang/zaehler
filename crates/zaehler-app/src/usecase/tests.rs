@@ -1055,6 +1055,7 @@ async fn drafts_can_be_discarded_and_expire() {
 async fn memory_adapter_passes_draft_suite() {
     let (ports, store, _, _) = memory_ports_with_blobs();
     suite::drafts(ports.uow.as_ref(), store.as_ref()).await;
+    suite::documents(ports.uow.as_ref(), store.as_ref()).await;
 }
 
 #[test]

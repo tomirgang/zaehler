@@ -10,6 +10,7 @@ pub mod calendar;
 pub mod car;
 pub mod comparison;
 pub mod consumption;
+pub mod cost;
 pub mod expectation;
 pub mod forecast;
 pub mod meter;

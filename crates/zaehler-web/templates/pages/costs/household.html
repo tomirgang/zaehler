@@ -1,0 +1,72 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("costs-household") }} {{ year }}</h1>
+  <div class="actions">
+    <a class="button secondary" href="/costs?year={{ year - 1 }}">{{ year - 1 }}</a>
+    <a class="button secondary" href="/costs?year={{ year + 1 }}">{{ year + 1 }}</a>
+    {% if ctx.can_write %}<a class="button secondary" href="/documents">{{ ctx.lang.t("document-import") }}</a>{% endif %}
+  </div>
+</div>
+
+{% if rows.is_empty() %}
+<p class="muted">{{ ctx.lang.t("costs-household-empty") }}</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>{{ ctx.lang.t("nav-meters") }}</th>
+      <th class="num">{{ ctx.lang.t("costs-import") }}</th>
+      <th class="num">{{ ctx.lang.t("costs-export") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td><a href="/meters/{{ r.id }}/costs">{{ r.name }}</a>{% if r.without_contract %}<br><span class="hint">{{ ctx.lang.t("costs-without-contract") }}</span>{% endif %}</td>
+      <td class="num">
+        {% if let Some(i) = r.import %}{{ i }}{% if r.import_estimated %} <span class="tag">{{ ctx.lang.t("costs-tag-estimated") }}</span>{% endif %}{% endif %}
+        {% if let Some((parent, value, estimated)) = r.included %}<span class="muted">{{ value }}</span>{% if *estimated %} <span class="tag">{{ ctx.lang.t("costs-tag-estimated") }}</span>{% endif %}<br><span class="hint">{{ ctx.lang.t("costs-included-in") }} {{ parent }}</span>{% endif %}
+      </td>
+      <td class="num">{% if let Some(e) = r.export %}{{ e }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr>
+      <th>{{ ctx.lang.t("costs-total") }}</th>
+      <th class="num">{{ import_total }}{% if has_estimate %} <span class="tag">{{ ctx.lang.t("costs-tag-estimated") }}</span>{% endif %}</th>
+      <th class="num">{% if let Some(e) = export_total %}{{ e }}{% endif %}</th>
+    </tr>
+    {% if export_total.is_some() %}
+    <tr><th>{{ ctx.lang.t("costs-net") }}</th><th class="num" colspan="2">{{ net_total }}</th></tr>
+    {% endif %}
+  </tfoot>
+</table>
+<p class="hint">{{ ctx.lang.t("costs-household-hint") }}</p>
+
+<div class="charts" data-chart-url="/costs.json?year={{ year }}" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
+  <h2 id="costs-chart-title">{{ ctx.lang.t("costs-chart") }}</h2>
+  <div class="chart" data-chart="costs" role="img" aria-labelledby="costs-chart-title"></div>
+  <details>
+    <summary>{{ ctx.lang.t("chart-table") }}</summary>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{ ctx.lang.t("analysis-month") }}</th>
+          <th class="num">{{ ctx.lang.t("costs-measured") }} (€)</th>
+          <th class="num">{{ ctx.lang.t("costs-estimated") }} (€)</th>
+          <th class="num">{{ ctx.lang.t("costs-export") }} (€)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in months %}
+        <tr><td>{{ m.label }}</td><td class="num">{{ m.measured }}</td><td class="num">{{ m.estimated }}</td><td class="num">{{ m.export }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+</div>
+{% endif %}
+{% endblock %}

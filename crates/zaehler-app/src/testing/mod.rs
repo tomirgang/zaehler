@@ -19,8 +19,8 @@ use crate::{
 };
 
 pub use memory::{
-    InMemoryBlobStore, InMemoryStore, RecordingNotifier, StoredOutbox, StubImageNormalizer,
-    StubRecognizer,
+    InMemoryBlobStore, InMemoryStore, RecordingNotifier, StoredOutbox, StubExtractor,
+    StubImageNormalizer, StubRecognizer,
 };
 
 /// Uhr mit fester, manuell verschiebbarer Zeit.
@@ -83,6 +83,7 @@ pub fn memory_ports_with_blobs() -> (
         blobs: blobs.clone(),
         images: Arc::new(StubImageNormalizer::default()),
         recognizer: None,
+        extractor: None,
         backup: store.clone(),
         jobs: store.clone(),
         notifier: Arc::new(crate::port::DisabledNotifier),

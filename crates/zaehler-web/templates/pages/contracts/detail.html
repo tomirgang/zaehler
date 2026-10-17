@@ -1,0 +1,281 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ provider }}</h1>
+  <div class="actions">
+    <a class="button" href="/meters/{{ meter_id }}/costs">{{ ctx.lang.t("costs-title") }}</a>
+    <a class="button secondary" href="/meters/{{ meter_id }}">{{ meter_name }}</a>
+    {% if ctx.is_owner %}
+    <a class="button secondary" href="/contracts/{{ id }}/edit">{{ ctx.lang.t("action-edit") }}</a>
+    <form method="post" action="/contracts/{{ id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("contract-delete-confirm") }}">
+      <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+      <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% for e in self.errs("entry") %}<p class="callout warning" role="alert">{{ e }}</p>{% endfor %}
+
+<dl class="facts">
+  {% for (label, value) in facts %}<dt>{{ label }}</dt><dd>{{ value }}</dd>{% endfor %}
+</dl>
+
+<h2>{{ ctx.lang.t("contract-positions") }}</h2>
+{% for p in positions %}
+<section class="card" aria-labelledby="position-{{ p.id }}">
+  <h3 id="position-{{ p.id }}">{{ p.name }}</h3>
+  <p class="muted">{{ ctx.lang.t("contract-position-register") }}: {{ p.register }} · {{ ctx.lang.t("contract-factor") }}: {{ p.factor }}{% if let Some(v) = p.vat %} · {{ ctx.lang.t("contract-vat") }}: {{ v }}{% endif %}</p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("contract-valid-from") }}</th>
+        <th>{{ ctx.lang.t("contract-base-price") }}</th>
+        <th>{{ ctx.lang.t("contract-work-price") }}</th>
+        <th>{{ ctx.lang.t("contract-component-factor") }}</th>
+        {% if p.vat.is_some() %}<th>{{ ctx.lang.t("contract-net-title") }}</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in p.components %}
+      <tr>
+        <td>{{ c.valid_from }}</td>
+        <td>{{ c.base }}</td>
+        <td>{{ c.work }}</td>
+        <td>{% if let Some(f) = c.factor %}{{ f }}{% endif %}</td>
+        {% if p.vat.is_some() %}<td>{% if let Some(n) = c.net %}{{ n }}{% endif %}</td>{% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if ctx.is_owner %}
+  <details{% if self.val("component_position") == p.id %} open{% endif %}>
+    <summary>{{ ctx.lang.t("contract-add-component") }}</summary>
+    <p class="hint">{{ ctx.lang.t("contract-add-component-hint") }}</p>
+    <form method="post" action="/contracts/{{ id }}/positions/{{ p.id }}/components" class="form">
+      <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+      <div class="grid">
+        <div class="field">
+          <label for="cv-{{ p.id }}">{{ ctx.lang.t("contract-valid-from") }}</label>
+          <input id="cv-{{ p.id }}" name="component_valid_from" type="date" value="{{ self.val("component_valid_from") }}" required>
+          {% for e in self.errs("component_valid_from") %}<p class="field-error">{{ e }}</p>{% endfor %}
+        </div>
+        <div class="field">
+          <label for="cb-{{ p.id }}">{{ ctx.lang.t("contract-base-price") }}</label>
+          <input id="cb-{{ p.id }}" name="component_base" value="{{ self.val("component_base") }}" inputmode="decimal">
+          <label class="visually-hidden" for="ci-{{ p.id }}">{{ ctx.lang.t("contract-base-interval") }}</label>
+          <select id="ci-{{ p.id }}" name="component_interval">
+            {% for (value, label) in intervals %}
+            <option value="{{ value }}"{% if *value == self.val_or("component_interval", "year") %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          {% for e in self.errs("component_base") %}<p class="field-error">{{ e }}</p>{% endfor %}
+        </div>
+        <div class="field">
+          <label for="cp-{{ p.id }}">{{ ctx.lang.t("contract-work-price") }}</label>
+          <input id="cp-{{ p.id }}" name="component_price" value="{{ self.val("component_price") }}" inputmode="decimal">
+          {% for e in self.errs("component_price") %}<p class="field-error">{{ e }}</p>{% endfor %}
+        </div>
+        <div class="field">
+          <label for="ct-{{ p.id }}">{{ ctx.lang.t("contract-tiers") }}</label>
+          <textarea id="ct-{{ p.id }}" name="component_tiers" rows="2">{{ self.val("component_tiers") }}</textarea>
+          {% for e in self.errs("component_tiers") %}<p class="field-error">{{ e }}</p>{% endfor %}
+        </div>
+        <div class="field">
+          <label for="cf-{{ p.id }}">{{ ctx.lang.t("contract-component-factor") }}</label>
+          <input id="cf-{{ p.id }}" name="component_factor" value="{{ self.val("component_factor") }}" inputmode="decimal">
+          {% for e in self.errs("component_factor") %}<p class="field-error">{{ e }}</p>{% endfor %}
+        </div>
+      </div>
+      <button type="submit">{{ ctx.lang.t("action-save") }}</button>
+    </form>
+  </details>
+  {% endif %}
+</section>
+{% endfor %}
+
+<section aria-labelledby="installments-title">
+  <h2 id="installments-title">{{ ctx.lang.t("installments-title") }}</h2>
+  {% if installments.is_empty() %}
+  <p class="muted">{{ ctx.lang.t("installments-empty") }}</p>
+  {% else %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("contract-valid-from") }}</th>
+        <th class="num">{{ ctx.lang.t("installment-amount") }}</th>
+        <th>{{ ctx.lang.t("installment-interval") }}</th>
+        {% if ctx.is_owner %}<th><span class="visually-hidden">{{ ctx.lang.t("member-actions") }}</span></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in installments %}
+      <tr>
+        <td>{{ r.cells[0] }}</td>
+        <td class="num">{{ r.cells[1] }}</td>
+        <td>{{ r.cells[2] }}</td>
+        {% if ctx.is_owner %}
+        <td>
+          <form method="post" action="/contracts/{{ id }}/installments/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("entry-delete-confirm") }}">
+            <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+            <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if ctx.is_owner %}
+  <form method="post" action="/contracts/{{ id }}/installments" class="form">
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="grid">
+      <div class="field">
+        <label for="installment_valid_from">{{ ctx.lang.t("contract-valid-from") }}</label>
+        <input id="installment_valid_from" name="installment_valid_from" type="date" value="{{ self.val("installment_valid_from") }}" required>
+        {% for e in self.errs("installment_valid_from") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="installment_amount">{{ ctx.lang.t("installment-amount") }}</label>
+        <input id="installment_amount" name="installment_amount" value="{{ self.val("installment_amount") }}" inputmode="decimal" required>
+        {% for e in self.errs("installment_amount") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="installment_interval">{{ ctx.lang.t("installment-interval-months") }}</label>
+        <input id="installment_interval" name="installment_interval" value="{{ self.val_or("installment_interval", "1") }}" inputmode="numeric">
+        {% for e in self.errs("installment_interval") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    <p class="hint">{{ ctx.lang.t("installment-hint") }}</p>
+    <button type="submit">{{ ctx.lang.t("installment-add") }}</button>
+  </form>
+  {% endif %}
+</section>
+
+<section aria-labelledby="adjustments-title">
+  <h2 id="adjustments-title">{{ ctx.lang.t("adjustments-title") }}</h2>
+  {% if adjustments.is_empty() %}
+  <p class="muted">{{ ctx.lang.t("adjustments-empty") }}</p>
+  {% else %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("adjustment-booked-on") }}</th>
+        <th>{{ ctx.lang.t("adjustment-kind") }}</th>
+        <th class="num">{{ ctx.lang.t("installment-amount") }}</th>
+        <th>{{ ctx.lang.t("contract-note") }}</th>
+        {% if ctx.can_write %}<th><span class="visually-hidden">{{ ctx.lang.t("member-actions") }}</span></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in adjustments %}
+      <tr>
+        <td>{{ r.cells[0] }}</td>
+        <td>{{ r.cells[1] }}</td>
+        <td class="num">{{ r.cells[2] }}</td>
+        <td>{{ r.cells[3] }}</td>
+        {% if ctx.can_write %}
+        <td>
+          <form method="post" action="/contracts/{{ id }}/adjustments/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("entry-delete-confirm") }}">
+            <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+            <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if ctx.can_write %}
+  <form method="post" action="/contracts/{{ id }}/adjustments" class="form">
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="grid">
+      <div class="field">
+        <label for="adjustment_kind">{{ ctx.lang.t("adjustment-kind") }}</label>
+        <select id="adjustment_kind" name="adjustment_kind">
+          {% for (value, label) in adjustment_kinds %}
+          <option value="{{ value }}"{% if *value == self.val("adjustment_kind") %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="adjustment_booked_on">{{ ctx.lang.t("adjustment-booked-on") }}</label>
+        <input id="adjustment_booked_on" name="adjustment_booked_on" type="date" value="{{ self.val("adjustment_booked_on") }}" required>
+        {% for e in self.errs("adjustment_booked_on") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="adjustment_amount">{{ ctx.lang.t("installment-amount") }}</label>
+        <input id="adjustment_amount" name="adjustment_amount" value="{{ self.val("adjustment_amount") }}" inputmode="decimal" required>
+        {% for e in self.errs("adjustment_amount") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="adjustment_note">{{ ctx.lang.t("contract-note") }}</label>
+        <input id="adjustment_note" name="adjustment_note" value="{{ self.val("adjustment_note") }}" maxlength="500">
+        {% for e in self.errs("adjustment_note") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    <button type="submit">{{ ctx.lang.t("adjustment-add") }}</button>
+  </form>
+  {% endif %}
+</section>
+
+<section aria-labelledby="settlements-title">
+  <h2 id="settlements-title">{{ ctx.lang.t("settlements-title") }}</h2>
+  <p class="hint">{{ ctx.lang.t("settlements-hint") }}</p>
+  {% if settlements.is_empty() %}
+  <p class="muted">{{ ctx.lang.t("settlements-empty") }}</p>
+  {% else %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("settlement-period") }}</th>
+        <th class="num">{{ ctx.lang.t("settlement-amount") }}</th>
+        {% if ctx.can_write %}<th><span class="visually-hidden">{{ ctx.lang.t("member-actions") }}</span></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in settlements %}
+      <tr>
+        <td>{{ r.cells[0] }}</td>
+        <td class="num">{{ r.cells[1] }}{% if !r.cells[2].is_empty() %} <a href="/documents/{{ r.cells[2] }}/file">{{ ctx.lang.t("document-receipt") }}</a>{% endif %}</td>
+        {% if ctx.can_write %}
+        <td>
+          <form method="post" action="/contracts/{{ id }}/settlements/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("entry-delete-confirm") }}">
+            <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+            <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if ctx.can_write %}
+  <form method="post" action="/contracts/{{ id }}/settlements" class="form">
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <div class="grid">
+      <div class="field">
+        <label for="settlement_period_start">{{ ctx.lang.t("settlement-start") }}</label>
+        <input id="settlement_period_start" name="settlement_period_start" type="date" value="{{ self.val("settlement_period_start") }}" required>
+        {% for e in self.errs("settlement_period_start") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="settlement_period_end">{{ ctx.lang.t("settlement-end") }}</label>
+        <input id="settlement_period_end" name="settlement_period_end" type="date" value="{{ self.val("settlement_period_end") }}" required>
+        {% for e in self.errs("settlement_period_end") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="settlement_amount">{{ ctx.lang.t("settlement-amount") }}</label>
+        <input id="settlement_amount" name="settlement_amount" value="{{ self.val("settlement_amount") }}" inputmode="decimal" required>
+        {% for e in self.errs("settlement_amount") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+    </div>
+    <button type="submit">{{ ctx.lang.t("settlement-add") }}</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

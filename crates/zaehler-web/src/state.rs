@@ -23,6 +23,8 @@ pub struct WebConfig {
     pub max_csv_bytes: usize,
     /// Grenze für Haushaltsarchive in Byte (SPEC_BACKUP_HOUSEHOLD)
     pub max_backup_bytes: usize,
+    /// Grenze für Dokumente in Byte (SPEC_DOC_UPLOADS)
+    pub max_document_bytes: usize,
     /// Übernimmt den Trace-Context eingehender Requests (SPEC_OPS_OTEL)
     pub trace_parent: Option<TraceParent>,
 }
@@ -66,6 +68,7 @@ impl WebConfig {
             max_photo_bytes: DEFAULT_MAX_PHOTO_BYTES,
             max_csv_bytes: DEFAULT_MAX_CSV_BYTES,
             max_backup_bytes: DEFAULT_MAX_BACKUP_BYTES,
+            max_document_bytes: zaehler_app::usecase::DEFAULT_MAX_DOCUMENT_BYTES,
             trace_parent: None,
         }
     }
@@ -91,6 +94,12 @@ impl WebConfig {
     #[must_use]
     pub fn with_max_csv_bytes(mut self, bytes: usize) -> Self {
         self.max_csv_bytes = bytes;
+        self
+    }
+
+    #[must_use]
+    pub fn with_max_document_bytes(mut self, bytes: usize) -> Self {
+        self.max_document_bytes = bytes;
         self
     }
 }

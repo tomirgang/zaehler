@@ -225,7 +225,7 @@ Web-Adapters erhält ihn. `readings_recorded` entsteht derzeit aus
 
 ```{spec} Dokument-Uploads
 :id: SPEC_DOC_UPLOADS
-:status: draft
+:status: implemented
 :satisfies: REQ_AI_004, REQ_AI_005, REQ_NFR_003
 :links: SPEC_SEC_UPLOADS, SPEC_STORE_BLOBS
 
@@ -239,6 +239,14 @@ ausgeliefert. Dokumente gehören zum Haushalt, werden mit ihm gelöscht und
 sind im Export enthalten. Ein Dokument ohne Verweis (Entwurf verworfen,
 Kostenbuch-Eintrag gelöscht) entfernt das Housekeeping nach
 `housekeeping.draft_ttl_hours`.
+
+Umsetzung: Tabelle `documents` (Migration `m20261017_000012_documents`).
+Verweis ist bis M7 nur `settlements.document_id`; übernommene Rechnungen ohne
+Abrechnung gelten damit ebenfalls als ohne Verweis. Fotos werden als JPEG
+normalisiert und ebenfalls nur als Download ausgeliefert. Die CSP lautet
+`sandbox; default-src 'none'`, der Dateiname im Header enthält nur ASCII.
+Die Größengrenze prüft der Anwendungsfall; der Body des Uploads ist auf
+`upload.max_document_bytes` plus 64 KiB begrenzt.
 ```
 
 ```{spec} Mehrere Replicas

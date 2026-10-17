@@ -12,7 +12,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -219,6 +219,104 @@ pub struct NotificationSettingRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Vertrag (ab `m20261017_000011_tariffs`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractRecord {
+    pub id: Uuid,
+    pub meter_id: Uuid,
+    /// `import` oder `export`
+    pub direction: String,
+    pub provider: String,
+    pub contract_number: Option<String>,
+    pub starts_on: NaiveDate,
+    pub ends_on: Option<NaiveDate>,
+    pub billing_start_month: i16,
+    pub billing_start_day: i16,
+    pub note: Option<String>,
+}
+
+/// Kostenposition (ab `m20261017_000011_tariffs`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CostPositionRecord {
+    pub id: Uuid,
+    pub contract_id: Uuid,
+    pub name: String,
+    pub register_id: Option<Uuid>,
+    pub factor_micro: i64,
+    pub vat_pct_milli: Option<i64>,
+    pub sort: i32,
+}
+
+/// Preisstand (ab `m20261017_000011_tariffs`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriceComponentRecord {
+    pub id: Uuid,
+    pub position_id: Uuid,
+    pub valid_from: NaiveDate,
+    pub base_price_micro: i64,
+    /// `day`, `month` oder `year`
+    pub base_interval: String,
+    /// Arbeitspreis als JSON wie gespeichert
+    pub unit_pricing: String,
+    pub factor_micro: Option<i64>,
+}
+
+/// Abschlagsstand (ab `m20261017_000011_tariffs`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallmentRecord {
+    pub id: Uuid,
+    pub contract_id: Uuid,
+    pub valid_from: NaiveDate,
+    pub amount_micro: i64,
+    pub interval_months: i16,
+}
+
+/// Bonus oder Gutschrift (ab `m20261017_000011_tariffs`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdjustmentRecord {
+    pub id: Uuid,
+    pub contract_id: Uuid,
+    /// `bonus` oder `credit`
+    pub kind: String,
+    pub booked_on: NaiveDate,
+    pub amount_micro: i64,
+    pub note: Option<String>,
+}
+
+/// Erfasste Jahresabrechnung (ab `m20261017_000011_tariffs`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettlementRecord {
+    pub id: Uuid,
+    pub contract_id: Uuid,
+    pub period_start: NaiveDate,
+    pub period_end: NaiveDate,
+    pub amount_micro: i64,
+    pub document_id: Option<Uuid>,
+}
+
+/// Hochgeladenes Dokument mit Erkennungsergebnis (ab
+/// `m20261017_000012_documents`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentRecord {
+    pub id: Uuid,
+    pub household_id: Uuid,
+    /// `invoice`
+    pub kind: String,
+    pub blob_key: String,
+    pub media_type: String,
+    pub bytes: i64,
+    pub original_name: String,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub status: String,
+    pub model: Option<String>,
+    /// Erkennungsergebnis als JSON wie gespeichert
+    pub extraction: Option<String>,
+    pub meter_id: Option<Uuid>,
+    pub analysed_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
 /// Alle Datensätze eines Archivs. Sitzungen und temporäre Dateien sind nicht
 /// enthalten.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -245,12 +343,27 @@ pub struct BackupData {
     pub revisions: Vec<RevisionRecord>,
     #[serde(default)]
     pub notification_settings: Vec<NotificationSettingRecord>,
+    #[serde(default)]
+    pub contracts: Vec<ContractRecord>,
+    #[serde(default)]
+    pub cost_positions: Vec<CostPositionRecord>,
+    #[serde(default)]
+    pub price_components: Vec<PriceComponentRecord>,
+    #[serde(default)]
+    pub installments: Vec<InstallmentRecord>,
+    #[serde(default)]
+    pub adjustments: Vec<AdjustmentRecord>,
+    #[serde(default)]
+    pub settlements: Vec<SettlementRecord>,
+    #[serde(default)]
+    pub documents: Vec<DocumentRecord>,
 }
 
 impl BackupData {
-    /// Objektschlüssel aller vorhandenen Fotos, sortiert: Belegfotos und
-    /// Fotos offener Entwürfe. Abgeschlossene Entwürfe verweisen auf ein
-    /// planmäßig gelöschtes Foto (die Ablesung hat eine Kopie).
+    /// Objektschlüssel aller vorhandenen Dateien, sortiert: Belegfotos,
+    /// Fotos offener Entwürfe und Dokumente. Abgeschlossene Entwürfe
+    /// verweisen auf ein planmäßig gelöschtes Foto (die Ablesung hat eine
+    /// Kopie).
     #[must_use]
     pub fn blob_keys(&self) -> Vec<String> {
         let keys: BTreeSet<String> = self
@@ -267,6 +380,7 @@ impl BackupData {
                     })
                     .map(|d| d.photo_key.clone()),
             )
+            .chain(self.documents.iter().map(|d| d.blob_key.clone()))
             .collect();
         keys.into_iter().collect()
     }
@@ -287,7 +401,49 @@ impl BackupData {
             .filter(|r| meters.contains(&r.meter_id))
             .map(|r| r.id)
             .collect();
+        let contracts: HashSet<Uuid> = self
+            .contracts
+            .iter()
+            .filter(|c| meters.contains(&c.meter_id))
+            .map(|c| c.id)
+            .collect();
+        let positions: HashSet<Uuid> = self
+            .cost_positions
+            .iter()
+            .filter(|p| contracts.contains(&p.contract_id))
+            .map(|p| p.id)
+            .collect();
         Self {
+            contracts: self
+                .contracts
+                .into_iter()
+                .filter(|c| contracts.contains(&c.id))
+                .collect(),
+            cost_positions: self
+                .cost_positions
+                .into_iter()
+                .filter(|p| positions.contains(&p.id))
+                .collect(),
+            price_components: self
+                .price_components
+                .into_iter()
+                .filter(|c| positions.contains(&c.position_id))
+                .collect(),
+            installments: self
+                .installments
+                .into_iter()
+                .filter(|x| contracts.contains(&x.contract_id))
+                .collect(),
+            adjustments: self
+                .adjustments
+                .into_iter()
+                .filter(|x| contracts.contains(&x.contract_id))
+                .collect(),
+            settlements: self
+                .settlements
+                .into_iter()
+                .filter(|x| contracts.contains(&x.contract_id))
+                .collect(),
             users: Vec::new(),
             households: self.households.into_iter().filter(|h| h.id == id).collect(),
             memberships: self
@@ -317,6 +473,11 @@ impl BackupData {
                 .collect(),
             drafts: self
                 .drafts
+                .into_iter()
+                .filter(|d| d.household_id == id)
+                .collect(),
+            documents: self
+                .documents
                 .into_iter()
                 .filter(|d| d.household_id == id)
                 .collect(),
@@ -418,10 +579,10 @@ fn sha256(bytes: &[u8]) -> String {
         })
 }
 
-/// Zulässiger Objektschlüssel im Archiv: Foto einer Ablesung oder eines Entwurfs.
+/// Zulässiger Objektschlüssel im Archiv: Foto einer Ablesung oder eines
+/// Entwurfs, Dokument.
 fn valid_blob_key(key: &str) -> bool {
-    BlobKey::parse(key)
-        .is_some_and(|k| matches!(k.kind(), BlobKind::ReadingPhoto | BlobKind::DraftPhoto))
+    BlobKey::parse(key).is_some_and(|k| BlobKind::archived(k.kind()))
 }
 
 /// Schreibt ein Archiv: zuerst `data.json`, dann die Fotos, zuletzt das Manifest.

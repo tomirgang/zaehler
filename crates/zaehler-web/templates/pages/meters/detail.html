@@ -257,6 +257,36 @@
   {% endif %}
 </section>
 
+<section aria-labelledby="contracts-title">
+  <h2 id="contracts-title">{{ ctx.lang.t("contracts-title") }}</h2>
+  {% if contracts.is_empty() %}
+  <p class="muted">{{ ctx.lang.t("contracts-empty") }}</p>
+  {% else %}
+  <p><a class="button secondary" href="/meters/{{ id }}/costs">{{ ctx.lang.t("costs-title") }}</a></p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("contract-provider") }}</th>
+        <th>{{ ctx.lang.t("contract-direction") }}</th>
+        <th>{{ ctx.lang.t("contract-term") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in contracts %}
+      <tr>
+        <td><a href="/contracts/{{ c.id }}">{{ c.provider }}</a>{% if c.active %} <span class="tag">{{ ctx.lang.t("contract-active") }}</span>{% endif %}</td>
+        <td>{{ c.direction }}</td>
+        <td>{{ c.term }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if !templates.is_empty() %}
+  <p>{% for (code, label) in templates %}<a class="button secondary" href="/meters/{{ id }}/contracts/new?template={{ code }}">{{ ctx.lang.t("contract-new") }}: {{ label }}</a> {% endfor %}{% if ctx.can_write %}<a class="button secondary" href="/documents">{{ ctx.lang.t("document-import") }}</a>{% endif %}</p>
+  {% endif %}
+</section>
+
 <h2>{{ ctx.lang.t("meter-readings") }}</h2>
 {% if has_history %}<p><a href="/meters/{{ id }}/history">{{ ctx.lang.t("history-link") }}</a></p>{% endif %}
 {% if readings.is_empty() %}
