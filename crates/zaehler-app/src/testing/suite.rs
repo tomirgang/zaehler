@@ -141,6 +141,7 @@ pub async fn run(f: &dyn UnitOfWorkFactory) {
     revisions(f).await;
     contracts::contracts(f).await;
     vehicles_suite::vehicles(f).await;
+    pv_suite::pv(f).await;
 }
 
 #[path = "suite_documents.rs"]
@@ -152,6 +153,9 @@ mod contracts;
 
 #[path = "suite_vehicles.rs"]
 mod vehicles_suite;
+
+#[path = "suite_pv.rs"]
+mod pv_suite;
 
 /// Korrektur und Revisionen: Tenant-Isolation, Eindeutigkeit, Erhalt nach
 /// dem Löschen der Ablesung.

@@ -30,6 +30,8 @@ pub struct Resolved {
     /// Der Haushalt hat Fahrzeug-Messstellen; die Navigation zeigt dann
     /// „Fahrzeuge“
     pub has_vehicles: bool,
+    /// Der Haushalt hat PV-Anlagen; die Navigation zeigt dann „PV“
+    pub has_pv: bool,
 }
 
 use_case!(
@@ -121,6 +123,7 @@ impl ResolveTenant {
             .ok_or(AppError::Internal("kein Haushalt".into()))?;
         let tenant = Tenant::new(user.id, chosen.id, chosen.role);
         let has_contracts = uow.contracts().any(&tenant).await?;
+        let has_pv = !uow.pv().list(&tenant).await?.is_empty();
         let has_vehicles = uow
             .meters()
             .list(&tenant)
@@ -134,6 +137,7 @@ impl ResolveTenant {
             households,
             has_contracts,
             has_vehicles,
+            has_pv,
         })
     }
 }

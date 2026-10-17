@@ -23,6 +23,7 @@ pub mod jobs;
 pub mod member;
 pub mod meter;
 pub mod notify;
+pub mod pv;
 pub mod reading;
 mod validate;
 pub mod vehicle;
@@ -44,6 +45,8 @@ mod meter_unit_tests;
 mod meter_v1_tests;
 #[cfg(test)]
 mod notify_tests;
+#[cfg(test)]
+mod pv_tests;
 #[cfg(test)]
 mod reading_tests;
 #[cfg(test)]
@@ -204,6 +207,15 @@ pub struct UseCases {
     pub update_asset_cost: asset_cost::UpdateAssetCost,
     pub delete_asset_cost: asset_cost::DeleteAssetCost,
     pub vehicle_report: vehicle_report::VehicleReport,
+    pub list_pv_systems: pv::ListPvSystems,
+    pub get_pv_system: pv::GetPvSystem,
+    pub create_pv_system: pv::CreatePvSystem,
+    pub update_pv_system: pv::UpdatePvSystem,
+    pub delete_pv_system: pv::DeletePvSystem,
+    pub record_bulk_readings: pv::RecordBulkReadings,
+    pub grid_analysis: pv::GridAnalysis,
+    pub pv_system_report: pv::PvSystemReport,
+    pub pv_dashboard: pv::PvDashboard,
 }
 
 impl UseCases {
@@ -295,6 +307,15 @@ impl UseCases {
             update_asset_cost: asset_cost::UpdateAssetCost::new(p.clone()),
             delete_asset_cost: asset_cost::DeleteAssetCost::new(p.clone()),
             vehicle_report: vehicle_report::VehicleReport::new(p.clone()),
+            list_pv_systems: pv::ListPvSystems::new(p.clone()),
+            get_pv_system: pv::GetPvSystem::new(p.clone()),
+            create_pv_system: pv::CreatePvSystem::new(p.clone()),
+            update_pv_system: pv::UpdatePvSystem::new(p.clone()),
+            delete_pv_system: pv::DeletePvSystem::new(p.clone()),
+            record_bulk_readings: pv::RecordBulkReadings::new(p.clone()),
+            grid_analysis: pv::GridAnalysis::new(p.clone()),
+            pv_system_report: pv::PvSystemReport::new(p.clone()),
+            pv_dashboard: pv::PvDashboard::new(p.clone()),
         }
     }
 }

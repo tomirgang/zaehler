@@ -92,6 +92,34 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
                     state.cfg.max_document_bytes.saturating_add(64 * 1024),
                 )),
         )
+        .route("/pv", get(pages::pv::list))
+        .route("/pv/new", get(pages::pv::new_form).post(pages::pv::create))
+        .route("/pv/{id}", get(pages::pv::detail))
+        .route(
+            "/pv/{id}/edit",
+            get(pages::pv::edit_form).post(pages::pv::update),
+        )
+        .route("/pv/{id}/delete", post(pages::pv::delete))
+        .route("/pv/{id}/yield.json", get(pages::pv::yield_chart))
+        .route("/pv/{id}/balance.json", get(pages::pv::balance_chart))
+        .route(
+            "/pv/{id}/costs",
+            get(pages::asset_costs::pv_list).post(pages::asset_costs::pv_add),
+        )
+        .route(
+            "/pv/{id}/costs/{entry}/edit",
+            get(pages::asset_costs::pv_edit_form).post(pages::asset_costs::pv_update),
+        )
+        .route(
+            "/pv/{id}/costs/{entry}/delete",
+            post(pages::asset_costs::pv_delete),
+        )
+        .route("/pv/grid/{id}", get(pages::pv::grid))
+        .route("/pv/grid/{id}/chart.json", get(pages::pv::grid_chart))
+        .route(
+            "/pv/grid/{id}/readings",
+            get(pages::pv::bulk_form).post(pages::pv::bulk),
+        )
         .route("/vehicles", get(pages::vehicles::list))
         .route(
             "/vehicles/new",

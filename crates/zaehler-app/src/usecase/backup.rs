@@ -328,10 +328,18 @@ pub fn remap_household(
         c.id = map(c.id, &mut ids);
         c.document_id = c.document_id.and_then(|d| ids.get(&d).copied());
     }
+    for s in &mut data.pv_systems {
+        s.household_id = new_household;
+        s.id = map(s.id, &mut ids);
+    }
+    for m in &mut data.pv_system_meters {
+        m.pv_system_id = known(m.pv_system_id, &ids)?;
+        m.meter_id = known(m.meter_id, &ids)?;
+    }
     for c in &mut data.asset_costs {
         c.household_id = new_household;
-        // Fahrzeuge sind Messstellen; Anlagen anderer Art folgen mit M8
-        c.asset_id = map(c.asset_id, &mut ids);
+        // Fahrzeug: Messstelle, PV-Anlage: bereits umgeschlüsselt
+        c.asset_id = known(c.asset_id, &ids)?;
         c.id = map(c.id, &mut ids);
         c.document_id = c.document_id.and_then(|d| ids.get(&d).copied());
     }

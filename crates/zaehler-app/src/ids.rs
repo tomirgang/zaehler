@@ -74,6 +74,8 @@ id_type!(
     ChargingId,
     /// Eintrag im Kostenbuch
     AssetCostId,
+    /// PV-Anlage
+    PvSystemId,
 );
 
 /// Schlüssel im Objektspeicher, immer unter `households/{household_id}/`.

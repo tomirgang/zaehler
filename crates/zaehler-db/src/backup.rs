@@ -21,8 +21,9 @@ use zaehler_app::{
         AcquisitionRecord, AdjustmentRecord, AssetCostRecord, BackupData, ChargingSessionRecord,
         ConsumptionProfileRecord, ContractRecord, CostPositionRecord, DeviceRecord, DocumentRecord,
         DraftRecord, HouseholdRecord, InstallmentRecord, InvitationRecord, MembershipRecord,
-        MeterRecord, NotificationSettingRecord, PriceComponentRecord, ReadingRecord,
-        RegisterRecord, RevisionRecord, SettlementRecord, UserRecord, VehicleRecord,
+        MeterRecord, NotificationSettingRecord, PriceComponentRecord, PvSystemMeterRecord,
+        PvSystemRecord, ReadingRecord, RegisterRecord, RevisionRecord, SettlementRecord,
+        UserRecord, VehicleRecord,
     },
     port::{BackupRepository, PortResult},
 };
@@ -31,8 +32,8 @@ use crate::{
     entity::{
         adjustment, ai_draft, asset_cost, charging_session, contract, cost_position, document,
         household, installment, invitation, membership, meter, meter_device, notification_settings,
-        price_component, reading, reading_revision, register, settlement, user, vehicle,
-        vehicle_acquisition, vehicle_consumption_profile,
+        price_component, pv_system, pv_system_meter, reading, reading_revision, register,
+        settlement, user, vehicle, vehicle_acquisition, vehicle_consumption_profile,
     },
     uow::SeaOrmStore,
 };
@@ -415,6 +416,7 @@ async fn read_all(db: &DatabaseTransaction) -> PortResult<BackupData> {
     data.settlements.sort_by_key(|x| x.id);
     data.documents.sort_by_key(|x| x.id);
     read_vehicles(db, &mut data).await?;
+    read_pv(db, &mut data).await?;
     Ok(data)
 }
 
@@ -662,7 +664,8 @@ async fn write_all(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> 
     )
     .await?;
     write_contracts(txn, d).await?;
-    write_vehicles(txn, d).await
+    write_vehicles(txn, d).await?;
+    write_pv(txn, d).await
 }
 
 /// Verträge mit Positionen, Preisständen und Einträgen (ab
@@ -929,6 +932,80 @@ async fn write_vehicles(txn: &DatabaseTransaction, d: &BackupData) -> PortResult
                 recurrence_until: Set(x.recurrence_until),
                 document_id: Set(x.document_id),
                 note: Set(x.note.clone()),
+            })
+            .collect(),
+    )
+    .await
+}
+
+/// PV-Anlagen lesen (ab `m20261018_000014_pv`).
+async fn read_pv(db: &DatabaseTransaction, data: &mut BackupData) -> PortResult<()> {
+    data.pv_systems = records(db, "pv_systems", |r| {
+        Ok(PvSystemRecord {
+            id: r.get("id")?,
+            household_id: r.get("household_id")?,
+            name: r.get("name")?,
+            kind: r.get("kind")?,
+            kwp_milli: r.get("kwp_milli")?,
+            commissioned_on: r.get("commissioned_on")?,
+            azimuth: r.get("azimuth")?,
+            tilt: r.get("tilt")?,
+            inverter: r.get("inverter")?,
+            battery_kwh_milli: r.get("battery_kwh_milli")?,
+            specific_yield_milli: r.get("specific_yield_milli")?,
+            degradation_pct_milli: r.get("degradation_pct_milli")?,
+            month_shares: r.get("month_shares")?,
+            alarm_threshold_pct: r.get("alarm_threshold_pct")?,
+        })
+    })
+    .await?;
+    data.pv_system_meters = records(db, "pv_system_meters", |r| {
+        Ok(PvSystemMeterRecord {
+            pv_system_id: r.get("pv_system_id")?,
+            meter_id: r.get("meter_id")?,
+            role: r.get("role")?,
+        })
+    })
+    .await?;
+    data.pv_systems.sort_by_key(|x| x.id);
+    data.pv_system_meters
+        .sort_by_key(|x| (x.pv_system_id, x.meter_id));
+    Ok(())
+}
+
+/// PV-Anlagen schreiben (ab `m20261018_000014_pv`).
+async fn write_pv(txn: &DatabaseTransaction, d: &BackupData) -> PortResult<()> {
+    insert(
+        txn,
+        d.pv_systems
+            .iter()
+            .map(|x| pv_system::ActiveModel {
+                id: Set(x.id),
+                household_id: Set(x.household_id),
+                name: Set(x.name.clone()),
+                kind: Set(x.kind.clone()),
+                kwp_milli: Set(x.kwp_milli),
+                commissioned_on: Set(x.commissioned_on),
+                azimuth: Set(x.azimuth),
+                tilt: Set(x.tilt),
+                inverter: Set(x.inverter.clone()),
+                battery_kwh_milli: Set(x.battery_kwh_milli),
+                specific_yield_milli: Set(x.specific_yield_milli),
+                degradation_pct_milli: Set(x.degradation_pct_milli),
+                month_shares: Set(x.month_shares.clone()),
+                alarm_threshold_pct: Set(x.alarm_threshold_pct),
+            })
+            .collect(),
+    )
+    .await?;
+    insert(
+        txn,
+        d.pv_system_meters
+            .iter()
+            .map(|x| pv_system_meter::ActiveModel {
+                pv_system_id: Set(x.pv_system_id),
+                meter_id: Set(x.meter_id),
+                role: Set(x.role.clone()),
             })
             .collect(),
     )

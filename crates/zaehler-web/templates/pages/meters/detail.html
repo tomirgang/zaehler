@@ -76,6 +76,9 @@
   <h2 id="analysis-title">{{ ctx.lang.t("analysis-title") }}</h2>
   {% for msg in a.invalid %}<p class="callout warning">{{ msg }}</p>{% endfor %}
 
+  {% if a.uses_total %}
+  <p class="callout">{{ ctx.lang.t("pv-analysis-total") }} <a href="/pv/grid/{{ id }}">{{ ctx.lang.t("pv-grid-view") }}</a></p>
+  {% endif %}
   {% if !a.submeters.is_empty() %}
   <div class="callout">
     <p>{{ ctx.lang.t("analysis-submeters") }}

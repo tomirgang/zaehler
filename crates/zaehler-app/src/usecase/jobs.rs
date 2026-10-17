@@ -150,7 +150,12 @@ impl DispatchOutbox {
             OutboxEvent::ReadingsRecorded {
                 meter_id,
                 reading_ids,
-            } => self.alarm(entry.household_id, meter_id, &reading_ids).await,
+            } => {
+                self.alarm(entry.household_id, meter_id, &reading_ids)
+                    .await?;
+                self.pv_alarm(entry.household_id, meter_id, &reading_ids)
+                    .await
+            }
             OutboxEvent::InvitationCreated {
                 invitation_id,
                 token,
@@ -219,6 +224,83 @@ impl DispatchOutbox {
         Ok(())
     }
 
+    /// Ertragsalarm, wenn die Erzeugung seit der vorherigen Ablesung des
+    /// Erzeugungszählers unter dem Schwellwert der Erwartung liegt
+    /// (SPEC_PV_MONITORING); Schlüssel `pv_alarm:{anlage}:{ablesung}`,
+    /// Intervalle unter 24 h werden nicht bewertet.
+    // @impl SPEC_PV_MONITORING
+    async fn pv_alarm(
+        &self,
+        household: HouseholdId,
+        meter: MeterId,
+        readings: &[ReadingId],
+    ) -> Result<(), AppError> {
+        let t = Tenant::for_job(household);
+        let mut uow = self.p.uow.begin().await?;
+        let (detail, _, cal) = match load_for_job(uow.as_mut(), &t, meter).await {
+            Ok(x) => x,
+            Err(AppError::NotFound) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        if detail.aggregate.meter.archived {
+            return Ok(());
+        }
+        let household_name = uow.households().get(&t).await?.data.name;
+        for id in readings {
+            let Some(r) = detail.readings.iter().find(|x| x.id == *id) else {
+                continue;
+            };
+            let Some(prev) = detail
+                .readings
+                .iter()
+                .filter(|x| x.register_id == r.register_id && x.read_at < r.read_at)
+                .max_by_key(|x| x.read_at)
+            else {
+                continue;
+            };
+            if r.read_at - prev.read_at < chrono::Duration::hours(24) {
+                continue;
+            }
+            let checks =
+                super::pv::yield_checks(uow.as_mut(), &t, meter, cal, prev.read_at, r.read_at)
+                    .await?;
+            for c in checks {
+                if !zaehler_domain::pv::yield_alarm(
+                    c.generation,
+                    c.expected,
+                    c.system.data.alarm_threshold_pct,
+                ) {
+                    continue;
+                }
+                let notification = Notification::PvYieldAlarm {
+                    household: household_name.clone(),
+                    system: c.system.data.name.clone(),
+                    meter: detail.aggregate.meter.data.name.clone(),
+                    from: cal.local(prev.read_at),
+                    until: cal.local(r.read_at),
+                    generation: c.generation.round_dp(1),
+                    expected: c.expected.round_dp(1),
+                    threshold_pct: c.system.data.alarm_threshold_pct,
+                    link: format!("{}/pv/{}", self.p.settings.public_url, c.system.id),
+                    settings_link: settings_link(&self.p),
+                };
+                let recipients = self
+                    .p
+                    .jobs
+                    .recipients(household, NotificationKind::Alarm)
+                    .await?;
+                deliver(
+                    &self.p,
+                    household,
+                    &format!("pv_alarm:{}:{id}", c.system.id),
+                    &notification,
+                    recipients,
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
     /// Einladung an die angegebene Adresse in der Sprache der einladenden
     /// Person (SPEC_TEN_INVITES).
     // @impl SPEC_TEN_INVITES, SPEC_NTF_EMAIL

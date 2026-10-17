@@ -1,0 +1,71 @@
+{% extends "layout/base.html" %}
+
+{% macro kpi_table(rows, has_battery) %}
+<div class="table-scroll">
+<table class="table">
+  <thead>
+    <tr>
+      <th>{{ ctx.lang.t("vehicle-period") }}</th>
+      <th class="num">{{ ctx.lang.t("pv-generation") }}</th>
+      <th class="num">{{ ctx.lang.t("pv-self-consumption") }}</th>
+      <th class="num">{{ ctx.lang.t("pv-export") }}</th>
+      <th class="num">{{ ctx.lang.t("pv-import") }}</th>
+      <th class="num">{{ ctx.lang.t("pv-consumption") }}</th>
+      <th class="num">{{ ctx.lang.t("pv-ratio") }}</th>
+      <th class="num">{{ ctx.lang.t("pv-autarky") }}</th>
+      {% if has_battery %}<th>{{ ctx.lang.t("pv-battery") }}</th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <th scope="row">{{ r.label }}{% if r.partial %} <span class="tag">{{ ctx.lang.t("pv-partial") }}</span>{% endif %}{% if r.warning %} <span class="tag warning">{{ ctx.lang.t("pv-negative-ev") }}</span>{% endif %}</th>
+      <td class="num">{{ r.generation }}</td>
+      <td class="num">{{ r.self_consumption }}</td>
+      <td class="num">{{ r.export }}</td>
+      <td class="num">{{ r.import }}</td>
+      <td class="num">{{ r.consumption }}</td>
+      <td class="num">{{ r.ratio }}</td>
+      <td class="num">{{ r.autarky }}</td>
+      {% if has_battery %}<td>{{ r.battery }}</td>{% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("pv-grid-title") }}: {{ name }}</h1>
+  <div class="actions">
+    {% if ctx.can_write %}<a class="button" href="/pv/grid/{{ id }}/readings">{{ ctx.lang.t("pv-bulk") }}</a>{% endif %}
+    <a class="button secondary" href="/meters/{{ id }}">{{ name }}</a>
+  </div>
+</div>
+<p>{% for (sid, sname) in systems %}<a class="tag" href="/pv/{{ sid }}">{{ sname }}</a> {% endfor %}</p>
+{% if export_assumed %}<p class="callout">{{ ctx.lang.t("pv-export-assumed") }}</p>{% endif %}
+{% if has_battery %}<p class="hint">{{ ctx.lang.t("pv-battery-grid-hint") }}</p>{% endif %}
+
+<div class="charts" data-chart-url="/pv/grid/{{ id }}/chart.json" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
+  <h2 id="gen-chart-title">{{ ctx.lang.t("pv-generation-chart") }}</h2>
+  <div class="chart" data-chart="pvGeneration" role="img" aria-labelledby="gen-chart-title"></div>
+  <h2 id="cons-chart-title">{{ ctx.lang.t("pv-consumption-chart") }}</h2>
+  <div class="chart" data-chart="pvConsumption" role="img" aria-labelledby="cons-chart-title"></div>
+</div>
+
+<h2>{{ ctx.lang.t("pv-years") }}</h2>
+{% call kpi_table(years, has_battery) %}{% endcall %}
+<h2>{{ ctx.lang.t("pv-months") }}</h2>
+{% call kpi_table(months, has_battery) %}{% endcall %}
+
+{% if !yields.is_empty() %}
+<h2>{{ ctx.lang.t("pv-specific") }}</h2>
+<table class="table">
+  <thead><tr><th>{{ ctx.lang.t("pv-name") }}</th><th>{{ ctx.lang.t("vehicle-period") }}</th><th class="num">{{ ctx.lang.t("pv-generation") }}</th><th class="num">{{ ctx.lang.t("pv-specific-yield") }}</th></tr></thead>
+  <tbody>
+    {% for (n, y, g, s) in yields %}<tr><td>{{ n }}</td><td>{{ y }}</td><td class="num">{{ g }}</td><td class="num">{{ s }}</td></tr>{% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

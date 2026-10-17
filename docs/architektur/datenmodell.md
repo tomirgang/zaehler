@@ -122,7 +122,7 @@ erDiagram
 
 ```{spec} Zuordnung von Messstellen zu PV-Anlagen
 :id: SPEC_PV_ASSIGNMENT
-:status: draft
+:status: implemented
 :satisfies: REQ_PV_001, REQ_PV_002
 :links: ADR_021
 
@@ -135,4 +135,9 @@ Messstellen haben die Art Strom und gehören zum selben Haushalt. Eine
 Messstelle mit Rolle `battery` hat genau die Register `charge` (Bezug) und
 `discharge` (Einspeisung). Anlagen vom Typ `surplus` oder `full_feed_in`
 setzen am Hausanschluss ein Register mit Richtung Einspeisung voraus.
+
+Umsetzung: Migration `m20261018_000014_pv`. Die Eindeutigkeit der Rollen
+`generation` und `battery` prüft der Anwendungsfall (Konflikt
+`pv.meter_assigned`), da ein Teilindex über den Query-Builder nicht
+einheitlich für SQLite und PostgreSQL anlegbar ist.
 ```

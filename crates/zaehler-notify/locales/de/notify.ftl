@@ -24,3 +24,7 @@ role-viewer = Lesen
 
 footer-settings = Benachrichtigungen einstellen: { $link }
 footer-sender = Diese Nachricht wurde automatisch von Zähler versendet.
+
+pv-alarm-subject = Geringer PV-Ertrag: { $system }
+pv-alarm-intro = Im Haushalt „{ $household }“ liegt die Erzeugung der PV-Anlage „{ $system }“ (Messstelle „{ $meter }“) unter der Erwartung.
+pv-alarm-generation = Erzeugung: { $generation } kWh, erwartet: { $expected } kWh (Schwellwert { $threshold } %)

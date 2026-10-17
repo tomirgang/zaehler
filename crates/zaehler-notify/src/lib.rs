@@ -267,6 +267,7 @@ impl Texts {
 /// oder `en`, sonst Deutsch).
 // @impl SPEC_NTF_EMAIL, SPEC_NTF_REMINDERS, SPEC_NTF_ALARMS
 #[must_use]
+#[allow(clippy::too_many_lines)] // ein Abschnitt je Benachrichtigung
 pub fn render(notification: &Notification, locale: &str) -> (String, String) {
     let x = Texts::new(locale);
     let mut lines = Vec::new();
@@ -334,6 +335,44 @@ pub fn render(notification: &Notification, locale: &str) -> (String, String) {
             lines.push(x.t("alarm-details", &[("link", link.clone())]));
             lines.push(settings(settings_link));
             x.t("alarm-subject", &[("meter", meter.clone())])
+        }
+        Notification::PvYieldAlarm {
+            household,
+            system,
+            meter,
+            from,
+            until,
+            generation,
+            expected,
+            threshold_pct,
+            link,
+            settings_link,
+        } => {
+            lines.push(x.t(
+                "pv-alarm-intro",
+                &[
+                    ("household", household.clone()),
+                    ("system", system.clone()),
+                    ("meter", meter.clone()),
+                ],
+            ));
+            lines.push(String::new());
+            lines.push(x.t(
+                "alarm-period",
+                &[("from", x.datetime(*from)), ("until", x.datetime(*until))],
+            ));
+            lines.push(x.t(
+                "pv-alarm-generation",
+                &[
+                    ("generation", x.number(*generation)),
+                    ("expected", x.number(*expected)),
+                    ("threshold", threshold_pct.to_string()),
+                ],
+            ));
+            lines.push(String::new());
+            lines.push(x.t("alarm-details", &[("link", link.clone())]));
+            lines.push(settings(settings_link));
+            x.t("pv-alarm-subject", &[("system", system.clone())])
         }
         Notification::Invitation {
             household,

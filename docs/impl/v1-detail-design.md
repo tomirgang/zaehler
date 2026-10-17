@@ -33,7 +33,7 @@ crates/
       document.rs      UploadDocument, AnalyseDocument, ConfirmInvoice, ConfirmReceipt, DiscardDocument, GetDocument
       vehicle.rs       CreateVehicle, UpdateVehicle, SetConsumptionProfile, RecordCharging, VehicleReport
       asset_cost.rs    AddAssetCost, UpdateAssetCost, DeleteAssetCost, ListAssetCosts
-      pv.rs            CreatePvSystem, UpdatePvSystem, AssignMeters, GridAnalysis, PvSystemReport
+      pv.rs            CreatePvSystem, UpdatePvSystem, RecordBulkReadings, GridAnalysis, PvSystemReport
       notify.rs        GetNotificationSettings, UpdateNotificationSettings
       jobs.rs          DispatchOutbox, SendReminders (Jobs)
       api.rs           ResolveApiTenant, CreateApiToken, RevokeApiToken, ListApiTokens, IngestReadings
@@ -97,7 +97,7 @@ des Namens wird beim Anlegen vergeben.
 | `…_000011_tariffs` | WP_V1_07 | `contracts`, `cost_positions`, `price_components`, `installments`, `adjustments`, `settlements` (neu; `settlements.document_id` ohne Fremdschlüssel) |
 | `…_000012_documents` | WP_V1_10 | `documents` (neu, mit Status, Modell und Erkennungsergebnis als JSON); `ai_drafts` bleibt unverändert |
 | `…_000013_vehicles` | WP_V1_11, WP_V1_12 | `vehicles`, `vehicle_consumption_profiles`, `vehicle_acquisitions`, `charging_sessions`, `asset_costs` (neu); als `m20261018_000013_vehicles`, `asset_costs.asset_id` und `document_id` ohne Fremdschlüssel |
-| `…_000014_pv` | WP_V1_15 | `pv_systems`, `pv_system_meters` (neu) |
+| `…_000014_pv` | WP_V1_15 | `pv_systems`, `pv_system_meters` (neu); als `m20261018_000014_pv`, ohne Teilindex (Eindeutigkeit der Rollen `generation` und `battery` im Anwendungsfall) |
 | `…_000015_api` | WP_V1_20 | `api_tokens` (neu); `readings.api_token_id` |
 
 Abweichungen vom geplanten Modell in {doc}`../architektur/datenmodell`:
@@ -250,7 +250,7 @@ Mindestrolle gemäß {need}`SPEC_TEN_ROLES`: `V` Viewer, `M` Member, `O` Owner,
 | Dokumente | `UploadDocument`, `AnalyseDocument`, `ConfirmInvoice`, `ConfirmReceipt`, `DiscardDocument` M; `GetDocument` V | |
 | Fahrzeuge | `CreateVehicle`, `UpdateVehicle`, `SetConsumptionProfile`, `SetAcquisition` O; `RecordCharging` M; `VehicleReport` V | |
 | Kostenbuch | `AddAssetCost`, `UpdateAssetCost`, `DeleteAssetCost` M; `ListAssetCosts` V | |
-| PV | `CreatePvSystem`, `UpdatePvSystem`, `DeletePvSystem`, `AssignMeters` O; `GridAnalysis`, `PvSystemReport` V | |
+| PV | `CreatePvSystem`, `UpdatePvSystem`, `DeletePvSystem` O; `RecordBulkReadings` M; `ListPvSystems`, `GetPvSystem`, `GridAnalysis`, `PvSystemReport`, `PvDashboard` V | Zuordnung als Teil von Anlegen und Ändern |
 | Benachrichtigung | `GetNotificationSettings`, `UpdateNotificationSettings` V (nur eigener Nutzer); `DispatchOutbox`, `SendReminders` J | |
 | API | `CreateApiToken`, `RevokeApiToken`, `ListApiTokens` V (eigene), O (alle); `ResolveApiTenant`; `IngestReadings` M | |
 | Export | `ExportHouseholdCsv` O | |
@@ -412,7 +412,8 @@ der Grundpreise, umgerechnet mit den heute gültigen Arbeitspreisen (auch
 Staffeln und Faktoren) in eine Jahresmenge; Positionen auf einem einzelnen
 Register zählen näherungsweise mit dem Anteil 1 / Anzahl der Bezugsregister.
 Die Quelle wird als „Abschlag“ angezeigt. Die Bewertung des
-Gesamtverbrauchs bei PV-Anlagen folgt mit M8.
+Gesamtverbrauchs bei PV-Anlagen nutzt die Monatsserie *V* aus
+`GridAnalysis`.
 ```
 
 ### Benachrichtigungen
@@ -436,8 +437,9 @@ dem OIDC-Login, falls vorhanden), Ereignistypen `reminder`, `alarm`,
 Einstellungsseite. E-Mail-Adressen erscheinen nicht in Logs.
 
 Umsetzung: Der Konfigurationsschlüssel `notify.smtp.*` aus dem MVP bleibt
-erhalten. Der Ereignistyp `pv_alarm` entsteht mit M8; bis dahin speichert
-`notification_settings` `reminder` und `alarm`. SMTP-Fehler werden nur als
+erhalten. `notification_settings` speichert `reminder` und `alarm`; der
+PV-Alarm geht an Empfänger mit `alarm`, ein eigener Typ `pv_alarm` besteht
+nicht. SMTP-Fehler werden nur als
 Kategorie (`permanent`, `transient`, `timeout`, `tls`, `connection` mit
 Statuscode) weitergegeben, weil Serverantworten Adressen enthalten können;
 Logs nennen nur die Nutzer-ID. Die Einstellungen sind im
@@ -476,7 +478,8 @@ Erzeugungszähler einer PV-Anlage, gilt zusätzlich {need}`SPEC_PV_MONITORING`
 
 Umsetzung: Bewertet wird die Summe des Intervalls gegen die anteilige Summe
 der Monatsbänder (gewichtet mit dem Saisonprofil), was der Tagesrate
-entspricht. Der PV-Teil folgt mit M8. Archivierte Messstellen lösen keinen
+entspricht. Der PV-Alarm verwendet den Schlüssel
+`pv_alarm:{system}:{reading}` und die Empfänger mit `alarm`. Archivierte Messstellen lösen keinen
 Alarm aus.
 ```
 
@@ -692,7 +695,8 @@ Umsetzung: Wiederholungen werden je Buchung vom ursprünglichen Tag aus
 gerechnet (31.01. ergibt 28.02., 31.03.). Menge und „vollgetankt“ nur bei
 Kraftstoff, Kilometerstand nur bei Fahrzeugen. Die übernommene Ablesung
 liegt um 12:00 Uhr lokal am Buchungstag; bei Warnungen wird nichts
-gespeichert, bis sie bestätigt sind. PV-Anlagen als Anlage folgen mit M8.
+gespeichert, bis sie bestätigt sind. Das Kostenbuch einer PV-Anlage liegt
+unter `/pv/{id}/costs`.
 ```
 
 ```{spec} Kraftstoffverbrauch nach Vollbetankungsmethode
@@ -763,7 +767,11 @@ Zuordnung und Darstellung in {need}`SPEC_PV_ASSIGNMENT`,
 - Sammelerfassung: `GET/POST /pv/grid/{meter}/readings` mit allen Registern;
   Fotos über die vorhandene Mehrfach-Erfassung ({need}`SPEC_AI_MULTI`) mit
   Parameter `grid={meter}`, gemeinsamer Bestätigungsseite und gemeinsamem
-  Zeitpunkt.
+  Zeitpunkt. Stand: Formular umgesetzt, Fotos offen.
+- Stand der Umsetzung: `GridAnalysis` liefert Monats-, Jahres- und
+  Abrechnungsjahrzeilen; die Detailseite verwendet *V* für Vergleiche, Ampel
+  und Tabelle, Prognose und Diagramm noch den Bezug. Diagrammdaten unter
+  `/pv/grid/{id}/chart.json`, `/pv/{id}/yield.json`, `/pv/{id}/balance.json`.
 
 ### REST-API
 

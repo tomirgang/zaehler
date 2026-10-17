@@ -307,6 +307,36 @@ async fn role_matrix() {
             uc.set_acquisition.execute(t, car, None).await,
             &at("SetAcquisition"),
         );
+        let pv = || crate::usecase::pv::PvSystemInput {
+            data: zaehler_domain::pv::PvSystemData {
+                name: "x".into(),
+                kind: zaehler_domain::pv::PvKind::PlugIn,
+                kwp: Decimal::ONE,
+                commissioned_on: contract_input().starts_on,
+                azimuth: None,
+                tilt: None,
+                inverter: None,
+                battery_kwh: None,
+                specific_yield: Decimal::ONE,
+                degradation_pct: Decimal::ZERO,
+                month_shares: None,
+                alarm_threshold_pct: 50,
+            },
+            meters: Vec::new(),
+        };
+        let system = crate::ids::PvSystemId(Uuid::now_v7());
+        forbidden(
+            uc.create_pv_system.execute(t, pv()).await,
+            &at("CreatePvSystem"),
+        );
+        forbidden(
+            uc.update_pv_system.execute(t, system, pv()).await,
+            &at("UpdatePvSystem"),
+        );
+        forbidden(
+            uc.delete_pv_system.execute(t, system).await,
+            &at("DeletePvSystem"),
+        );
     }
 
     // Verträge ab Member
@@ -499,6 +529,21 @@ async fn role_matrix() {
             .execute(t, AssetCostId(Uuid::now_v7()))
             .await,
         "DeleteAssetCost",
+    );
+    forbidden(
+        uc.record_bulk_readings
+            .execute(
+                t,
+                car,
+                crate::usecase::pv::BulkInput {
+                    at: Utc::now(),
+                    values: Vec::new(),
+                    note: None,
+                    confirm_warnings: false,
+                },
+            )
+            .await,
+        "RecordBulkReadings",
     );
     forbidden(
         uc.upload_csv.execute(t, Bytes::from_static(b"a;b\n")).await,

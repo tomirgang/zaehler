@@ -422,6 +422,20 @@ pub enum Notification {
         link: String,
         settings_link: String,
     },
+    /// Erzeugung einer PV-Anlage unter dem Schwellwert der Erwartung
+    /// (SPEC_PV_MONITORING)
+    PvYieldAlarm {
+        household: String,
+        system: String,
+        meter: String,
+        from: chrono::NaiveDateTime,
+        until: chrono::NaiveDateTime,
+        generation: Decimal,
+        expected: Decimal,
+        threshold_pct: u8,
+        link: String,
+        settings_link: String,
+    },
     Invitation {
         household: String,
         inviter: String,
@@ -436,7 +450,7 @@ impl Notification {
     pub fn kind(&self) -> NotificationKind {
         match self {
             Self::Reminder { .. } => NotificationKind::Reminder,
-            Self::ConsumptionAlarm { .. } => NotificationKind::Alarm,
+            Self::ConsumptionAlarm { .. } | Self::PvYieldAlarm { .. } => NotificationKind::Alarm,
             Self::Invitation { .. } => NotificationKind::Invitation,
         }
     }
@@ -1121,6 +1135,14 @@ pub struct AssetRef {
 
 impl AssetRef {
     #[must_use]
+    pub fn pv(id: crate::ids::PvSystemId) -> Self {
+        Self {
+            asset_type: zaehler_domain::assets::AssetType::PvSystem,
+            id: id.0,
+        }
+    }
+
+    #[must_use]
     pub fn vehicle(meter: MeterId) -> Self {
         Self {
             asset_type: zaehler_domain::assets::AssetType::Vehicle,
@@ -1247,4 +1269,31 @@ pub fn parse_extraction(
         DocumentKind::Invoice => (Some(serde_json::from_str(json)?), None),
         DocumentKind::Receipt => (None, Some(serde_json::from_str(json)?)),
     })
+}
+
+/// PV-Anlage mit zugeordneten Messstellen (SPEC_PV_ASSIGNMENT, ADR_021).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PvSystem {
+    pub id: crate::ids::PvSystemId,
+    pub data: zaehler_domain::pv::PvSystemData,
+    /// Messstellen mit Rolle, nach Rolle sortiert
+    pub meters: Vec<(MeterId, zaehler_domain::pv::PvRole)>,
+}
+
+impl PvSystem {
+    /// Messstelle mit Rolle `grid`.
+    #[must_use]
+    pub fn grid(&self) -> Option<MeterId> {
+        self.with_role(zaehler_domain::pv::PvRole::Grid).next()
+    }
+
+    pub fn with_role(
+        &self,
+        role: zaehler_domain::pv::PvRole,
+    ) -> impl Iterator<Item = MeterId> + '_ {
+        self.meters
+            .iter()
+            .filter(move |(_, r)| *r == role)
+            .map(|(m, _)| *m)
+    }
 }

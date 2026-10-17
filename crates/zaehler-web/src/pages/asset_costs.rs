@@ -1,5 +1,6 @@
-//! Kostenbuch eines Fahrzeugs: Liste je Jahr mit Summen je Kategorie,
-//! Anlegen, Ändern und Löschen (SPEC_ASSET_COSTS).
+//! Kostenbuch eines Fahrzeugs oder einer PV-Anlage: Liste je Jahr mit
+//! Summen je Kategorie, Anlegen, Ändern und Löschen (SPEC_ASSET_COSTS,
+//! ADR_020).
 
 use std::collections::HashMap;
 
@@ -14,12 +15,12 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use zaehler_app::{
     AppError, FieldErrors,
-    ids::{AssetCostId, MeterId},
+    ids::{AssetCostId, MeterId, PvSystemId},
     model::{AssetCost, AssetRef},
     usecase::asset_cost::AssetCostInput,
 };
 use zaehler_domain::{
-    assets::{AssetCategory, AssetType, Recurrence, VehicleCostCategory},
+    assets::{AssetCategory, AssetType, Recurrence},
     calendar::Calendar,
 };
 
@@ -34,6 +35,61 @@ use crate::{
     },
     state::WebState,
 };
+
+/// Anlage eines Kostenbuchs.
+#[derive(Debug, Clone, Copy)]
+enum Owner {
+    Vehicle(MeterId),
+    Pv(PvSystemId),
+}
+
+impl Owner {
+    fn asset(self) -> AssetRef {
+        match self {
+            Self::Vehicle(m) => AssetRef::vehicle(m),
+            Self::Pv(p) => AssetRef::pv(p),
+        }
+    }
+
+    fn asset_type(self) -> AssetType {
+        self.asset().asset_type
+    }
+
+    /// Pfad der Anlagenseite.
+    fn base(self) -> String {
+        match self {
+            Self::Vehicle(m) => format!("/vehicles/{m}"),
+            Self::Pv(p) => format!("/pv/{p}"),
+        }
+    }
+
+    async fn name(self, state: &WebState, ctx: &Ctx) -> Result<String, Response> {
+        match self {
+            Self::Vehicle(m) => state
+                .uc
+                .get_vehicle
+                .execute(&ctx.tenant, m)
+                .await
+                .map(|d| d.meter.meter.data.name)
+                .map_err(|e| ctx.fail(e)),
+            Self::Pv(p) => state
+                .uc
+                .get_pv_system
+                .execute(&ctx.tenant, p)
+                .await
+                .map(|s| s.data.name)
+                .map_err(|e| ctx.fail(e)),
+        }
+    }
+}
+
+fn vehicle(id: &str) -> Result<Owner, AppError> {
+    parse_meter(id).map(Owner::Vehicle)
+}
+
+fn pv(id: &str) -> Result<Owner, AppError> {
+    id.parse().map(Owner::Pv).map_err(|_| AppError::NotFound)
+}
 
 pub struct CostRow {
     pub id: String,
@@ -50,7 +106,9 @@ pub struct CostRow {
 #[template(path = "pages/vehicles/costs.html")]
 struct BookPage {
     ctx: PageCtx,
-    id: String,
+    /// Pfad der Anlagenseite
+    base: String,
+    is_vehicle: bool,
     name: String,
     year: i32,
     rows: Vec<CostRow>,
@@ -78,9 +136,9 @@ impl BookPage {
     }
 }
 
-pub(crate) fn category_options(lang: Lang) -> Vec<(String, String)> {
-    VehicleCostCategory::ALL
-        .iter()
+fn options(lang: Lang, asset: AssetType) -> Vec<(String, String)> {
+    AssetCategory::all(asset)
+        .into_iter()
         .map(|c| {
             (
                 c.as_str().to_owned(),
@@ -88,6 +146,11 @@ pub(crate) fn category_options(lang: Lang) -> Vec<(String, String)> {
             )
         })
         .collect()
+}
+
+/// Kategorien eines Fahrzeugs (Belegerkennung).
+pub(crate) fn category_options(lang: Lang) -> Vec<(String, String)> {
+    options(lang, AssetType::Vehicle)
 }
 
 fn row(lang: Lang, c: &AssetCost, in_year: Decimal) -> CostRow {
@@ -171,7 +234,7 @@ fn values_of(lang: Lang, c: &AssetCost) -> HashMap<String, String> {
 async fn book_page(
     state: &WebState,
     ctx: &Ctx,
-    id: MeterId,
+    owner: Owner,
     year: i32,
     entry: Option<AssetCostId>,
     values: HashMap<String, String>,
@@ -179,17 +242,11 @@ async fn book_page(
     warning: Option<String>,
 ) -> Result<BookPage, Response> {
     let lang = ctx.page.lang;
-    let fail = |e| ctx.fail(e);
-    let detail = state
-        .uc
-        .get_vehicle
-        .execute(&ctx.tenant, id)
-        .await
-        .map_err(fail)?;
+    let name = owner.name(state, ctx).await?;
     let book = state
         .uc
         .list_asset_costs
-        .execute(&ctx.tenant, AssetRef::vehicle(id), year)
+        .execute(&ctx.tenant, owner.asset(), year)
         .await
         .map_err(|e| ctx.fail(e))?;
     let mut values = values;
@@ -200,8 +257,9 @@ async fn book_page(
         );
     }
     Ok(BookPage {
-        id: id.to_string(),
-        name: detail.meter.meter.data.name.clone(),
+        base: owner.base(),
+        is_vehicle: matches!(owner, Owner::Vehicle(_)),
+        name,
         year,
         rows: book
             .entries
@@ -215,7 +273,7 @@ async fn book_page(
             .map(|(c, v)| (lang.t(&format!("cost-cat-{}", c.as_str())), money(lang, *v)))
             .collect(),
         total: money(lang, book.total),
-        categories: category_options(lang),
+        categories: options(lang, owner.asset_type()),
         entry: entry.map(|e| e.to_string()),
         values,
         errors,
@@ -233,33 +291,18 @@ fn this_year(ctx: &Ctx) -> i32 {
     Calendar::new(ctx.page.tz).local_date(Utc::now()).year()
 }
 
-// @impl SPEC_ASSET_COSTS
-pub async fn list(
-    State(state): State<WebState>,
-    ctx: Ctx,
-    Path(id): Path<String>,
-    Query(q): Query<YearQuery>,
-) -> Result<Response, Response> {
-    let id = parse_meter(&id).map_err(|e| ctx.fail(e))?;
-    let year = q.year.unwrap_or_else(|| this_year(&ctx));
-    let page = book_page(
-        &state,
-        &ctx,
-        id,
-        year,
-        None,
-        HashMap::new(),
-        FieldErrors::default(),
-        None,
-    )
-    .await?;
-    Ok(render(&page))
+/// Eintrag eines Fahrzeugs aus den Formularfeldern (auch Belegerkennung).
+pub(crate) fn cost_input(e: &mut FieldErrors, form: &FormData) -> Option<AssetCostInput> {
+    cost_input_for(e, form, AssetType::Vehicle)
 }
 
-/// Eintrag aus den Formularfeldern.
-pub(crate) fn cost_input(e: &mut FieldErrors, form: &FormData) -> Option<AssetCostInput> {
+fn cost_input_for(
+    e: &mut FieldErrors,
+    form: &FormData,
+    asset: AssetType,
+) -> Option<AssetCostInput> {
     let booked_on = required_date(e, "booked_on", form.get("booked_on"));
-    let category = AssetCategory::parse(AssetType::Vehicle, form.get("category")).or_else(|| {
+    let category = AssetCategory::parse(asset, form.get("category")).or_else(|| {
         e.add("category", "form.kind_invalid");
         None
     });
@@ -291,7 +334,7 @@ pub(crate) fn cost_input(e: &mut FieldErrors, form: &FormData) -> Option<AssetCo
 async fn after(
     state: &WebState,
     ctx: &Ctx,
-    id: MeterId,
+    owner: Owner,
     entry: Option<AssetCostId>,
     form: FormData,
     result: Result<Option<String>, AppError>,
@@ -305,65 +348,96 @@ async fn after(
     let (errors, warning) = match result {
         Ok(None) => {
             ctx.flash(flash).await;
-            return Ok(see_other(&format!("/vehicles/{id}/costs?year={year}")));
+            return Ok(see_other(&format!("{}/costs?year={year}", owner.base())));
         }
         Ok(Some(w)) => (FieldErrors::default(), Some(w)),
         Err(AppError::Validation(e)) => (e, None),
         Err(e) => return Err(ctx.fail(e)),
     };
-    let page = book_page(state, ctx, id, year, entry, form.0, errors, warning).await?;
+    let page = book_page(state, ctx, owner, year, entry, form.0, errors, warning).await?;
     Ok(render_status(StatusCode::UNPROCESSABLE_ENTITY, &page))
-}
-
-// @impl SPEC_ASSET_COSTS
-pub async fn add(
-    State(state): State<WebState>,
-    ctx: Ctx,
-    Path(id): Path<String>,
-    axum::Form(pairs): axum::Form<Vec<(String, String)>>,
-) -> Result<Response, Response> {
-    let id = parse_meter(&id).map_err(|e| ctx.fail(e))?;
-    let form = FormData::new(pairs);
-    let mut e = FieldErrors::default();
-    let result = match cost_input(&mut e, &form) {
-        Some(input) if e.is_empty() => state
-            .uc
-            .add_asset_cost
-            .execute(&ctx.tenant, AssetRef::vehicle(id), input)
-            .await
-            .map(|o| warning_of(ctx.page.lang, o)),
-        _ => Err(AppError::Validation(e)),
-    };
-    after(&state, &ctx, id, None, form, result, "flash-cost-saved").await
 }
 
 fn parse_entry(entry: &str) -> Result<AssetCostId, AppError> {
     entry.parse().map_err(|_| AppError::NotFound)
 }
 
-/// Eintrag im Formular der Kostenbuch-Seite bearbeiten.
-pub async fn edit_form(
-    State(state): State<WebState>,
-    ctx: Ctx,
-    Path((id, entry)): Path<(String, String)>,
-) -> Result<Response, Response> {
-    let id = parse_meter(&id).map_err(|e| ctx.fail(e))?;
-    let entry = parse_entry(&entry).map_err(|e| ctx.fail(e))?;
+/// Eintrag der Anlage.
+async fn owned(
+    state: &WebState,
+    ctx: &Ctx,
+    owner: Owner,
+    entry: &str,
+) -> Result<AssetCost, Response> {
+    let entry = parse_entry(entry).map_err(|e| ctx.fail(e))?;
     let c = state
         .uc
         .get_asset_cost
         .execute(&ctx.tenant, entry)
         .await
         .map_err(|e| ctx.fail(e))?;
-    if c.asset != AssetRef::vehicle(id) {
+    if c.asset != owner.asset() {
         return Err(ctx.fail(AppError::NotFound));
     }
+    Ok(c)
+}
+
+// @impl SPEC_ASSET_COSTS
+async fn list_for(
+    state: WebState,
+    ctx: Ctx,
+    owner: Owner,
+    q: YearQuery,
+) -> Result<Response, Response> {
+    let year = q.year.unwrap_or_else(|| this_year(&ctx));
     let page = book_page(
         &state,
         &ctx,
-        id,
+        owner,
+        year,
+        None,
+        HashMap::new(),
+        FieldErrors::default(),
+        None,
+    )
+    .await?;
+    Ok(render(&page))
+}
+
+// @impl SPEC_ASSET_COSTS
+async fn add_for(
+    state: WebState,
+    ctx: Ctx,
+    owner: Owner,
+    pairs: Vec<(String, String)>,
+) -> Result<Response, Response> {
+    let form = FormData::new(pairs);
+    let mut e = FieldErrors::default();
+    let result = match cost_input_for(&mut e, &form, owner.asset_type()) {
+        Some(input) if e.is_empty() => state
+            .uc
+            .add_asset_cost
+            .execute(&ctx.tenant, owner.asset(), input)
+            .await
+            .map(|o| warning_of(ctx.page.lang, o)),
+        _ => Err(AppError::Validation(e)),
+    };
+    after(&state, &ctx, owner, None, form, result, "flash-cost-saved").await
+}
+
+async fn edit_for(
+    state: WebState,
+    ctx: Ctx,
+    owner: Owner,
+    entry: String,
+) -> Result<Response, Response> {
+    let c = owned(&state, &ctx, owner, &entry).await?;
+    let page = book_page(
+        &state,
+        &ctx,
+        owner,
         c.booked_on.year(),
-        Some(entry),
+        Some(c.id),
         values_of(ctx.page.lang, &c),
         FieldErrors::default(),
         None,
@@ -373,21 +447,21 @@ pub async fn edit_form(
 }
 
 // @impl SPEC_ASSET_COSTS
-pub async fn update(
-    State(state): State<WebState>,
+async fn update_for(
+    state: WebState,
     ctx: Ctx,
-    Path((id, entry)): Path<(String, String)>,
-    axum::Form(pairs): axum::Form<Vec<(String, String)>>,
+    owner: Owner,
+    entry: String,
+    pairs: Vec<(String, String)>,
 ) -> Result<Response, Response> {
-    let id = parse_meter(&id).map_err(|e| ctx.fail(e))?;
-    let entry = parse_entry(&entry).map_err(|e| ctx.fail(e))?;
+    let c = owned(&state, &ctx, owner, &entry).await?;
     let form = FormData::new(pairs);
     let mut e = FieldErrors::default();
-    let result = match cost_input(&mut e, &form) {
+    let result = match cost_input_for(&mut e, &form, owner.asset_type()) {
         Some(input) if e.is_empty() => state
             .uc
             .update_asset_cost
-            .execute(&ctx.tenant, entry, input)
+            .execute(&ctx.tenant, c.id, input)
             .await
             .map(|()| None),
         _ => Err(AppError::Validation(e)),
@@ -395,8 +469,8 @@ pub async fn update(
     after(
         &state,
         &ctx,
-        id,
-        Some(entry),
+        owner,
+        Some(c.id),
         form,
         result,
         "flash-cost-saved",
@@ -404,31 +478,123 @@ pub async fn update(
     .await
 }
 
+async fn delete_for(
+    state: WebState,
+    ctx: Ctx,
+    owner: Owner,
+    entry: String,
+) -> Result<Response, Response> {
+    let c = owned(&state, &ctx, owner, &entry).await?;
+    state
+        .uc
+        .delete_asset_cost
+        .execute(&ctx.tenant, c.id)
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    ctx.flash("flash-entry-deleted").await;
+    Ok(see_other(&format!(
+        "{}/costs?year={}",
+        owner.base(),
+        c.booked_on.year()
+    )))
+}
+
+// --- Fahrzeuge -------------------------------------------------------------
+
+pub async fn list(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path(id): Path<String>,
+    Query(q): Query<YearQuery>,
+) -> Result<Response, Response> {
+    let owner = vehicle(&id).map_err(|e| ctx.fail(e))?;
+    list_for(state, ctx, owner, q).await
+}
+
+pub async fn add(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path(id): Path<String>,
+    axum::Form(pairs): axum::Form<Vec<(String, String)>>,
+) -> Result<Response, Response> {
+    let owner = vehicle(&id).map_err(|e| ctx.fail(e))?;
+    add_for(state, ctx, owner, pairs).await
+}
+
+pub async fn edit_form(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path((id, entry)): Path<(String, String)>,
+) -> Result<Response, Response> {
+    let owner = vehicle(&id).map_err(|e| ctx.fail(e))?;
+    edit_for(state, ctx, owner, entry).await
+}
+
+pub async fn update(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path((id, entry)): Path<(String, String)>,
+    axum::Form(pairs): axum::Form<Vec<(String, String)>>,
+) -> Result<Response, Response> {
+    let owner = vehicle(&id).map_err(|e| ctx.fail(e))?;
+    update_for(state, ctx, owner, entry, pairs).await
+}
+
 pub async fn delete(
     State(state): State<WebState>,
     ctx: Ctx,
     Path((id, entry)): Path<(String, String)>,
 ) -> Result<Response, Response> {
-    let id = parse_meter(&id).map_err(|e| ctx.fail(e))?;
-    let entry = parse_entry(&entry).map_err(|e| ctx.fail(e))?;
-    let c = state
-        .uc
-        .get_asset_cost
-        .execute(&ctx.tenant, entry)
-        .await
-        .map_err(|e| ctx.fail(e))?;
-    if c.asset != AssetRef::vehicle(id) {
-        return Err(ctx.fail(AppError::NotFound));
-    }
-    state
-        .uc
-        .delete_asset_cost
-        .execute(&ctx.tenant, entry)
-        .await
-        .map_err(|e| ctx.fail(e))?;
-    ctx.flash("flash-entry-deleted").await;
-    Ok(see_other(&format!(
-        "/vehicles/{id}/costs?year={}",
-        c.booked_on.year()
-    )))
+    let owner = vehicle(&id).map_err(|e| ctx.fail(e))?;
+    delete_for(state, ctx, owner, entry).await
+}
+
+// --- PV-Anlagen ------------------------------------------------------------
+
+pub async fn pv_list(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path(id): Path<String>,
+    Query(q): Query<YearQuery>,
+) -> Result<Response, Response> {
+    let owner = pv(&id).map_err(|e| ctx.fail(e))?;
+    list_for(state, ctx, owner, q).await
+}
+
+pub async fn pv_add(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path(id): Path<String>,
+    axum::Form(pairs): axum::Form<Vec<(String, String)>>,
+) -> Result<Response, Response> {
+    let owner = pv(&id).map_err(|e| ctx.fail(e))?;
+    add_for(state, ctx, owner, pairs).await
+}
+
+pub async fn pv_edit_form(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path((id, entry)): Path<(String, String)>,
+) -> Result<Response, Response> {
+    let owner = pv(&id).map_err(|e| ctx.fail(e))?;
+    edit_for(state, ctx, owner, entry).await
+}
+
+pub async fn pv_update(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path((id, entry)): Path<(String, String)>,
+    axum::Form(pairs): axum::Form<Vec<(String, String)>>,
+) -> Result<Response, Response> {
+    let owner = pv(&id).map_err(|e| ctx.fail(e))?;
+    update_for(state, ctx, owner, entry, pairs).await
+}
+
+pub async fn pv_delete(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path((id, entry)): Path<(String, String)>,
+) -> Result<Response, Response> {
+    let owner = pv(&id).map_err(|e| ctx.fail(e))?;
+    delete_for(state, ctx, owner, entry).await
 }

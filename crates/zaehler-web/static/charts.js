@@ -204,6 +204,67 @@
       ];
       return { ...base(data), series };
     },
+    // PV am Hausanschluss: Erzeugung aus Eigenverbrauch und Einspeisung,
+    // Gesamtverbrauch aus Eigenverbrauch und Bezug, gestapelt (SPEC_PV_CHARTS)
+    pvGeneration(data) {
+      const s = data.series;
+      const series = [
+        { id: "self", type: "bar", stack: "g", name: s.self_consumption.name, data: s.self_consumption.data, itemStyle: { color: css("--accent") } },
+        { id: "export", type: "bar", stack: "g", name: s.export.name, data: s.export.data, itemStyle: { color: css("--muted") } },
+      ];
+      return { ...base(data), series };
+    },
+    pvConsumption(data) {
+      const s = data.series;
+      const series = [
+        { id: "self", type: "bar", stack: "v", name: s.self_consumption.name, data: s.self_consumption.data, itemStyle: { color: css("--accent") } },
+        { id: "import", type: "bar", stack: "v", name: s.import.name, data: s.import.data, itemStyle: { color: css("--muted") } },
+      ];
+      return { ...base(data), series };
+    },
+    // Erzeugung gegen Erwartung mit Band (SPEC_PV_CHARTS)
+    pvYield(data) {
+      const s = data.series;
+      const accent = css("--accent");
+      const muted = css("--muted");
+      const series = [
+        { id: "actual", type: "bar", name: s.actual.name, data: s.actual.data, itemStyle: { color: accent } },
+        { id: "band-low-estimate", type: "line", stack: "band", name: s.lower.name, data: s.lower.data, symbol: "none", lineStyle: { opacity: 0 } },
+        {
+          id: "band-estimate",
+          type: "line",
+          stack: "band",
+          name: s.band.name,
+          data: s.band.data,
+          symbol: "none",
+          lineStyle: { opacity: 0 },
+          areaStyle: { color: muted, opacity: 0.25 },
+        },
+        { id: "expected", type: "line", name: s.expected.name, data: s.expected.data, symbol: "none", itemStyle: { color: muted }, lineStyle: { type: "dashed" } },
+      ];
+      return { ...base(data), series };
+    },
+    // Kumulierte Bilanz, fortgeschriebener Teil gestrichelt, Amortisation
+    // markiert (SPEC_PV_CHARTS)
+    pvBalance(data) {
+      const s = data.series;
+      const accent = css("--accent");
+      const series = [
+        {
+          id: "balance",
+          type: "line",
+          name: s.measured.name,
+          data: s.measured.data,
+          symbol: "none",
+          itemStyle: { color: accent },
+          markLine: data.break_even
+            ? { symbol: "none", label: { formatter: data.break_even_label }, data: [{ xAxis: data.break_even }] }
+            : undefined,
+        },
+        { id: "projected-estimate", type: "line", name: s.projected.name, data: s.projected.data, symbol: "none", itemStyle: { color: accent }, lineStyle: { type: "dashed" } },
+      ];
+      return { ...base(data), series };
+    },
     // Monatskosten: Bezug gemessen und prognostiziert (schraffiert)
     // gestapelt, Einspeisevergütung als negativer Balken (SPEC_TAR_COST_VIEW)
     costs(data) {

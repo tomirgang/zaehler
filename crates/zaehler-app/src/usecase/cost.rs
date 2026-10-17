@@ -346,7 +346,7 @@ impl MeterPricing {
 
     /// Summe aller Verträge der Richtung im Zeitraum; `None`, wenn kein
     /// Vertrag den Zeitraum berührt oder eine Menge fehlt.
-    fn period_cost(&self, direction: Direction, range: Period) -> Option<PeriodCost> {
+    pub(crate) fn period_cost(&self, direction: Direction, range: Period) -> Option<PeriodCost> {
         let mut out = PeriodCost {
             period: range,
             measured: Decimal::ZERO,

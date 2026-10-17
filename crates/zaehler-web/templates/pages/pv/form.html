@@ -1,0 +1,123 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{% if system_id.is_some() %}{{ ctx.lang.t("pv-edit") }}{% else %}{{ ctx.lang.t("pv-new") }}{% endif %}</h1>
+{% if let Some(c) = conflict %}<p class="callout warning" role="alert">{{ c }}</p>{% endif %}
+<form method="post" action="{% if let Some(id) = system_id %}/pv/{{ id }}/edit{% else %}/pv/new{% endif %}" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <div class="grid">
+    <div class="field{% if self.has_errs("name") %} has-error{% endif %}">
+      <label for="name">{{ ctx.lang.t("pv-name") }}</label>
+      <input id="name" name="name" value="{{ form.name }}" maxlength="80" required>
+      {% for e in self.errs("name") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("kind") %} has-error{% endif %}">
+      <label for="kind">{{ ctx.lang.t("pv-kind") }}</label>
+      <select id="kind" name="kind">
+        {% for (value, label) in kinds %}
+        <option value="{{ value }}"{% if *value == form.kind %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">{{ ctx.lang.t("pv-kind-hint") }}</p>
+      {% for e in self.errs("kind") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("kwp") %} has-error{% endif %}">
+      <label for="kwp">{{ ctx.lang.t("pv-kwp") }}</label>
+      <input id="kwp" name="kwp" value="{{ form.kwp }}" inputmode="decimal" required>
+      {% for e in self.errs("kwp") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("commissioned_on") %} has-error{% endif %}">
+      <label for="commissioned_on">{{ ctx.lang.t("pv-commissioned") }}</label>
+      <input id="commissioned_on" name="commissioned_on" type="date" value="{{ form.commissioned_on }}" required>
+      {% for e in self.errs("commissioned_on") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+
+  <fieldset class="card">
+    <legend>{{ ctx.lang.t("pv-meters") }}</legend>
+    <p class="hint">{{ ctx.lang.t("pv-meters-hint") }}</p>
+    <div class="field{% if self.has_errs("grid") %} has-error{% endif %}">
+      <label for="grid">{{ ctx.lang.t("pv-role-grid") }}</label>
+      <select id="grid" name="grid">
+        <option value="">{{ ctx.lang.t("capture-meter-choose") }}</option>
+        {% for m in meters %}
+        <option value="{{ m.id }}"{% if m.id == form.grid %} selected{% endif %}>{{ m.name }}</option>
+        {% endfor %}
+      </select>
+      {% for e in self.errs("grid") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="grid">
+      <fieldset class="field{% if self.has_errs("generation") %} has-error{% endif %}">
+        <legend>{{ ctx.lang.t("pv-role-generation") }}</legend>
+        {% for m in meters %}
+        <label><input type="checkbox" name="gen_{{ m.id }}" value="1"{% if self.is_generation(m.id) %} checked{% endif %}> {{ m.name }}</label>
+        {% endfor %}
+        {% for e in self.errs("generation") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </fieldset>
+      <fieldset class="field{% if self.has_errs("battery") %} has-error{% endif %}">
+        <legend>{{ ctx.lang.t("pv-role-battery") }}</legend>
+        {% for m in meters %}
+        <label><input type="checkbox" name="bat_{{ m.id }}" value="1"{% if self.is_battery(m.id) %} checked{% endif %}> {{ m.name }}</label>
+        {% endfor %}
+        <p class="hint">{{ ctx.lang.t("pv-battery-hint") }}</p>
+        {% for e in self.errs("battery") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </fieldset>
+    </div>
+    {% for e in self.errs("meters") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </fieldset>
+
+  <div class="grid">
+    <div class="field{% if self.has_errs("specific_yield") %} has-error{% endif %}">
+      <label for="specific_yield">{{ ctx.lang.t("pv-specific-yield") }}</label>
+      <input id="specific_yield" name="specific_yield" value="{{ form.specific_yield }}" inputmode="decimal">
+      {% for e in self.errs("specific_yield") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("degradation_pct") %} has-error{% endif %}">
+      <label for="degradation_pct">{{ ctx.lang.t("pv-degradation") }}</label>
+      <input id="degradation_pct" name="degradation_pct" value="{{ form.degradation_pct }}" inputmode="decimal">
+      {% for e in self.errs("degradation_pct") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("alarm_threshold_pct") %} has-error{% endif %}">
+      <label for="alarm_threshold_pct">{{ ctx.lang.t("pv-threshold") }}</label>
+      <input id="alarm_threshold_pct" name="alarm_threshold_pct" value="{{ form.alarm_threshold_pct }}" inputmode="numeric">
+      {% for e in self.errs("alarm_threshold_pct") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("battery_kwh") %} has-error{% endif %}">
+      <label for="battery_kwh">{{ ctx.lang.t("pv-battery-kwh") }}</label>
+      <input id="battery_kwh" name="battery_kwh" value="{{ form.battery_kwh }}" inputmode="decimal">
+      {% for e in self.errs("battery_kwh") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("azimuth") %} has-error{% endif %}">
+      <label for="azimuth">{{ ctx.lang.t("pv-azimuth") }}</label>
+      <input id="azimuth" name="azimuth" value="{{ form.azimuth }}" inputmode="numeric">
+      {% for e in self.errs("azimuth") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("tilt") %} has-error{% endif %}">
+      <label for="tilt">{{ ctx.lang.t("pv-tilt") }}</label>
+      <input id="tilt" name="tilt" value="{{ form.tilt }}" inputmode="numeric">
+      {% for e in self.errs("tilt") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+    <div class="field{% if self.has_errs("inverter") %} has-error{% endif %}">
+      <label for="inverter">{{ ctx.lang.t("pv-inverter") }}</label>
+      <input id="inverter" name="inverter" value="{{ form.inverter }}" maxlength="80">
+      {% for e in self.errs("inverter") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
+  </div>
+
+  <fieldset class="field{% if self.has_errs("month_shares") %} has-error{% endif %}">
+    <legend>{{ ctx.lang.t("pv-month-shares") }}</legend>
+    <p class="hint">{{ ctx.lang.t("pv-month-shares-hint") }}</p>
+    <div class="inline-inputs">
+      {% for label in months %}
+      <label>{{ label }} <input name="share_{{ loop.index }}" value="{{ self.share(loop.index0) }}" inputmode="decimal" size="4"></label>
+      {% endfor %}
+    </div>
+    {% for e in self.errs("month_shares") %}<p class="field-error">{{ e }}</p>{% endfor %}
+  </fieldset>
+
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("action-save") }}</button>
+    <a href="{% if let Some(id) = system_id %}/pv/{{ id }}{% else %}/pv{% endif %}">{{ ctx.lang.t("action-cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

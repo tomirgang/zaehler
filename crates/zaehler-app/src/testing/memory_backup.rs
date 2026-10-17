@@ -223,6 +223,7 @@ fn export(s: &State) -> BackupData {
     super::contracts_impl::export(s, &mut data);
     super::documents_impl::export(s, &mut data);
     super::vehicles_impl::export(s, &mut data);
+    super::pv_impl::export(s, &mut data);
     data
 }
 
@@ -433,7 +434,8 @@ fn import_v1(s: &mut State, d: &BackupData) -> PortResult<()> {
     }
     super::contracts_impl::import(s, d)?;
     super::documents_impl::import(s, d)?;
-    super::vehicles_impl::import(s, d)
+    super::vehicles_impl::import(s, d)?;
+    super::pv_impl::import(s, d)
 }
 
 #[async_trait]

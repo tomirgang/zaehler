@@ -14,7 +14,8 @@ use crate::{
     error::PortError,
     ids::{
         AssetCostId, BlobKey, ChargingId, ContractId, DeviceId, DocumentId, DraftId, HouseholdId,
-        InvitationId, MeterId, OutboxId, PositionId, ProfileId, ReadingId, RegisterId, UserId,
+        InvitationId, MeterId, OutboxId, PositionId, ProfileId, PvSystemId, ReadingId, RegisterId,
+        UserId,
     },
     model::{
         AdjustmentRow, AssetCost, AssetRef, ChargingSession, Contract, ContractData, ContractEntry,
@@ -22,7 +23,7 @@ use crate::{
         DraftOutcome, Household, HouseholdData, HouseholdSummary, Identity, InstallmentRow,
         Invitation, InvoiceExtraction, JobRun, Member, MeterAggregate, MeterData, MeterSummary,
         NewInvitation, Notification, NotificationKind, NotificationLogEntry, NotificationSettings,
-        OutboxEntry, OutboxEvent, OutboxResult, PriceComponentRow, ProfileRow, Reading,
+        OutboxEntry, OutboxEvent, OutboxResult, PriceComponentRow, ProfileRow, PvSystem, Reading,
         ReadingUpdate, ReceiptExtraction, Recipient, Recognition, RegisterData, Revision,
         SettlementRow, User, Vehicle, VehicleData,
     },
@@ -56,6 +57,7 @@ pub trait UnitOfWork: Send {
     fn documents(&mut self) -> &mut dyn DocumentRepository;
     fn vehicles(&mut self) -> &mut dyn VehicleRepository;
     fn asset_costs(&mut self) -> &mut dyn AssetCostRepository;
+    fn pv(&mut self) -> &mut dyn PvRepository;
     async fn commit(self: Box<Self>) -> PortResult<()>;
 }
 
@@ -185,6 +187,21 @@ pub trait AssetCostRepository: Send {
     /// Ersetzt den Eintrag; die Anlage bleibt unverändert.
     async fn update(&mut self, t: &Tenant, c: &AssetCost) -> PortResult<()>;
     async fn delete(&mut self, t: &Tenant, id: AssetCostId) -> PortResult<()>;
+}
+
+/// PV-Anlagen mit Zuordnung der Messstellen (SPEC_PV_ASSIGNMENT). Anlagen
+/// gehören zum Haushalt; zugeordnete Messstellen müssen zum selben Haushalt
+/// gehören, sonst `PortError::NotFound`.
+// @impl SPEC_PV_ASSIGNMENT, SPEC_SEC_TENANT_SCOPE
+#[async_trait]
+pub trait PvRepository: Send {
+    /// Anlagen des Haushalts, nach Name sortiert.
+    async fn list(&mut self, t: &Tenant) -> PortResult<Vec<PvSystem>>;
+    async fn get(&mut self, t: &Tenant, id: PvSystemId) -> PortResult<Option<PvSystem>>;
+    async fn create(&mut self, t: &Tenant, s: &PvSystem) -> PortResult<()>;
+    /// Ersetzt Anlagendaten und Zuordnung.
+    async fn update(&mut self, t: &Tenant, s: &PvSystem) -> PortResult<()>;
+    async fn delete(&mut self, t: &Tenant, id: PvSystemId) -> PortResult<()>;
 }
 
 /// Hochgeladene Dokumente (SPEC_DOC_UPLOADS, SPEC_AI_INVOICE).

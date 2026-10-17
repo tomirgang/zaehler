@@ -105,11 +105,15 @@ Fotos: mehrere Dateien in einem Upload; jedes Foto wird einzeln normalisiert,
 erkannt und zugeordnet ({need}`SPEC_AI_DRAFTS`), die Ergebnisse erscheinen in
 einem gemeinsamen Bestätigungsformular mit einem Zeitpunkt. Fotos ohne
 eindeutige Zuordnung erhalten eine Auswahl der Messstellen des Hausanschlusses.
+
+Umsetzung: Das Formular unter `/pv/grid/{meter}/readings`
+(`RecordBulkReadings`) ist umgesetzt; Warnungen erfordern eine Bestätigung,
+gespeichert wird in einer Transaktion. Die Erfassung per Fotos ist offen.
 ```
 
 ```{spec} PV-Darstellung
 :id: SPEC_PV_CHARTS
-:status: draft
+:status: implemented
 :satisfies: REQ_PV_012
 :links: SPEC_ANA_CHARTS
 

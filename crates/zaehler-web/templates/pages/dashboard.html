@@ -2,6 +2,26 @@
 
 {% block content %}
 <h1>{{ ctx.lang.t("dashboard-title") }}</h1>
+{% if !pv.is_empty() %}
+<ul class="cards">
+  {% for p in pv %}
+  <li class="card">
+    <h2><a href="/pv/grid/{{ p.id }}">{{ ctx.lang.t("pv-card-title") }}: {{ p.name }}</a></h2>
+    {% if p.month.is_empty() %}
+    <p class="muted">{{ ctx.lang.t("pv-card-no-month") }}</p>
+    {% else %}
+    <p class="muted">{{ p.month }}</p>
+    <dl class="facts">
+      <dt>{{ ctx.lang.t("pv-generation") }}</dt><dd>{{ p.generation }}{% if !p.status.is_empty() %} <span class="traffic traffic-{{ p.status }}"><span class="traffic-dot" aria-hidden="true"></span>{{ p.status_label }}</span>{% endif %}</dd>
+      <dt>{{ ctx.lang.t("pv-autarky") }}</dt><dd>{{ p.autarky }}</dd>
+      <dt>{{ ctx.lang.t("pv-ratio") }}</dt><dd>{{ p.ratio }}</dd>
+    </dl>
+    {% endif %}
+    {% if ctx.can_write %}<div class="actions"><a class="button" href="/pv/grid/{{ p.id }}/readings">{{ ctx.lang.t("pv-bulk") }}</a></div>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
 {% if cards.is_empty() %}
 <p>{{ ctx.lang.t("dashboard-empty") }}</p>
 <div class="actions">

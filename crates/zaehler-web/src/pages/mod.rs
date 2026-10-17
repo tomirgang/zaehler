@@ -15,6 +15,7 @@ pub mod import;
 pub mod members;
 pub mod meters;
 pub mod notifications;
+pub mod pv;
 pub mod pwa;
 pub mod readings;
 pub mod receipts;

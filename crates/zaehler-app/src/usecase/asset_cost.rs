@@ -97,8 +97,13 @@ async fn check_asset(
                 .data
                 .drive_type,
         )),
-        // PV-Anlagen folgen mit M8
-        AssetType::PvSystem => Err(AppError::NotFound),
+        AssetType::PvSystem => {
+            uow.pv()
+                .get(t, crate::ids::PvSystemId(asset.id))
+                .await?
+                .ok_or(AppError::NotFound)?;
+            Ok(None)
+        }
     }
 }
 

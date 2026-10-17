@@ -216,6 +216,9 @@ impl UnitOfWork for SeaOrmUow {
     fn vehicles(&mut self) -> &mut dyn zaehler_app::port::VehicleRepository {
         self
     }
+    fn pv(&mut self) -> &mut dyn zaehler_app::port::PvRepository {
+        self
+    }
     fn asset_costs(&mut self) -> &mut dyn zaehler_app::port::AssetCostRepository {
         self
     }
@@ -1616,3 +1619,6 @@ mod documents;
 
 #[path = "vehicles.rs"]
 mod vehicles;
+
+#[path = "pv.rs"]
+mod pv;

@@ -35,6 +35,8 @@ pub struct PageCtx {
     pub has_contracts: bool,
     /// Navigation „Fahrzeuge“ nur mit Fahrzeugen (SPEC_CAR_VEHICLES)
     pub has_vehicles: bool,
+    /// Navigation „PV“ nur mit PV-Anlagen (SPEC_PV_CHARTS)
+    pub has_pv: bool,
     pub flash: Option<String>,
     pub static_prefix: String,
     pub version: &'static str,
@@ -179,6 +181,7 @@ impl FromRequestParts<WebState> for Ctx {
             can_write: resolved.tenant.role() >= Role::Member,
             has_contracts: resolved.has_contracts,
             has_vehicles: resolved.has_vehicles,
+            has_pv: resolved.has_pv,
             flash,
             static_prefix: format!("/static/{}", state.cfg.version),
             version: state.cfg.version,

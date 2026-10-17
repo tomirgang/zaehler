@@ -2473,3 +2473,166 @@ async fn vehicle_chart_json() {
     assert_eq!(json["labels"][0], "2025");
     assert!(json["series"]["depreciation"]["data"].is_array());
 }
+
+// @test SPEC_PV_ASSIGNMENT, SPEC_PV_BULK_CAPTURE, SPEC_PV_KPI, SPEC_PV_CHARTS, SPEC_PV_ECONOMICS
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
+async fn pv_pages_bulk_capture_and_charts() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let grid =
+        create_two_register_meter(&mut c, &csrf, "Hausanschluss", ["1.8.0", "2.8.0"], "export")
+            .await
+            .trim_start_matches("/meters/")
+            .to_owned();
+    let battery =
+        create_two_register_meter(&mut c, &csrf, "Speicher", ["charge", "discharge"], "export")
+            .await
+            .trim_start_matches("/meters/")
+            .to_owned();
+    let house = create_meter(&mut c, &csrf, "Wohnung").await;
+    let res = c
+        .post(
+            "/meters",
+            &[
+                ("_csrf", csrf.as_str()),
+                ("name", "PV Dach"),
+                ("kind", "electricity"),
+                ("unit", ""),
+                ("serial_number", ""),
+                ("rollover_digits", ""),
+                ("decimal_places", "1"),
+                ("schedule_kind", ""),
+                ("schedule_value", ""),
+                ("max_daily_rate", ""),
+                ("billing_month", ""),
+                ("billing_day", ""),
+                ("start_at", "2026-01-01T00:00"),
+                ("register_count", "1"),
+                ("register_0_id", ""),
+                ("register_0_code", "2.8.0"),
+                ("register_0_direction", "export"),
+                ("register_0_start", "0"),
+            ],
+        )
+        .await;
+    let generation = location(&res).trim_start_matches("/meters/").to_owned();
+    let form = text(c.get("/pv/new").await).await;
+    assert!(form.contains("PV Dach") && form.contains("share_12"));
+
+    let gen_key = format!("gen_{generation}");
+    let bat_key = format!("bat_{battery}");
+    let mut fields = vec![
+        ("_csrf", csrf.clone()),
+        ("name", "Dach Süd".to_owned()),
+        ("kind", "surplus".to_owned()),
+        ("kwp", "9,84".to_owned()),
+        ("commissioned_on", "2026-01-01".to_owned()),
+        ("azimuth", "180".to_owned()),
+        ("tilt", "30".to_owned()),
+        ("inverter", String::new()),
+        ("battery_kwh", "10".to_owned()),
+        ("specific_yield", "950".to_owned()),
+        ("degradation_pct", "0,5".to_owned()),
+        ("alarm_threshold_pct", "50".to_owned()),
+        ("grid", house.clone()),
+        (gen_key.as_str(), "1".to_owned()),
+        (bat_key.as_str(), "1".to_owned()),
+    ];
+    // Hausanschluss ohne Einspeiseregister: nur Steckersolargerät
+    let res = post_fields(&mut c, "/pv/new", &fields).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("nur ein Steckersolargerät"));
+    fields.retain(|(k, _)| *k != "grid");
+    fields.push(("grid", grid.clone()));
+    let res = post_fields(&mut c, "/pv/new", &fields).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let system = location(&res);
+    assert!(system.starts_with("/pv/"));
+    let html = text(c.get(&system).await).await;
+    assert!(html.contains("PV-Anlage angelegt.") && html.contains("Dach Süd"));
+    assert!(html.contains("Wirtschaftlichkeit"));
+    assert!(
+        text(c.get("/").await).await.contains("href=\"/pv\""),
+        "Navigation mit PV"
+    );
+
+    // Sammelerfassung mit gemeinsamem Zeitpunkt
+    let page = text(c.get(&format!("/pv/grid/{grid}/readings")).await).await;
+    let keys: Vec<String> = page
+        .match_indices("name=\"v_")
+        .map(|(i, _)| {
+            let start = i + 6;
+            page[start..start + page[start..].find('"').unwrap()].to_owned()
+        })
+        .collect();
+    assert_eq!(keys.len(), 5, "Hausanschluss 2, Erzeugung 1, Speicher 2");
+    let mut bulk = vec![
+        ("_csrf", csrf.clone()),
+        ("at", "2026-01-10T00:00".to_owned()),
+        ("note", String::new()),
+    ];
+    for (k, v) in keys.iter().zip(["1200", "900", "1000", "1300", "770"]) {
+        bulk.push((k.as_str(), v.to_owned()));
+    }
+    let res = post_fields(&mut c, &format!("/pv/grid/{grid}/readings"), &bulk).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    assert_eq!(location(&res), format!("/pv/grid/{grid}"));
+    let html = text(c.get(&format!("/pv/grid/{grid}")).await).await;
+    // EV = 1000 - 400 - (300 - 270) = 570, V = 200 + 570
+    assert!(
+        html.contains("570 kWh") && html.contains("770 kWh"),
+        "{html}"
+    );
+    assert!(html.contains("bis zur letzten Ablesung"));
+    let json: serde_json::Value =
+        serde_json::from_str(&text(c.get(&format!("/pv/grid/{grid}/chart.json")).await).await)
+            .unwrap();
+    assert!(json["series"]["self_consumption"]["data"].is_array());
+    for path in [
+        format!("{system}/yield.json"),
+        format!("{system}/balance.json"),
+    ] {
+        let res = c.get(&path).await;
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        let v: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+        assert!(v["labels"].is_array(), "{path}");
+    }
+    // Auswertung des Hausanschlusses auf den Gesamtverbrauch
+    let detail = text(c.get(&format!("/meters/{grid}")).await).await;
+    assert!(detail.contains("beziehen sich auf den Gesamtverbrauch"));
+
+    // Kostenbuch der Anlage mit PV-Kategorien
+    let res = post_fields(
+        &mut c,
+        &format!("{system}/costs"),
+        &[
+            ("_csrf", csrf.clone()),
+            ("booked_on", "2026-01-01".to_owned()),
+            ("category", "investment".to_owned()),
+            ("amount", "14500".to_owned()),
+            ("recurrence_months", String::new()),
+            ("recurrence_until", String::new()),
+            ("note", String::new()),
+        ],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let book = text(c.get(&format!("{system}/costs?year=2026")).await).await;
+    assert!(book.contains("Investition") && book.contains("14500,00 €"));
+    assert!(!book.contains("vollgetankt"), "keine Fahrzeugfelder");
+    assert!(text(c.get(&system).await).await.contains("14500,00 €"));
+
+    // Dashboard-Karte und fremder Haushalt
+    let home = text(c.get("/").await).await;
+    assert!(home.contains("PV: Hausanschluss"), "{home}");
+    let mut bob = Client::new(&app);
+    bob.login("bob").await;
+    assert_eq!(bob.get(&system).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        bob.get(&format!("/pv/grid/{grid}")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}

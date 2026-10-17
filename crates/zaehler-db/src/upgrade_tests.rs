@@ -11,8 +11,8 @@ use zaehler_app::{
         AcquisitionRecord, AdjustmentRecord, AssetCostRecord, BackupData, ChargingSessionRecord,
         ConsumptionProfileRecord, ContractRecord, CostPositionRecord, DeviceRecord, DocumentRecord,
         DraftRecord, HouseholdRecord, InstallmentRecord, InvitationRecord, MembershipRecord,
-        MeterRecord, PriceComponentRecord, ReadingRecord, RegisterRecord, RevisionRecord,
-        SettlementRecord, UserRecord, VehicleRecord,
+        MeterRecord, PriceComponentRecord, PvSystemMeterRecord, PvSystemRecord, ReadingRecord,
+        RegisterRecord, RevisionRecord, SettlementRecord, UserRecord, VehicleRecord,
     },
     port::BackupRepository,
 };
@@ -438,6 +438,7 @@ pub(crate) fn fixture() -> BackupData {
     });
     contracts_fixture(&mut data);
     vehicles_fixture(&mut data);
+    pv_fixture(&mut data);
     data
 }
 
@@ -670,5 +671,55 @@ fn vehicles_fixture(data: &mut BackupData) {
         recurrence_until: None,
         document_id: Some(id(41)),
         note: None,
+    });
+}
+
+/// PV-Anlage mit Hausanschluss und Erzeugungszähler sowie einer Investition
+/// im Kostenbuch (ab `m20261018_000014_pv`).
+fn pv_fixture(data: &mut BackupData) {
+    let mut generation = data.meters[0].clone();
+    generation.id = id(60);
+    generation.name = "PV-Erzeugung".into();
+    generation.kind = "electricity".into();
+    generation.unit = "kWh".into();
+    data.meters.push(generation);
+    data.pv_systems.push(PvSystemRecord {
+        id: id(61),
+        household_id: id(2),
+        name: "Dach Süd".into(),
+        kind: "surplus".into(),
+        kwp_milli: 9_840,
+        commissioned_on: chrono::NaiveDate::from_ymd_opt(2025, 4, 16).unwrap(),
+        azimuth: Some(180),
+        tilt: Some(30),
+        inverter: Some("WR 10".into()),
+        battery_kwh_milli: Some(10_240),
+        specific_yield_milli: 950_000,
+        degradation_pct_milli: 500,
+        month_shares: Some("[\"3\",\"4.5\",\"8\",\"11.5\",\"13\",\"13.5\",\"13.5\",\"12\",\"9\",\"6\",\"3.5\",\"2.5\"]".into()),
+        alarm_threshold_pct: 50,
+    });
+    for (meter, role) in [(id(3), "grid"), (id(60), "generation")] {
+        data.pv_system_meters.push(PvSystemMeterRecord {
+            pv_system_id: id(61),
+            meter_id: meter,
+            role: role.into(),
+        });
+    }
+    data.asset_costs.push(AssetCostRecord {
+        id: id(62),
+        household_id: id(2),
+        asset_type: "pv_system".into(),
+        asset_id: id(61),
+        booked_on: chrono::NaiveDate::from_ymd_opt(2025, 4, 10).unwrap(),
+        category: "investment".into(),
+        amount_micro: 14_500_000_000,
+        quantity_milli: None,
+        odometer_milli: None,
+        full_tank: None,
+        recurrence_months: None,
+        recurrence_until: None,
+        document_id: None,
+        note: Some("Anlage mit Speicher".into()),
     });
 }

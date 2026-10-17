@@ -18,6 +18,8 @@ pub mod notification_log;
 pub mod notification_settings;
 pub mod outbox;
 pub mod price_component;
+pub mod pv_system;
+pub mod pv_system_meter;
 pub mod reading;
 pub mod reading_revision;
 pub mod register;

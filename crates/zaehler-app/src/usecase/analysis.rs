@@ -210,6 +210,11 @@ pub struct Analysis {
     pub profile_source: ProfileSource,
     /// Erwartung und Ampel je Monat der Hauptreihe (wie `complete_months`)
     pub expectations: Vec<Option<MonthExpectation>>,
+    /// Gesamtverbrauch (Bezug + Eigenverbrauch) je Monat bei einem
+    /// Hausanschluss mit PV-Erzeugung; leer ohne Erzeugungszähler (REQ_PV_006)
+    pub total_consumption: Vec<MonthValue>,
+    /// Bezugsmonat, Vergleiche und Ampel verwenden den Gesamtverbrauch
+    pub uses_total: bool,
     /// Ampel des Bezugsmonats
     pub month_expectation: Option<MonthExpectation>,
 }
@@ -503,6 +508,9 @@ impl MeterAnalysis {
             .map(|first| months_between(cal.local_date(first.read_at), today))
             .unwrap_or_default();
         let submeters = load_submeters(uow.as_mut(), t, id, &months, cal).await?;
+        let total_consumption = super::pv::consumption_series(uow.as_mut(), t, id, cal, &months)
+            .await?
+            .unwrap_or_default();
         let contracts = uow.contracts().for_meter(t, id).await?;
         drop(uow);
         let agg = &detail.aggregate;
@@ -527,7 +535,11 @@ impl MeterAnalysis {
         };
         let excluding_submeters =
             exclude_submeters && !import_net.is_empty() && primary == Direction::Import;
+        // Hausanschluss mit PV: Gesamtverbrauch statt Bezug (REQ_PV_006)
+        let uses_total =
+            !total_consumption.is_empty() && primary == Direction::Import && !excluding_submeters;
         let (main, main_regs) = match primary {
+            Direction::Import if uses_total => (&total_consumption, &imports),
             Direction::Import if excluding_submeters => (&import_net, &imports),
             Direction::Import => (&import, &imports),
             Direction::Export => (&export, &exports),
@@ -580,6 +592,8 @@ impl MeterAnalysis {
             submeters,
             import_net,
             excluding_submeters,
+            uses_total,
+            total_consumption: total_consumption.clone(),
         })
     }
 }
@@ -660,6 +674,7 @@ fn card(
     contracts: &[Contract],
     cal: Calendar,
     now: DateTime<Utc>,
+    total: Option<Vec<MonthValue>>,
 ) -> DashboardCard {
     let agg = &detail.aggregate;
     let today = cal.local_date(now);
@@ -688,7 +703,9 @@ fn card(
     let per_register = register_intervals(agg, &detail.readings);
     let regs = side(&per_register, primary_direction(agg));
     // ganze Reihe: Saisonprofil und Ampel brauchen die Vorjahre
-    let series = full_series(detail, &regs, cal, today);
+    // Hausanschluss mit PV: Ampel und Vergleich auf den Gesamtverbrauch
+    // (REQ_PV_006)
+    let series = total.unwrap_or_else(|| full_series(detail, &regs, cal, today));
     let (profile, _) = choose_profile(&agg.meter, &series);
     let traffic = last_complete(&series).and_then(|m| {
         let i = series.iter().position(|x| x.month == m)?;
@@ -741,7 +758,13 @@ impl Dashboard {
                 aggregate,
                 readings,
             };
-            cards.push(card(&detail, &contracts, cal, now));
+            let months = detail
+                .readings
+                .first()
+                .map(|f| months_between(cal.local_date(f.read_at), cal.local_date(now)))
+                .unwrap_or_default();
+            let total = super::pv::consumption_series(uow.as_mut(), t, id, cal, &months).await?;
+            cards.push(card(&detail, &contracts, cal, now, total));
         }
         let urgency = |c: &DashboardCard| match c.due {
             Some(Due::Overdue(_)) => 0,

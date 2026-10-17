@@ -184,6 +184,8 @@ pub struct AnalysisView {
     pub submeters: Vec<SubmeterView>,
     /// Vergleiche beziehen sich auf den Bezug ohne Zwischenzähler
     pub excluding_submeters: bool,
+    /// Vergleiche und Ampel auf den Gesamtverbrauch (Hausanschluss mit PV)
+    pub uses_total: bool,
     /// Herkunft des Saisonprofils der Prognosen
     pub profile_note: String,
     /// Ampel des Bezugsmonats
@@ -296,9 +298,12 @@ fn forecast_view(lang: Lang, f: &ScopedForecast, places: u8) -> ForecastView {
 pub fn view(lang: Lang, a: &Analysis) -> AnalysisView {
     let agg = &a.detail.aggregate;
     let places = agg.active_device().map_or(1, |d| d.data.decimal_places);
-    // die Tabelle zeigt immer den Bezug mit Zwischenzählern, der Nettowert
-    // steht in einer eigenen Spalte
-    let main: &[MonthValue] = if a.import.is_empty() {
+    // die Tabelle zeigt den Bezug mit Zwischenzählern (der Nettowert steht
+    // in einer eigenen Spalte), beim Hausanschluss mit PV den
+    // Gesamtverbrauch (REQ_PV_006)
+    let main: &[MonthValue] = if a.uses_total {
+        &a.total_consumption
+    } else if a.import.is_empty() {
         &a.export
     } else {
         &a.import
@@ -310,7 +315,11 @@ pub fn view(lang: Lang, a: &Analysis) -> AnalysisView {
     let chart = &a.chart;
     AnalysisView {
         unit: agg.meter.data.unit.clone(),
-        primary_label: lang.t(&format!("analysis-{}", a.primary.as_str())),
+        primary_label: if a.uses_total {
+            lang.t("pv-consumption")
+        } else {
+            lang.t(&format!("analysis-{}", a.primary.as_str()))
+        },
         has_export,
         register_codes: if multi {
             a.registers
@@ -380,6 +389,7 @@ pub fn view(lang: Lang, a: &Analysis) -> AnalysisView {
             })
             .collect(),
         excluding_submeters: a.excluding_submeters,
+        uses_total: a.uses_total,
         profile_note: lang.t(&format!("profile-{}", a.profile_source.as_str())),
         month_traffic: a
             .month_expectation
@@ -559,7 +569,9 @@ fn month_rows(
 
 /// Erwartung eines Monats der Hauptreihe (gleiche Reihenfolge wie die Monate).
 fn expectation_of(a: &Analysis, month: Period) -> Option<MonthExpectation> {
-    let main = if a.excluding_submeters {
+    let main = if a.uses_total {
+        &a.total_consumption
+    } else if a.excluding_submeters {
         &a.import_net
     } else if a.import.is_empty() {
         &a.export

@@ -38,6 +38,8 @@ pub struct Card {
 struct DashboardPage {
     ctx: PageCtx,
     cards: Vec<Card>,
+    /// PV-Karten je Hausanschluss (SPEC_PV_CHARTS)
+    pv: Vec<PvCardView>,
 }
 
 // @impl SPEC_UI_DASHBOARD
@@ -113,6 +115,53 @@ fn card(lang: Lang, tz: chrono_tz::Tz, c: &DashboardCard) -> Card {
     }
 }
 
+/// PV-Karte eines Hausanschlusses.
+pub struct PvCardView {
+    pub id: String,
+    pub name: String,
+    pub month: String,
+    pub generation: String,
+    pub autarky: String,
+    pub ratio: String,
+    pub status: &'static str,
+    pub status_label: String,
+}
+
+// @impl SPEC_PV_CHARTS
+fn pv_card(lang: Lang, c: &zaehler_app::usecase::pv::PvCard) -> PvCardView {
+    use zaehler_domain::expectation::Status;
+    let status = match c.status {
+        Some(Status::Green) => "green",
+        Some(Status::Yellow) => "yellow",
+        Some(Status::Red) => "red",
+        None => "",
+    };
+    let pct = |v: Option<rust_decimal::Decimal>| {
+        v.map(|v| crate::i18n::format::percent(lang, v, 0))
+            .unwrap_or_default()
+    };
+    PvCardView {
+        id: c.grid.to_string(),
+        name: c.name.clone(),
+        month: c
+            .month
+            .map(|m| crate::i18n::format::month(lang, m.start))
+            .unwrap_or_default(),
+        generation: c
+            .generation
+            .map(|g| format!("{} kWh", crate::i18n::format::decimal(lang, g, 0)))
+            .unwrap_or_default(),
+        autarky: pct(c.autarky),
+        ratio: pct(c.self_consumption_ratio),
+        status,
+        status_label: if status.is_empty() {
+            String::new()
+        } else {
+            lang.t(&format!("traffic-{status}"))
+        },
+    }
+}
+
 // @impl SPEC_UI_DASHBOARD
 pub async fn show(State(state): State<WebState>, ctx: Ctx) -> Result<Response, Response> {
     let cards = state
@@ -123,8 +172,15 @@ pub async fn show(State(state): State<WebState>, ctx: Ctx) -> Result<Response, R
         .map_err(|e| ctx.fail(e))?;
     let lang = ctx.page.lang;
     let tz = ctx.page.tz;
+    let pv = state
+        .uc
+        .pv_dashboard
+        .execute(&ctx.tenant)
+        .await
+        .map_err(|e| ctx.fail(e))?;
     Ok(render(&DashboardPage {
         cards: cards.iter().map(|c| card(lang, tz, c)).collect(),
+        pv: pv.iter().map(|c| pv_card(lang, c)).collect(),
         ctx: ctx.page,
     }))
 }

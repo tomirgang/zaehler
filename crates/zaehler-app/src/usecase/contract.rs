@@ -886,6 +886,28 @@ pub fn templates_for(meter: &MeterAggregate) -> Vec<ContractTemplate> {
             direction: Direction::Export,
             positions: vec![tpl("feed_in", None, one, false, true)],
         });
+        // anteilige Sätze, z.B. 10 kWp von 15 kWp: Faktor 0,6667 und 0,3333;
+        // die Faktoren werden an die Anlage angepasst (SPEC_PV_FEED_IN)
+        out.push(ContractTemplate {
+            code: "feed_in_shares",
+            direction: Direction::Export,
+            positions: vec![
+                tpl(
+                    "feed_in_upto10",
+                    None,
+                    Some(Decimal::new(6667, 4)),
+                    false,
+                    true,
+                ),
+                tpl(
+                    "feed_in_over10",
+                    None,
+                    Some(Decimal::new(3333, 4)),
+                    false,
+                    true,
+                ),
+            ],
+        });
     }
     out
 }

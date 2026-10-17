@@ -1,0 +1,107 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ name }}</h1>
+  <div class="actions">
+    {% if !grid_id.is_empty() %}<a class="button secondary" href="/pv/grid/{{ grid_id }}">{{ ctx.lang.t("pv-grid-view") }}</a>{% endif %}
+    <a class="button secondary" href="/pv/{{ id }}/costs">{{ ctx.lang.t("asset-costs-title") }}</a>
+    {% if ctx.is_owner %}
+    <a class="button secondary" href="/pv/{{ id }}/edit">{{ ctx.lang.t("pv-edit") }}</a>
+    <form method="post" action="/pv/{{ id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("pv-delete-confirm") }}">
+      <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+      <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+<dl class="facts">
+  {% for (k, v) in facts %}<dt>{{ k }}</dt><dd>{{ v }}</dd>{% endfor %}
+</dl>
+
+<section aria-labelledby="economics-title">
+  <h2 id="economics-title">{{ ctx.lang.t("pv-economics") }}</h2>
+  <dl class="facts">
+    <dt>{{ ctx.lang.t("pv-investments") }}</dt><dd>{{ investments }}</dd>
+    <dt>{{ ctx.lang.t("pv-break-even") }}</dt><dd>{% if let Some(b) = break_even %}{{ b }}{% else %}{{ ctx.lang.t("pv-break-even-none") }}{% endif %}</dd>
+    <dt>{{ ctx.lang.t("pv-return") }}</dt><dd>{% if let Some(r) = simple_return %}{{ r }}{% endif %}</dd>
+  </dl>
+  <p class="hint">{{ ctx.lang.t("pv-economics-hint") }}</p>
+  {% if !years.is_empty() %}
+  <div class="table-scroll">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("vehicle-period") }}</th>
+        <th class="num">{{ ctx.lang.t("pv-generation") }}</th>
+        <th class="num">{{ ctx.lang.t("pv-feed-in") }}</th>
+        <th class="num">{{ ctx.lang.t("pv-savings") }}</th>
+        <th class="num">{{ ctx.lang.t("pv-advantage") }}</th>
+        <th class="num">{{ ctx.lang.t("pv-costs") }}</th>
+        <th class="num">{{ ctx.lang.t("pv-balance") }}</th>
+        <th class="num">{{ ctx.lang.t("pv-cumulative") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for y in years %}
+      <tr>
+        <th scope="row">{{ y.label }}</th>
+        <td class="num">{{ y.generation }}</td>
+        <td class="num">{{ y.feed_in }}</td>
+        <td class="num">{{ y.savings }}</td>
+        <td class="num">{{ y.advantage }}</td>
+        <td class="num">{{ y.costs }}</td>
+        <td class="num">{{ y.balance }}</td>
+        <td class="num">{{ y.cumulative }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  <div class="charts" data-chart-url="/pv/{{ id }}/balance.json" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
+    <h3 id="balance-chart-title">{{ ctx.lang.t("pv-balance-chart") }}</h3>
+    <div class="chart" data-chart="pvBalance" role="img" aria-labelledby="balance-chart-title"></div>
+  </div>
+</section>
+
+<section aria-labelledby="yield-title">
+  <h2 id="yield-title">{{ ctx.lang.t("pv-yield") }}</h2>
+  {% if let Some((year, measured, rest, total)) = forecast %}
+  <dl class="facts">
+    <dt>{{ ctx.lang.t("pv-forecast") }} {{ year }}</dt><dd>{{ total }}</dd>
+    <dt>{{ ctx.lang.t("pv-forecast-measured") }}</dt><dd>{{ measured }}</dd>
+    <dt>{{ ctx.lang.t("pv-forecast-rest") }}</dt><dd>{{ rest }}</dd>
+  </dl>
+  {% endif %}
+  <div class="charts" data-chart-url="/pv/{{ id }}/yield.json" data-echarts="{{ ctx.static_prefix }}/echarts.min.js">
+    <h3 id="yield-chart-title">{{ ctx.lang.t("pv-yield-chart") }}</h3>
+    <div class="chart" data-chart="pvYield" role="img" aria-labelledby="yield-chart-title"></div>
+  </div>
+  <details open>
+    <summary>{{ ctx.lang.t("chart-table") }}</summary>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{ ctx.lang.t("analysis-month") }}</th>
+          <th class="num">{{ ctx.lang.t("pv-generation") }}</th>
+          <th class="num">{{ ctx.lang.t("pv-expected") }}</th>
+          <th class="num">{{ ctx.lang.t("pv-band") }}</th>
+          <th>{{ ctx.lang.t("pv-traffic") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for y in yields %}
+        <tr>
+          <td>{{ y.month }}{% if y.history %} <span class="tag">{{ ctx.lang.t("pv-source-history") }}</span>{% endif %}</td>
+          <td class="num">{{ y.actual }}</td>
+          <td class="num">{{ y.expected }}</td>
+          <td class="num">{{ y.band }}</td>
+          <td>{% if !y.status.is_empty() %}<span class="traffic traffic-{{ y.status }}"><span class="traffic-dot" aria-hidden="true"></span>{{ y.status_label }}</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+</section>
+{% endblock %}

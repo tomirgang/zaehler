@@ -389,6 +389,36 @@ pub struct AssetCostRecord {
     pub note: Option<String>,
 }
 
+/// PV-Anlage (ab `m20261018_000014_pv`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PvSystemRecord {
+    pub id: Uuid,
+    pub household_id: Uuid,
+    pub name: String,
+    /// `surplus`, `full_feed_in` oder `plug_in`
+    pub kind: String,
+    pub kwp_milli: i64,
+    pub commissioned_on: NaiveDate,
+    pub azimuth: Option<i16>,
+    pub tilt: Option<i16>,
+    pub inverter: Option<String>,
+    pub battery_kwh_milli: Option<i64>,
+    pub specific_yield_milli: i64,
+    pub degradation_pct_milli: i64,
+    /// Monatsanteile als JSON wie gespeichert
+    pub month_shares: Option<String>,
+    pub alarm_threshold_pct: i16,
+}
+
+/// Zuordnung einer Messstelle zu einer PV-Anlage (ab `m20261018_000014_pv`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PvSystemMeterRecord {
+    pub pv_system_id: Uuid,
+    pub meter_id: Uuid,
+    /// `grid`, `generation` oder `battery`
+    pub role: String,
+}
+
 /// Alle Datensätze eines Archivs. Sitzungen und temporäre Dateien sind nicht
 /// enthalten.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -439,6 +469,10 @@ pub struct BackupData {
     pub charging_sessions: Vec<ChargingSessionRecord>,
     #[serde(default)]
     pub asset_costs: Vec<AssetCostRecord>,
+    #[serde(default)]
+    pub pv_systems: Vec<PvSystemRecord>,
+    #[serde(default)]
+    pub pv_system_meters: Vec<PvSystemMeterRecord>,
 }
 
 impl BackupData {
@@ -590,6 +624,23 @@ impl BackupData {
                 .charging_sessions
                 .into_iter()
                 .filter(|c| meters.contains(&c.vehicle_id))
+                .collect(),
+            pv_system_meters: {
+                let systems: HashSet<Uuid> = self
+                    .pv_systems
+                    .iter()
+                    .filter(|s| s.household_id == id)
+                    .map(|s| s.id)
+                    .collect();
+                self.pv_system_meters
+                    .into_iter()
+                    .filter(|m| systems.contains(&m.pv_system_id))
+                    .collect()
+            },
+            pv_systems: self
+                .pv_systems
+                .into_iter()
+                .filter(|s| s.household_id == id)
                 .collect(),
             asset_costs: self
                 .asset_costs

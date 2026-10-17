@@ -258,7 +258,7 @@ Kennzahl ist undefiniert, sobald eine beteiligte Größe undefiniert ist.
 
 ```{spec} Energiekennzahlen
 :id: SPEC_PV_KPI
-:status: draft
+:status: implemented
 :satisfies: REQ_PV_004, REQ_PV_006, REQ_MTR_004
 
 - Eigenverbrauch `EV = G - E - (L - U)`, bei Volleinspeisung `EV = 0`.
@@ -274,7 +274,7 @@ Kennzahl ist undefiniert, sobald eine beteiligte Größe undefiniert ist.
 
 ```{spec} Speicherkennzahlen
 :id: SPEC_PV_BATTERY
-:status: draft
+:status: implemented
 :satisfies: REQ_PV_005
 
 Speicherverluste `L - U`, Wirkungsgrad `U / L` (bei `L = 0` undefiniert),
@@ -284,7 +284,7 @@ Hinweis darauf erscheint bei jeder Speicherkennzahl.
 
 ```{spec} Ertragserwartung
 :id: SPEC_PV_YIELD_EXPECTATION
-:status: draft
+:status: implemented
 :satisfies: REQ_PV_007
 :links: SPEC_FC_SEASON_PROFILE, SPEC_FC_PERIOD_FORECAST
 
@@ -299,11 +299,16 @@ Jahresniveau aus den eigenen Monatswerten ({need}`SPEC_FC_SEASON_PROFILE`);
 die Degradation ist darin enthalten und wird nicht zusätzlich angewendet.
 Jahresprognose der Erzeugung über {need}`SPEC_FC_PERIOD_FORECAST` mit diesem
 Profil.
+
+Umsetzung: Domain `pv::start_expectation`, `pv::expectation` und
+`pv::yield_months`. Die Jahresprognose ist die gemessene Erzeugung der
+abgeschlossenen Monate plus die Erwartung der übrigen Monate des Jahres
+(`pv::expectation_in`).
 ```
 
 ```{spec} Ertragsüberwachung
 :id: SPEC_PV_MONITORING
-:status: draft
+:status: implemented
 :satisfies: REQ_PV_008
 :links: SPEC_EXP_BAND
 
@@ -313,11 +318,17 @@ Monatserwartung, gelb bis ±45 %, sonst rot; mit Historie Band gemäß
 wenn die Tagesrate seit der vorherigen Ablesung kleiner als
 `Schwellwert · Erwartung des Zeitraums / Tage` ist (Schwellwert Standard 50 %);
 höchstens ein Alarm je Anlage und Ablesung.
+
+Umsetzung: `DispatchOutbox` prüft nach dem Abweichungsalarm die Anlagen des
+Erzeugungszählers (`pv::yield_alarm`), Schlüssel
+`pv_alarm:{system}:{reading}` in `notification_log`. Empfänger sind
+Mitglieder mit dem Ereignistyp `alarm`; ein eigener Typ `pv_alarm` besteht
+nicht.
 ```
 
 ```{spec} Einspeisevergütung
 :id: SPEC_PV_FEED_IN
-:status: draft
+:status: implemented
 :satisfies: REQ_PV_009
 :links: SPEC_TAR_COST_CALC, ADR_021
 
@@ -331,7 +342,7 @@ Die durchschnittliche Vergütung `v_ein = Vergütung / E`.
 
 ```{spec} Wirtschaftlichkeit von PV-Anlagen
 :id: SPEC_PV_ECONOMICS
-:status: draft
+:status: implemented
 :satisfies: REQ_PV_010, REQ_PV_011
 :links: ADR_020
 
@@ -348,4 +359,12 @@ Die durchschnittliche Vergütung `v_ein = Vergütung / E`.
   12 Monate und den aktuell gültigen Preisen.
 - Einfache Rendite p.a. = durchschnittliche jährliche Bilanz ohne Investition
   / Summe der Investitionen (Kategorien `investment` und `replacement`).
+
+Umsetzung: `PvSystemReport` rechnet je Monat; Kosten zählen am Monatsanfang,
+Vergütung und Ersparnis verteilen sich linear über die Tage des Monats, daraus
+ergibt sich der Amortisationstag (`pv::break_even`). Die Fortschreibung nutzt
+die letzten 12 gemessenen Monate, frühestens ab Inbetriebnahme. Die Rendite
+wird aus den gemessenen Monaten auf ein Jahr hochgerechnet. Der Ladepreis mit
+PV ({need}`REQ_CAR_011`) ist `s · v_ein + (1 - s) · p_haus` mit Autarkiegrad
+*s* und als Schätzung gekennzeichnet (`pv::charging_price`).
 ```

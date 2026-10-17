@@ -111,6 +111,8 @@ struct Inputs {
     segments: Vec<FuelSegment>,
     /// Heimlade-Messstelle und Messstelle des Ladepreises
     home: Option<(MeterPricing, Option<MeterPricing>)>,
+    /// PV am Hausanschluss der Preis-Messstelle (Mischpreis, WP_V1_18)
+    pv: Option<super::pv::GridSource>,
 }
 
 impl Inputs {
@@ -154,7 +156,26 @@ impl Inputs {
                 } else {
                     None
                 };
-                (measured, price_meter.as_ref().and_then(|m| m.unit_price(p)))
+                let price = price_meter.as_ref().and_then(|m| {
+                    let house = m.unit_price(p)?;
+                    // mit PV: Mischpreis aus Einspeisevergütung und
+                    // Arbeitspreis, immer als Schätzung (REQ_CAR_011)
+                    Some(match &self.pv {
+                        Some(src) => super::pv::pv_charging_price(
+                            src,
+                            m,
+                            p,
+                            self.vehicle.data.pv_share_pct,
+                            house.value,
+                        )
+                        .map_or(house, |v| Estimated {
+                            value: v,
+                            estimated: true,
+                        }),
+                        None => house,
+                    })
+                });
+                (measured, price)
             }
             None => (None, None),
         };
@@ -329,6 +350,10 @@ impl VehicleReport {
                 (hm, Some(price))
             });
         }
+        let pv = match home.as_ref().and_then(|(_, m)| m.as_ref()) {
+            Some(m) => super::pv::GridSource::load(uow.as_mut(), t, m.agg.meter.id, cal).await?,
+            None => None,
+        };
         drop(uow);
 
         let fills: Vec<FuelFill> = costs
@@ -353,6 +378,7 @@ impl VehicleReport {
             costs,
             charging,
             home,
+            pv,
         };
         let last_day = inputs
             .vehicle

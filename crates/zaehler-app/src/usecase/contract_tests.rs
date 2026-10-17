@@ -227,7 +227,15 @@ async fn contracts_from_templates_and_overlap_rules() {
         .unwrap();
     let (_, templates) = uc.contract_templates.execute(&t, strom).await.unwrap();
     let codes: Vec<&str> = templates.iter().map(|x| x.code).collect();
-    assert_eq!(codes, ["electricity", "electricity_ht_nt", "feed_in"]);
+    assert_eq!(
+        codes,
+        [
+            "electricity",
+            "electricity_ht_nt",
+            "feed_in",
+            "feed_in_shares"
+        ]
+    );
     let ht_nt = &templates[1];
     let ht = register(&uc, &t, strom, "HT").await;
     let nt = register(&uc, &t, strom, "NT").await;

@@ -24,3 +24,7 @@ role-viewer = Viewer
 
 footer-settings = Notification settings: { $link }
 footer-sender = This message was sent automatically by Zähler.
+
+pv-alarm-subject = Low PV yield: { $system }
+pv-alarm-intro = In household "{ $household }", the generation of PV system "{ $system }" (meter "{ $meter }") is below the expectation.
+pv-alarm-generation = Generation: { $generation } kWh, expected: { $expected } kWh (threshold { $threshold } %)

@@ -1,0 +1,32 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ ctx.lang.t("pv-title") }}</h1>
+  {% if ctx.is_owner %}<div class="actions"><a class="button" href="/pv/new">{{ ctx.lang.t("pv-new") }}</a></div>{% endif %}
+</div>
+{% if systems.is_empty() %}
+<p class="muted">{{ ctx.lang.t("pv-empty") }}</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>{{ ctx.lang.t("pv-name") }}</th>
+      <th>{{ ctx.lang.t("pv-kind") }}</th>
+      <th class="num">{{ ctx.lang.t("pv-kwp") }}</th>
+      <th>{{ ctx.lang.t("pv-role-grid") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in systems %}
+    <tr>
+      <td><a href="/pv/{{ s.id }}">{{ s.name }}</a></td>
+      <td>{{ s.kind }}</td>
+      <td class="num">{{ s.kwp }}</td>
+      <td>{% if !s.grid_id.is_empty() %}<a href="/pv/grid/{{ s.grid_id }}">{{ s.grid }}</a>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

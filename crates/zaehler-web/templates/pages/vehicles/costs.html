@@ -4,9 +4,9 @@
 <div class="page-head">
   <h1>{{ ctx.lang.t("asset-costs-title") }}: {{ name }} {{ year }}</h1>
   <div class="actions">
-    <a class="button secondary" href="/vehicles/{{ id }}/costs?year={{ year - 1 }}">{{ year - 1 }}</a>
-    <a class="button secondary" href="/vehicles/{{ id }}/costs?year={{ year + 1 }}">{{ year + 1 }}</a>
-    <a class="button secondary" href="/vehicles/{{ id }}">{{ name }}</a>
+    <a class="button secondary" href="{{ base }}/costs?year={{ year - 1 }}">{{ year - 1 }}</a>
+    <a class="button secondary" href="{{ base }}/costs?year={{ year + 1 }}">{{ year + 1 }}</a>
+    <a class="button secondary" href="{{ base }}">{{ name }}</a>
   </div>
 </div>
 
@@ -34,8 +34,8 @@
       <td>{{ r.details }}{% if !r.recurring.is_empty() %} <span class="tag">{{ r.recurring }}</span>{% endif %}{% if !r.document.is_empty() %} <a href="/documents/{{ r.document }}/file">{{ ctx.lang.t("document-receipt") }}</a>{% endif %}</td>
       {% if ctx.can_write %}
       <td>
-        <a href="/vehicles/{{ id }}/costs/{{ r.id }}/edit">{{ ctx.lang.t("action-edit") }}</a>
-        <form method="post" action="/vehicles/{{ id }}/costs/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("entry-delete-confirm") }}">
+        <a href="{{ base }}/costs/{{ r.id }}/edit">{{ ctx.lang.t("action-edit") }}</a>
+        <form method="post" action="{{ base }}/costs/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("entry-delete-confirm") }}">
           <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
           <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
         </form>
@@ -57,7 +57,7 @@
 {% if ctx.can_write %}
 <section aria-labelledby="entry-title">
   <h2 id="entry-title">{% if entry.is_some() %}{{ ctx.lang.t("asset-edit") }}{% else %}{{ ctx.lang.t("asset-add") }}{% endif %}</h2>
-  <form method="post" action="{% if let Some(e) = entry %}/vehicles/{{ id }}/costs/{{ e }}/edit{% else %}/vehicles/{{ id }}/costs{% endif %}" class="form" novalidate>
+  <form method="post" action="{% if let Some(e) = entry %}{{ base }}/costs/{{ e }}/edit{% else %}{{ base }}/costs{% endif %}" class="form" novalidate>
     <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
     <div class="grid">
       <div class="field">
@@ -80,6 +80,7 @@
         {% for e in self.errs("amount") %}<p class="field-error">{{ e }}</p>{% endfor %}
       </div>
     </div>
+    {% if is_vehicle %}
     <fieldset class="field">
       <legend>{{ ctx.lang.t("asset-fuel") }}</legend>
       <div class="grid">
@@ -94,13 +95,16 @@
         </div>
       </div>
     </fieldset>
+    {% endif %}
     <div class="grid">
+      {% if is_vehicle %}
       <div class="field">
         <label for="odometer">{{ ctx.lang.t("asset-odometer") }}</label>
         <input id="odometer" name="odometer" value="{{ self.val("odometer") }}" inputmode="decimal">
         {% if entry.is_none() %}<label><input type="checkbox" name="odometer_reading" value="1"{% if self.checked("odometer_reading") %} checked{% endif %}> {{ ctx.lang.t("asset-odometer-reading") }}</label>{% endif %}
         {% for e in self.errs("odometer") %}<p class="field-error">{{ e }}</p>{% endfor %}
       </div>
+      {% endif %}
       <div class="field">
         <label for="recurrence_months">{{ ctx.lang.t("asset-recurrence") }}</label>
         <input id="recurrence_months" name="recurrence_months" value="{{ self.val("recurrence_months") }}" inputmode="numeric" size="3">
@@ -126,7 +130,7 @@
     {% endif %}
     <div class="actions">
       <button type="submit">{{ ctx.lang.t("action-save") }}</button>
-      {% if entry.is_some() %}<a href="/vehicles/{{ id }}/costs?year={{ year }}">{{ ctx.lang.t("action-cancel") }}</a>{% endif %}
+      {% if entry.is_some() %}<a href="{{ base }}/costs?year={{ year }}">{{ ctx.lang.t("action-cancel") }}</a>{% endif %}
     </div>
   </form>
 </section>

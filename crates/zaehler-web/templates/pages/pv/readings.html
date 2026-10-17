@@ -1,0 +1,53 @@
+{% extends "layout/base.html" %}
+
+{% block content %}
+<h1>{{ ctx.lang.t("pv-bulk") }}: {{ name }}</h1>
+<p class="hint">{{ ctx.lang.t("pv-bulk-hint") }}</p>
+<form method="post" action="/pv/grid/{{ id }}/readings" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  {% if !messages.is_empty() %}
+  <div class="callout warning" role="alert">{% for m in messages %}<p>{{ m }}</p>{% endfor %}</div>
+  {% endif %}
+  <div class="field">
+    <label for="at">{{ ctx.lang.t("reading-at") }}</label>
+    <input id="at" name="at" type="datetime-local" value="{{ self.val("at") }}" required>
+  </div>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("capture-meter") }}</th>
+        <th>{{ ctx.lang.t("pv-role") }}</th>
+        <th>{{ ctx.lang.t("reading-register") }}</th>
+        <th class="num">{{ ctx.lang.t("pv-last-value") }}</th>
+        <th>{{ ctx.lang.t("reading-value") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.meter }}</td>
+        <td>{{ r.role }}</td>
+        <td>{{ r.register }}</td>
+        <td class="num">{{ r.last }}</td>
+        <td><input name="{{ r.key }}" value="{{ self.val(r.key) }}" inputmode="decimal" aria-label="{{ r.meter }} {{ r.register }}"></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="field">
+    <label for="note">{{ ctx.lang.t("reading-note") }}</label>
+    <input id="note" name="note" value="{{ self.val("note") }}" maxlength="500">
+  </div>
+  {% if !warnings.is_empty() %}
+  <div class="callout warning">
+    <p>{{ ctx.lang.t("readings-warnings") }}</p>
+    {% for w in warnings %}<p>{{ w }}</p>{% endfor %}
+    <label><input type="checkbox" name="confirm_warnings" value="true"> {{ ctx.lang.t("readings-confirm") }}</label>
+  </div>
+  {% endif %}
+  <div class="actions">
+    <button type="submit">{{ ctx.lang.t("capture-save") }}</button>
+    <a href="/pv/grid/{{ id }}">{{ ctx.lang.t("action-cancel") }}</a>
+  </div>
+</form>
+{% endblock %}
