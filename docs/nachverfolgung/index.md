@@ -23,8 +23,11 @@ code
 | Arbeitspakete MVP | {need_count}`type == 'wp' and 'WP_MVP' in id` |
 | MVP-Anforderungen mit Arbeitspaket | {need_count}`type == 'req' and release == 'MVP' and len(covers_back) > 0` |
 | davon v1 | {need_count}`type == 'req' and release == 'v1'` |
-| Arbeitspakete v1 | {need_count}`type == 'wp' and 'WP_V1' in id` |
+| Arbeitspakete v1 | {need_count}`type == 'wp' and 'WP_V1_' in id` |
 | v1-Anforderungen mit Arbeitspaket | {need_count}`type == 'req' and release == 'v1' and len(covers_back) > 0` |
+| davon v1.1 | {need_count}`type == 'req' and release == 'v1.1'` |
+| Arbeitspakete v1.1 | {need_count}`type == 'wp' and 'WP_V11_' in id` |
+| v1.1-Anforderungen mit Arbeitspaket | {need_count}`type == 'req' and release == 'v1.1' and len(covers_back) > 0` |
 
 ## Anforderung → Spezifikation
 
@@ -74,6 +77,22 @@ code
 
 ```{needtable}
 :filter: type == 'req' and release == 'v1' and len(covers_back) == 0
+:columns: id, title, priority
+:style: table
+```
+
+### v1.1-Anforderungen ohne Spezifikation
+
+```{needtable}
+:filter: type == 'req' and release == 'v1.1' and len(satisfies_back) == 0
+:columns: id, title, priority
+:style: table
+```
+
+### v1.1-Anforderungen ohne Arbeitspaket
+
+```{needtable}
+:filter: type == 'req' and release == 'v1.1' and len(covers_back) == 0
 :columns: id, title, priority
 :style: table
 ```

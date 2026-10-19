@@ -15,4 +15,6 @@ V1
 v1-architektur
 v1-detail-design
 v1-abnahme
+V1.1
+v1.1-detail-design
 ```

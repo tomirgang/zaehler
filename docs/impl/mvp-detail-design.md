@@ -666,7 +666,8 @@ Je aktive Messstelle eine Karte: Name, Art, letzter Stand mit Datum,
 Verbrauch des letzten vollständigen Monats mit Differenz zum Vormonat,
 Jahresprognose mit Abdeckungsgrad, Fälligkeit (letzte Ablesung +
 Ableseturnus; überfällig hervorgehoben), Schaltflächen „Stand erfassen“ und
-„Foto“. Sortierung: überfällige zuerst, dann nach Name. Leerer Zustand:
+„Foto“. Sortierung: überfällige zuerst, dann nach Name (ab v1.1 ersetzt
+durch die Gruppierung nach {need}`SPEC_UI_DASHBOARD_GROUPS`). Leerer Zustand:
 Verweis auf „Messstelle anlegen“ und „CSV-Import“. Die Ampel
 ({need}`REQ_ANA_006`) folgt in v1.
 ```

@@ -2,7 +2,7 @@
 
 Anforderungen sind als `req`-Needs erfasst. Jede Anforderung hat eine
 MoSCoW-Priorität (`must`, `should`, `could`, `wont`) und einen Meilenstein
-(`MVP`, `v1`, `später`). Formulierung: *Das System muss/soll/kann …* plus
+(`MVP`, `v1`, `v1.1`, `später`). Formulierung: *Das System muss/soll/kann …* plus
 Akzeptanzkriterien.
 
 ```{toctree}
@@ -20,6 +20,7 @@ photovoltaik
 benachrichtigung
 import-export
 api
+oberflaeche
 betrieb
 qualitaet
 ```

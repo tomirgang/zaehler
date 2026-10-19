@@ -125,6 +125,8 @@ hinterlegte Durchschnittsverbrauch.
 Das System soll Kaufpreis, geschätzten Restwert bzw. Verkaufserlös und
 geplante Haltedauer erfassen und den Wertverlust linear auf die Haltedauer
 verteilen. Leasing- und Kreditraten werden als Finanzierungskosten geführt.
+Alternativ zur Haltedauer kann der Wertverlust nach Laufleistung verteilt
+werden ({need}`REQ_CAR_012`).
 ```
 
 ```{req} Kosten pro Kilometer
@@ -146,4 +148,75 @@ berechnen und anzeigen, getrennt nach variablen Kosten und Vollkosten
 
 Das System soll die Jahresfahrleistung analog zur Verbrauchsprognose
 hochrechnen und daraus die erwarteten Jahreskosten ableiten.
+```
+
+```{req} Wertverlust nach Lebenslaufleistung
+:id: REQ_CAR_012
+:status: accepted
+:priority: should
+:release: v1.1
+
+Das System soll je Fahrzeug wahlweise den Zeitmodus (geplantes Halteende und
+geschätzter Restwert, {need}`REQ_CAR_004`) oder den Laufleistungsmodus führen.
+Im Laufleistungsmodus werden Kaufpreis, Kilometerstand bei Kauf, eine
+Lebenslaufleistung als absoluter Kilometerstand (z.B. 250.000 km) und ein
+optionaler Endwert (Standard 0) erfasst. Der Wertverlust eines Zeitraums ist
+`km im Zeitraum × (Kaufpreis - Endwert) / (Lebenslaufleistung - km bei Kauf)`,
+gedeckelt auf die restliche Lebenslaufleistung.
+
+Das System soll in beiden Modi den aktuellen Restwert (`Kaufpreis - Wertverlust
+bis heute`) und die Restlebensdauer anzeigen. Im Laufleistungsmodus ist die
+Restlebensdauer `(Lebenslaufleistung - aktueller km-Stand) / prognostizierte
+Jahresfahrleistung` ({need}`REQ_CAR_006`), angezeigt in Jahren und als
+voraussichtliches Datum; im Zeitmodus die Restlaufzeit bis zum Halteende.
+
+**Akzeptanzkriterien**
+- Der Kilometerstand bei Kauf ist im Laufleistungsmodus Pflicht und mit dem Startstand des Fahrzeugs vorbelegt; die Lebenslaufleistung muss größer sein.
+- Der Modus ist jederzeit wechselbar; Wertverlust, Restwert und Kosten pro km ({need}`REQ_CAR_005`) werden danach neu berechnet.
+- Bei Verkauf ersetzt der Erlös in beiden Modi den Rest- bzw. Endwert; im Laufleistungsmodus wird die Differenz zum Kaufpreis nach den bis zum Verkauf gefahrenen km verteilt.
+- Ohne belastbare Fahrleistungsprognose wird keine Restlebensdauer angezeigt, sondern der Hinweis „zu wenig Daten“; der Restwert wird weiterhin angezeigt.
+```
+
+```{req} Preis pro Liter beim Tanken
+:id: REQ_CAR_013
+:status: accepted
+:priority: should
+:release: v1.1
+
+Das System soll bei Tankvorgängen von Fahrzeugen, die tanken
+({need}`REQ_CAR_007`), die Felder Betrag, Menge (l) und Preis pro Liter
+anbieten. Zwei der drei Angaben genügen, die dritte wird berechnet. Der Preis
+pro Liter wird mit drei Nachkommastellen gespeichert.
+
+Das System soll den zuletzt bekannten Preis pro Liter mit Datum auf der
+Fahrzeugdetailseite anzeigen und für die prognostizierten Kraftstoffkosten
+verwenden: `prognostizierte km × Ø-Verbrauch / 100 × Preis pro Liter`
+({need}`REQ_CAR_006`, {need}`REQ_CAR_003`).
+
+Ist kein Preis pro Liter bekannt (Tankvorgänge ohne Menge), wird ein
+Durchschnittspreis über die letzten 3 Monate geschätzt: `Tankkosten / (gefahrene
+km × Ø-Verbrauch / 100)`. Der Ø-Verbrauch stammt aus der Vollbetankungsmethode,
+ersatzweise aus einem hinterlegten Verbrauchsprofil.
+
+**Akzeptanzkriterien**
+- Sind alle drei Werte angegeben und weicht der Betrag um mehr als 1 Cent von `Menge × Preis pro Liter` ab, wird die Eingabe mit Validierungsfehler abgelehnt.
+- Ein geschätzter Durchschnittspreis ist in Anzeige und Prognose als Schätzung gekennzeichnet.
+- Ohne Verbrauchswert wird kein Durchschnittspreis geschätzt und keine Kraftstoffkostenprognose ausgewiesen.
+```
+
+```{req} Verlauf des Literpreises
+:id: REQ_CAR_014
+:status: accepted
+:priority: should
+:release: v1.1
+
+Das System soll auf der Fahrzeugdetailseite den Verlauf des Preises pro Liter
+als Diagramm zeigen: ein Punkt je Tankvorgang mit bekanntem Preis
+({need}`REQ_CAR_013`) über die gesamte Haltedauer, mit wählbarem
+Ausschnitt (Zoom) ({need}`REQ_ANA_007`).
+
+**Akzeptanzkriterien**
+- Geschätzte Durchschnittspreise werden nicht eingezeichnet.
+- Das Diagramm hat eine Tabellenalternative ({need}`REQ_NFR_007`).
+- Ein Verlauf des kWh-Preises beim Laden ist nicht Teil dieser Anforderung.
 ```

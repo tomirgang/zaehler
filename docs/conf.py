@@ -102,13 +102,13 @@ needs_fields = {
     "release": {
         "description": "Geplanter Meilenstein",
         "nullable": True,
-        "schema": {"type": "string", "enum": ["MVP", "v1", "später"]},
+        "schema": {"type": "string", "enum": ["MVP", "v1", "v1.1", "später"]},
     },
     "source": {"description": "Fundstelle im Quellcode", "nullable": True},
     "milestone": {
         "description": "Meilenstein innerhalb einer Phase (Arbeitspakete)",
         "nullable": True,
-        "schema": {"type": "string", "enum": ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9"]},
+        "schema": {"type": "string", "enum": ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12"]},
     },
     "status": {
         "description": "Lebenszyklus (req/spec: draft→accepted→implemented, adr: proposed→accepted→superseded)",

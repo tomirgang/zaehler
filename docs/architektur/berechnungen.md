@@ -246,6 +246,72 @@ wie das erste Profil.
 Bei Verkauf ersetzt der Verkaufserlös den geschätzten Restwert.
 ```
 
+```{spec} Wertverlust nach Lebenslaufleistung
+:id: SPEC_CAR_MILEAGE_DEPRECIATION
+:status: draft
+:satisfies: REQ_CAR_012
+:links: SPEC_CAR_DEPRECIATION, SPEC_CAR_COST_PER_KM, SPEC_FC_PERIOD_FORECAST
+
+Bezeichner: Kaufpreis *K*, Endwert *W* (Standard 0, bei Verkauf der Erlös),
+Kilometerstand bei Kauf *s₀*, Lebenslaufleistung *S* (absoluter
+Kilometerstand, *S* > *s₀*), Kilometerstand *s(t)* der Fahrzeug-Messstelle
+({need}`SPEC_CONS_INTERPOLATION`). Mit `s*(t) = min(max(s(t), s₀), S)` gilt
+für einen Zeitraum [*a*, *b*) innerhalb der Haltedauer:
+
+`Wertverlust = (K - W) · (s*(b) - s*(a)) / (S - s₀)`
+
+Nach Erreichen von *S* fällt kein weiterer Wertverlust an. Bei Verkauf am Tag
+*v* endet die Haltedauer mit *v*; der restliche Betrag
+`(K - W) · (S - s*(v)) / (S - s₀)` fällt zusätzlich am Verkaufstag an, damit
+die Summe über die Haltedauer `K - Erlös` ergibt (Verteilung nach den bis zum
+Verkauf gefahrenen km).
+
+Restwert am Tag *t*: `K - Wertverlust[Kauf, t)`. Restlebensdauer:
+`(S - s(t)) / prognostizierte Jahresfahrleistung` in Jahren, Datum = *t* +
+Restlebensdauer. Die Jahresfahrleistung stammt aus
+{need}`SPEC_FC_PERIOD_FORECAST` über die letzten 12 Monate; ist sie
+undefiniert (weniger als 90 Tage gemessener Zeitraum) oder 0, ist die
+Restlebensdauer undefiniert. Im Zeitmodus ({need}`SPEC_CAR_DEPRECIATION`)
+ist die Restlaufzeit `geplantes Ende - t`, höchstens 0. Geldbeträge werden
+erst bei der Ausgabe gerundet ({need}`SPEC_STORE_FIXED_POINT`).
+```
+
+```{spec} Preis pro Liter
+:id: SPEC_CAR_FUEL_PRICE
+:status: draft
+:satisfies: REQ_CAR_013, REQ_CAR_014
+:links: SPEC_CAR_FUEL_CONSUMPTION, SPEC_CAR_REPORT, SPEC_ASSET_COSTS
+
+Erfassung: Von Betrag *B*, Menge *M* und Preis pro Liter *p* sind zwei
+anzugeben. Fehlt *B*, gilt `B = round(M · p, 2)`; fehlt *M*, gilt
+`M = round(B / p, 3)`; fehlt *p*, gilt `p = round(B / M, 3)`. Sind alle drei
+angegeben und ist `|B - M · p| > 0,01`, wird die Eingabe abgelehnt
+(`asset_cost.price_mismatch`). Gespeichert wird *p* wie eingegeben bzw.
+berechnet, damit ein eingegebener Literpreis nicht durch die Rundung von *B*
+verfälscht wird.
+
+Bekannter Literpreis eines Tankvorgangs: das gespeicherte *p*. Letzter
+bekannter Literpreis: *p* des jüngsten Tankvorgangs mit *p*.
+
+Geschätzter Durchschnittspreis, falls kein Tankvorgang einen bekannten
+Literpreis hat, über die letzten 3 Monate [*t* - 3 Monate, *t*):
+`p̄ = Σ B(Tankvorgänge im Zeitraum) / (km(Zeitraum) · v / 100)` mit dem
+Ø-Verbrauch *v* aus {need}`SPEC_CAR_FUEL_CONSUMPTION` über die letzten 12
+Monate, ersatzweise dem gültigen Verbrauchsprofil für Kraftstoff (l/100 km,
+neu neben dem Profil in kWh/100 km aus {need}`SPEC_CAR_ENERGY_COST`). Ohne *v*,
+ohne Tankvorgang oder ohne gefahrene km im Zeitraum ist *p̄* undefiniert.
+
+Prognose: `Kraftstoffkosten Restjahr = prognostizierte km Restjahr · v / 100 ·
+p_prog` mit `p_prog` = letzter bekannter Literpreis, sonst *p̄*. Ist
+`p_prog` geschätzt, ist die Prognose gekennzeichnet; ist *v* oder `p_prog`
+undefiniert, entfällt die Kraftstoffkostenprognose. Die Kraftstoffkosten
+ersetzen in den erwarteten Jahreskosten ({need}`SPEC_CAR_REPORT`) den
+Kraftstoffanteil der variablen Kosten je km.
+
+Verlauf: je Tankvorgang mit *p* ein Punkt (Datum, *p*); geschätzte Werte
+werden nicht eingezeichnet.
+```
+
 ## Photovoltaik
 
 Bezeichner je Hausanschluss und Zeitraum *P*: Erzeugung *G* (Summe der
