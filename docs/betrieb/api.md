@@ -94,6 +94,24 @@ Die Werte müssen zur Zahl der Nachkommastellen des Geräts passen; mehr
 Stellen ergeben `reading.too_many_decimals`. Bei Bedarf rundet ein Filter wie
 `{{ states('sensor.stromzaehler_bezug') | float | round(1) }}`.
 
+## Beispiel: SENEC-Wochenexporte
+
+`scripts/senec_import.py` importiert eine SENEC-Wochen-CSV (Leistung in kW,
+etwa alle 5 Minuten) als tägliche Stände um 00:00 Uhr: Netzbezug und
+Netzeinspeisung in den Hausanschluss, Stromerzeugung in den
+Erzeugungszähler, optional Akkuladung und -entnahme in einen Speicherzähler.
+Die Leistung wird mit der Trapezregel integriert (Lücken über 30 Minuten
+werden nicht überbrückt); zwischen eigenen Ablesungen werden die Stände so
+skaliert, dass sie diese genau treffen.
+
+```sh
+ZAEHLER_API=zt_... python3 scripts/senec_import.py 2026 41 --dry-run
+python3 scripts/senec_import.py 2026 41 --grid-meter Strom --pv-meter "PV Erzeugung"
+```
+
+Stände vor dem Einbau des Geräts lehnt die API ab; für ältere Wochen muss das
+Gerät entsprechend früher eingebaut sein.
+
 ## Weitere Endpunkte
 
 Über die API sind alle Daten des Haushalts les- und schreibbar, die auch die
