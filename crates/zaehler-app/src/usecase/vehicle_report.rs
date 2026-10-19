@@ -30,7 +30,69 @@ use crate::{
 use_case!(
     /// Auswertung eines Fahrzeugs je Kalenderjahr und Haltedauer (Viewer).
     VehicleReport,
+    /// Kosten aller Fahrzeuge eines Kalenderjahres für die Kostenübersicht
+    /// (Viewer).
+    HouseholdVehicleCosts,
 );
+
+/// Kosten eines Fahrzeugs im Kalenderjahr (Kostenübersicht des Haushalts).
+#[derive(Debug, Clone)]
+pub struct VehicleYearCost {
+    pub meter_id: MeterId,
+    pub name: String,
+    /// Auswertung des Jahres bis heute; `None`, wenn das Fahrzeug im Jahr
+    /// keine Daten hat
+    pub period: Option<VehiclePeriod>,
+}
+
+impl VehicleYearCost {
+    /// Variable und fixe Kosten plus Wertverlust.
+    #[must_use]
+    pub fn total(&self) -> Decimal {
+        self.period.as_ref().map_or(Decimal::ZERO, |p| {
+            p.cost.variable + p.cost.fixed + p.cost.depreciation
+        })
+    }
+}
+
+impl HouseholdVehicleCosts {
+    /// Je Fahrzeug die Jahreszeile der Fahrzeugauswertung
+    /// (SPEC_CAR_REPORT), nach Name sortiert; ohne `year` das laufende Jahr.
+    // @impl SPEC_TAR_COST_VIEW, SPEC_CAR_REPORT
+    #[tracing::instrument(name = "HouseholdVehicleCosts", skip_all)]
+    pub async fn execute(
+        &self,
+        t: &Tenant,
+        year: Option<i32>,
+    ) -> Result<(i32, Vec<VehicleYearCost>), AppError> {
+        t.require(Role::Viewer)?;
+        let (year, vehicles) = {
+            let mut uow = self.p.uow.begin().await?;
+            let (_, today) = calendar_today(&self.p, uow.as_mut(), t).await?;
+            let mut vehicles: Vec<(MeterId, String)> = uow
+                .meters()
+                .list(t)
+                .await?
+                .into_iter()
+                .filter(|m| m.meter.data.kind == zaehler_domain::meter::MeterKind::Vehicle)
+                .map(|m| (m.meter.id, m.meter.data.name))
+                .collect();
+            vehicles.sort_by_key(|(_, name)| name.to_lowercase());
+            (year.unwrap_or(today.year()), vehicles)
+        };
+        let report = VehicleReport::new((*self.p).clone());
+        let mut out = Vec::new();
+        for (meter_id, name) in vehicles {
+            let r = report.execute(t, meter_id).await?;
+            out.push(VehicleYearCost {
+                meter_id,
+                name,
+                period: r.years.into_iter().find(|p| p.year == Some(year)),
+            });
+        }
+        Ok((year, out))
+    }
+}
 
 /// Auswertung eines Zeitraums.
 #[derive(Debug, Clone)]

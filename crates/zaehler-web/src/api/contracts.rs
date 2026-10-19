@@ -29,6 +29,7 @@ use zaehler_app::{
             PositionInput, SettlementInput,
         },
         cost::HouseholdCostView,
+        vehicle_report::VehicleYearCost,
     },
 };
 use zaehler_domain::{
@@ -351,6 +352,48 @@ pub struct HouseholdCostsDto {
     pub has_estimate: bool,
     pub rows: Vec<HouseholdCostRowDto>,
     pub months: Vec<MonthCostDto>,
+    /// Fahrzeugkosten des Jahres bis heute; nicht im Saldo enthalten, da
+    /// Heimladen bereits in den Stromkosten steckt
+    pub vehicles: Vec<VehicleYearCostDto>,
+}
+
+/// Kosten eines Fahrzeugs im Kalenderjahr bis heute (SPEC_CAR_REPORT).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VehicleYearCostDto {
+    pub meter_id: Uuid,
+    pub name: String,
+    #[schema(value_type = String)]
+    pub km: Decimal,
+    /// km ganz oder teilweise geschätzt
+    pub km_estimated: bool,
+    #[schema(value_type = String)]
+    pub variable: Decimal,
+    #[schema(value_type = String)]
+    pub fixed: Decimal,
+    #[schema(value_type = String)]
+    pub depreciation: Decimal,
+    #[schema(value_type = String)]
+    pub total: Decimal,
+    /// Vollkosten je km; ohne km `null`
+    #[schema(value_type = Option<String>)]
+    pub total_per_km: Option<Decimal>,
+}
+
+impl VehicleYearCostDto {
+    fn from_year(v: &VehicleYearCost) -> Option<Self> {
+        let p = v.period.as_ref()?;
+        Some(Self {
+            meter_id: v.meter_id.0,
+            name: v.name.clone(),
+            km: p.km.map_or(Decimal::ZERO, |k| k.value),
+            km_estimated: p.km.is_some_and(|k| k.estimated),
+            variable: p.cost.variable,
+            fixed: p.cost.fixed,
+            depreciation: p.cost.depreciation,
+            total: v.total(),
+            total_per_km: p.cost.total_per_km,
+        })
+    }
 }
 
 impl From<&HouseholdCostView> for HouseholdCostsDto {
@@ -388,6 +431,7 @@ impl From<&HouseholdCostView> for HouseholdCostsDto {
                     export: m.export,
                 })
                 .collect(),
+            vehicles: Vec::new(),
         }
     }
 }
@@ -756,5 +800,14 @@ async fn household_costs(
         return Err(Problem::bad_request("query.year").into());
     }
     let v = s.uc.household_costs.execute(&ctx.tenant, q.year).await?;
-    Ok(Json(HouseholdCostsDto::from(&v)))
+    let (_, vehicles) =
+        s.uc.household_vehicle_costs
+            .execute(&ctx.tenant, Some(v.year))
+            .await?;
+    let mut dto = HouseholdCostsDto::from(&v);
+    dto.vehicles = vehicles
+        .iter()
+        .filter_map(VehicleYearCostDto::from_year)
+        .collect();
+    Ok(Json(dto))
 }

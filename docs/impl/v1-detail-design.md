@@ -583,7 +583,12 @@ Vertrags und für das laufende Kalenderjahr:
 Alle Beträge tragen die Kennzeichnung gemessen oder prognostiziert; der
 Abdeckungsgrad wird mit angezeigt. Ohne Vertrag zeigt die Seite einen Verweis
 auf „Vertrag anlegen“. `HouseholdCosts` summiert alle Messstellen des
-Haushalts für das Kalenderjahr.
+Haushalts für das Kalenderjahr. Darunter zeigt die Kostenübersicht je
+Fahrzeug die Jahreszeile der Fahrzeugauswertung ({need}`SPEC_CAR_REPORT`,
+`HouseholdVehicleCosts`): km, variable und fixe Kosten, Wertverlust, Summe
+und Vollkosten je km bis heute, mit Gesamtzeile. Die Fahrzeugkosten fließen
+nicht in den Saldo ein, weil Heimladen bereits in den Stromkosten enthalten
+ist; `GET /api/v1/costs` liefert sie zusätzlich als `vehicles`.
 
 Umsetzung: Die Prognose nutzt nicht `forecast::project`, sondern
 `cost::Quantities`: Menge je Teilzeitraum = Gewicht des Saisonprofils ×

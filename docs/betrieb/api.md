@@ -139,7 +139,7 @@ Haushalte 404. Rollen: L = Lesen, M = Mitglied, E = Eigentümer.
 | POST | `/api/v1/contracts/{id}/positions/{position}/price-components`, `/installments` | E |
 | POST | `/api/v1/contracts/{id}/adjustments`, `/settlements` | M |
 | DELETE | `/api/v1/contracts/{id}/{installments\|adjustments\|settlements}/{entry}` | E bzw. M |
-| GET | `/api/v1/costs?year` | L |
+| GET | `/api/v1/costs?year` (mit `vehicles`: Fahrzeugkosten des Jahres) | L |
 | GET, POST | `/api/v1/vehicles` | L, E |
 | GET, PUT | `/api/v1/vehicles/{id}` | L, E |
 | POST, DELETE | `/api/v1/vehicles/{id}/profiles`, `/profiles/{profile}` | E |

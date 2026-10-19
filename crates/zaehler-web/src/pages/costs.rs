@@ -16,11 +16,14 @@ use serde_json::{Value, json};
 use zaehler_app::{
     AppError,
     ids::MeterId,
-    usecase::cost::{
-        ContractCost, HouseholdCostView, MeterCostView, MonthCost, PeriodCost, SettlementCheck,
+    usecase::{
+        cost::{
+            ContractCost, HouseholdCostView, MeterCostView, MonthCost, PeriodCost, SettlementCheck,
+        },
+        vehicle_report::VehicleYearCost,
     },
 };
-use zaehler_domain::{cost::CostBreakdown, period::Period};
+use zaehler_domain::{cost::CostBreakdown, period::Period, vehicle::CostPerKm};
 
 use crate::{
     extract::{Ctx, PageCtx},
@@ -390,12 +393,37 @@ pub struct HouseholdRow {
     pub included: Option<(String, String, bool)>,
 }
 
+/// Fahrzeug in der Kostenübersicht (Jahr bis heute).
+pub struct VehicleCostRow {
+    pub id: String,
+    pub name: String,
+    pub km: String,
+    pub km_estimated: bool,
+    pub variable: String,
+    pub fixed: String,
+    pub depreciation: String,
+    pub total: String,
+    pub per_km: String,
+}
+
+/// Summe der Fahrzeugkosten.
+pub struct VehicleCostTotal {
+    pub km: String,
+    pub variable: String,
+    pub fixed: String,
+    pub depreciation: String,
+    pub total: String,
+    pub per_km: String,
+}
+
 #[derive(Template)]
 #[template(path = "pages/costs/household.html")]
 struct HouseholdPage {
     ctx: PageCtx,
     year: i32,
     rows: Vec<HouseholdRow>,
+    vehicles: Vec<VehicleCostRow>,
+    vehicle_total: Option<VehicleCostTotal>,
     import_total: String,
     export_total: Option<String>,
     net_total: String,
@@ -403,11 +431,72 @@ struct HouseholdPage {
     months: Vec<MonthRow>,
 }
 
-fn household_page(ctx: &Ctx, v: &HouseholdCostView) -> HouseholdPage {
+/// Kosten pro km als Text; ohne km leer.
+fn per_km(lang: Lang, cost: Decimal, km: Decimal) -> String {
+    if km > Decimal::ZERO {
+        format!("{} €", format::decimal(lang, (cost / km).round_dp(3), 3))
+    } else {
+        String::new()
+    }
+}
+
+// @impl SPEC_TAR_COST_VIEW
+fn vehicle_rows(
+    lang: Lang,
+    vehicles: &[VehicleYearCost],
+) -> (Vec<VehicleCostRow>, Option<VehicleCostTotal>) {
+    let rows: Vec<VehicleCostRow> = vehicles
+        .iter()
+        .filter_map(|v| {
+            let p = v.period.as_ref()?;
+            let km = p.km.map_or(Decimal::ZERO, |k| k.value);
+            Some(VehicleCostRow {
+                id: v.meter_id.to_string(),
+                name: v.name.clone(),
+                km: format::decimal(lang, km.round_dp(0), 0),
+                km_estimated: p.km.is_some_and(|k| k.estimated),
+                variable: money(lang, p.cost.variable),
+                fixed: money(lang, p.cost.fixed),
+                depreciation: money(lang, p.cost.depreciation),
+                total: money(lang, v.total()),
+                per_km: per_km(lang, v.total(), km),
+            })
+        })
+        .collect();
+    if rows.is_empty() {
+        return (rows, None);
+    }
+    let sum = |f: fn(&CostPerKm) -> Decimal| -> Decimal {
+        vehicles
+            .iter()
+            .filter_map(|v| v.period.as_ref())
+            .map(|p| f(&p.cost))
+            .sum()
+    };
+    let km: Decimal = vehicles
+        .iter()
+        .filter_map(|v| v.period.as_ref()?.km.map(|k| k.value))
+        .sum();
+    let total: Decimal = vehicles.iter().map(VehicleYearCost::total).sum();
+    let footer = VehicleCostTotal {
+        km: format::decimal(lang, km.round_dp(0), 0),
+        variable: money(lang, sum(|c| c.variable)),
+        fixed: money(lang, sum(|c| c.fixed)),
+        depreciation: money(lang, sum(|c| c.depreciation)),
+        total: money(lang, total),
+        per_km: per_km(lang, total, km),
+    };
+    (rows, Some(footer))
+}
+
+fn household_page(ctx: &Ctx, v: &HouseholdCostView, vehicles: &[VehicleYearCost]) -> HouseholdPage {
     let lang = ctx.page.lang;
     let export = v.export_total();
+    let (vehicles, vehicle_total) = vehicle_rows(lang, vehicles);
     HouseholdPage {
         year: v.year,
+        vehicles,
+        vehicle_total,
         rows: v
             .rows
             .iter()
@@ -439,13 +528,23 @@ pub async fn household(
     ctx: Ctx,
     Query(q): Query<YearQuery>,
 ) -> Result<Response, Response> {
+    let year = q.year.filter(|y| (1970..=9999).contains(y));
     let view = state
         .uc
         .household_costs
-        .execute(&ctx.tenant, q.year.filter(|y| (1970..=9999).contains(y)))
+        .execute(&ctx.tenant, year)
         .await
         .map_err(|e| ctx.fail(e))?;
-    Ok(render_status(StatusCode::OK, &household_page(&ctx, &view)))
+    let (_, vehicles) = state
+        .uc
+        .household_vehicle_costs
+        .execute(&ctx.tenant, Some(view.year))
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    Ok(render_status(
+        StatusCode::OK,
+        &household_page(&ctx, &view, &vehicles),
+    ))
 }
 
 // @impl SPEC_TAR_COST_VIEW

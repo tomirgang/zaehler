@@ -2375,11 +2375,21 @@ async fn vehicle_pages_and_cost_book() {
     let html = text(c.get(&vehicle).await).await;
     assert!(html.contains("Auswertung") && html.contains("Haltedauer"));
 
+    // Kostenübersicht des Haushalts mit Fahrzeugkosten (SPEC_TAR_COST_VIEW)
+    let overview = text(c.get("/costs?year=2026").await).await;
+    assert!(
+        overview.contains("id=\"vehicle-costs-title\""),
+        "{overview}"
+    );
+    assert!(overview.contains(&format!("href=\"{vehicle}\"")));
+
     // anderer Haushalt sieht nichts
     let mut bob = Client::new(&app);
     bob.login("bob").await;
     assert_eq!(bob.get(&vehicle).await.status(), StatusCode::NOT_FOUND);
     assert_eq!(bob.get(&costs).await.status(), StatusCode::NOT_FOUND);
+    let overview = text(bob.get("/costs?year=2026").await).await;
+    assert!(!overview.contains("id=\"vehicle-costs-title\""));
 }
 
 // @test SPEC_CAR_MILEAGE_UI, SPEC_CAR_FUEL_PRICE_UI

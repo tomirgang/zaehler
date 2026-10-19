@@ -71,4 +71,48 @@
   </details>
 </div>
 {% endif %}
+
+{% if let Some(sum) = vehicle_total %}
+<section aria-labelledby="vehicle-costs-title">
+  <h2 id="vehicle-costs-title">{{ ctx.lang.t("costs-vehicles") }}</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{ ctx.lang.t("nav-vehicles") }}</th>
+        <th class="num">km</th>
+        <th class="num">{{ ctx.lang.t("vehicle-variable") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-fixed") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-depreciation") }}</th>
+        <th class="num">{{ ctx.lang.t("costs-total") }}</th>
+        <th class="num">{{ ctx.lang.t("vehicle-total-per-km") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for v in vehicles %}
+      <tr>
+        <td><a href="/vehicles/{{ v.id }}">{{ v.name }}</a></td>
+        <td class="num">{{ v.km }}{% if v.km_estimated %} <span class="tag">{{ ctx.lang.t("costs-tag-estimated") }}</span>{% endif %}</td>
+        <td class="num">{{ v.variable }}</td>
+        <td class="num">{{ v.fixed }}</td>
+        <td class="num">{{ v.depreciation }}</td>
+        <td class="num">{{ v.total }}</td>
+        <td class="num">{{ v.per_km }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <th>{{ ctx.lang.t("costs-total") }}</th>
+        <th class="num">{{ sum.km }}</th>
+        <th class="num">{{ sum.variable }}</th>
+        <th class="num">{{ sum.fixed }}</th>
+        <th class="num">{{ sum.depreciation }}</th>
+        <th class="num">{{ sum.total }}</th>
+        <th class="num">{{ sum.per_km }}</th>
+      </tr>
+    </tfoot>
+  </table>
+  <p class="hint">{{ ctx.lang.t("costs-vehicles-hint") }}</p>
+</section>
+{% endif %}
 {% endblock %}

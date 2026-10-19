@@ -885,6 +885,42 @@ async fn home_charging_without_contract_uses_the_vehicle_price() {
     );
 }
 
+/// Kostenübersicht: je Fahrzeug die Jahreszeile der Fahrzeugauswertung.
+// @test SPEC_TAR_COST_VIEW, SPEC_CAR_REPORT
+#[tokio::test]
+async fn household_vehicle_costs_list_every_vehicle_of_the_year() {
+    let (uc, t, clock) = setup().await;
+    let golf = vehicle(&uc, &t, "Golf", DriveType::Combustion, None, dec!(10000)).await;
+    let astra = vehicle(&uc, &t, "astra", DriveType::Combustion, None, dec!(5000)).await;
+    super::contract_tests::set_today(&clock, day(2025, 7, 2));
+    record(&uc, &t, golf, berlin(2025, 7, 2), dec!(16000)).await;
+    saved(
+        uc.add_asset_cost
+            .execute(
+                &t,
+                AssetRef::vehicle(golf),
+                cost(day(2025, 3, 1), VehicleCostCategory::Insurance, dec!(600)),
+            )
+            .await,
+    );
+
+    let (year, rows) = uc.household_vehicle_costs.execute(&t, None).await.unwrap();
+    assert_eq!(year, 2025);
+    let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["astra", "Golf"], "nach Name ohne Groß/klein");
+    let golf_row = rows.iter().find(|r| r.meter_id == golf).unwrap();
+    assert_eq!(golf_row.total(), dec!(600));
+    assert!(golf_row.period.as_ref().unwrap().km.unwrap().value >= dec!(6000));
+    assert!(rows.iter().any(|r| r.meter_id == astra));
+    // Jahr ohne Daten
+    let (_, before) = uc
+        .household_vehicle_costs
+        .execute(&t, Some(2020))
+        .await
+        .unwrap();
+    assert!(before.iter().all(|r| r.period.is_none()));
+}
+
 /// Haushaltsarchiv mit Fahrzeug: neue IDs, Verweise auf Heimlade-Messstelle
 /// und Kostenbuch-Anlage zeigen auf die neuen Messstellen.
 // @test SPEC_BACKUP_HOUSEHOLD, SPEC_CAR_VEHICLES, SPEC_ASSET_COSTS
