@@ -11,7 +11,12 @@ Zählerständen: Strom, Gas, Wasser, Wärme, Fahrzeug-Kilometer und weitere Verb
 - Erinnerungen und Alarme per E-Mail
 - PostgreSQL (CloudNativePG) oder SQLite, Helm-Chart und docker compose
 
-Version **1.1.0**: siehe [Umsetzungsplan v1.1](docs/impl/V1.1.md).
+Version **1.2.0**: siehe [Umsetzungsplan v1.1](docs/impl/V1.1.md). Neu in 1.2:
+Messstellen löschen, Setup-Assistent mit bedingten Feldern und vorhandenen
+Zählern, Lesen und Schreiben aller Daten über die REST-API, Wertverlust nach
+Restwertkurve (Alter, Laufleistung), Strompreis fürs Heimladen,
+Fahrzeugkosten in der Kostenübersicht und Import von SENEC-Wochenexporten
+(`scripts/senec_import.py`).
 
 ## Schnellstart
 
@@ -58,7 +63,7 @@ scripts/release.sh
 ```
 
 Das Skript baut mit dem vorhandenen Dockerfile und überträgt
-`code.do9ita.de/tom/zaehler:1.1.0` und `code.do9ita.de/tom/zaehler:latest`.
+`code.do9ita.de/tom/zaehler:1.2.0` und `code.do9ita.de/tom/zaehler:latest`.
 Die Version wird aus `Cargo.toml` gelesen und mit `version` und `appVersion`
 des Helm-Charts verglichen. Nicht committete Änderungen verhindern einen
 Release; `--allow-dirty` erlaubt bewusst einen lokalen Entwicklungsstand.

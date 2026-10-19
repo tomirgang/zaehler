@@ -34,7 +34,7 @@ unset FORGEJO_USER FORGEJO_TOKEN IMAGE REGISTRY PLATFORMS
 grep -q 'Aufruf:' "$tmp/output"
 
 scripts/release.sh >"$tmp/output"
-grep -q -- '--tag code.do9ita.de/tom/zaehler:1.1.0 --tag code.do9ita.de/tom/zaehler:latest' "$RELEASE_TEST_CALLS"
+grep -q -- '--tag code.do9ita.de/tom/zaehler:1.2.0 --tag code.do9ita.de/tom/zaehler:latest' "$RELEASE_TEST_CALLS"
 grep -q -- '--push .' "$RELEASE_TEST_CALLS"
 
 : >"$RELEASE_TEST_CALLS"
