@@ -76,8 +76,16 @@ impl Priced {
                 None => source(&|_| true),
             })
             .collect();
+        // Einspeisevergütung ist immer eine Gutschrift, auch wenn der Preis
+        // positiv erfasst wurde (SPEC_PV_FEED_IN)
+        let mut positions = contract.cost_positions();
+        if direction == Direction::Export {
+            for c in positions.iter_mut().flat_map(|p| p.components.iter_mut()) {
+                c.unit_pricing = c.unit_pricing.as_credit();
+            }
+        }
         Self {
-            positions: contract.cost_positions(),
+            positions,
             adjustments: contract.adjustment_values(),
             total: source(&|_| true),
             quantities,

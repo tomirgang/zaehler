@@ -889,3 +889,84 @@ async fn heat_pump_submeter_costs_without_base_price() {
     assert_eq!((name.as_str(), value.value), ("Hausstrom", dec!(547.5)));
     assert!(household.has_estimate());
 }
+
+/// Die Einspeisevergütung ist eine Gutschrift und mindert den Saldo der
+/// Kostenübersicht, gleich ob ihr Preis positiv oder negativ erfasst ist.
+// @test SPEC_TAR_COST_VIEW, SPEC_PV_FEED_IN
+#[tokio::test]
+async fn feed_in_is_a_credit_whatever_the_sign_of_its_price() {
+    let mut credits = Vec::new();
+    for price in [dec!(0.08), dec!(-0.08)] {
+        let (uc, t, clock) = setup().await;
+        let start = berlin(2026, 1, 1);
+        let house = uc
+            .create_meter
+            .execute(
+                &t,
+                meter_input(
+                    "Strom",
+                    MeterKind::Electricity,
+                    &[("1.8.0", Direction::Import), ("2.8.0", Direction::Export)],
+                    start,
+                ),
+            )
+            .await
+            .unwrap();
+        set_today(&clock, day(2026, 3, 10));
+        let registers = uc
+            .get_meter
+            .execute(&t, house)
+            .await
+            .unwrap()
+            .aggregate
+            .registers;
+        uc.record_readings
+            .execute(
+                &t,
+                &ReadingsInput {
+                    meter_id: house,
+                    at: berlin(2026, 3, 1),
+                    values: vec![(registers[0].id, dec!(600)), (registers[1].id, dec!(1000))],
+                    note: None,
+                },
+                true,
+                zaehler_domain::reading::ReadingSource::Manual,
+            )
+            .await
+            .unwrap();
+        uc.create_contract
+            .execute(
+                &t,
+                house,
+                contract(
+                    day(2026, 1, 1),
+                    vec![position(
+                        "Strom",
+                        None,
+                        vec![flat(day(2026, 1, 1), dec!(0), dec!(0.30))],
+                    )],
+                ),
+            )
+            .await
+            .unwrap();
+        let mut feed = contract(
+            day(2026, 1, 1),
+            vec![position(
+                "Einspeisevergütung",
+                None,
+                vec![flat(day(2026, 1, 1), dec!(0), price)],
+            )],
+        );
+        feed.direction = Direction::Export;
+        uc.create_contract.execute(&t, house, feed).await.unwrap();
+
+        let v = uc.household_costs.execute(&t, None).await.unwrap();
+        assert!(v.import_total() > Decimal::ZERO);
+        assert!(
+            v.export_total() < Decimal::ZERO,
+            "Gutschrift bei Preis {price}"
+        );
+        credits.push((v.import_total(), v.export_total()));
+    }
+    assert_eq!(credits[0], credits[1], "Vorzeichen des Preises ist egal");
+}

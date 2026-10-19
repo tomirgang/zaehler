@@ -389,7 +389,8 @@ async fn report_with_feed_in_savings_and_break_even() {
         vec![position(
             "Einspeisung",
             None,
-            vec![flat(day(2025, 1, 1), dec!(0), dec!(-0.08))],
+            // Einspeisevergütung positiv erfasst wie im Vertrag üblich
+            vec![flat(day(2025, 1, 1), dec!(0), dec!(0.08))],
         )],
     );
     feed_in.direction = Direction::Export;

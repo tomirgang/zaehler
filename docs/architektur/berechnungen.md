@@ -433,11 +433,15 @@ nicht.
 :links: SPEC_TAR_COST_CALC, ADR_021
 
 Vertrag am Einspeiseregister der Messstelle mit Rolle `grid`. Jede
-Kostenposition hat einen negativen Arbeitspreis (Vergütung je kWh) mit
-`valid_from`; anteilige Sätze bilden mehrere Positionen mit Umrechnungsfaktor
+Kostenposition hat einen Arbeitspreis (Vergütung je kWh) mit `valid_from`; er
+gilt immer als Gutschrift (`-|Preis|`), gleich ob er wie im Vertrag üblich
+positiv oder negativ erfasst wurde. Ein Grundpreis bleibt Kosten. Anteilige
+Sätze bilden mehrere Positionen mit Umrechnungsfaktor
 gleich dem Leistungsanteil (z.B. 10 kWp von 15 kWp: Faktor 0,6667 und 0,3333).
 Die Vergütung eines Zeitraums ist `-Kosten` gemäß {need}`SPEC_TAR_COST_CALC`.
-Die durchschnittliche Vergütung `v_ein = Vergütung / E`.
+Die durchschnittliche Vergütung `v_ein = Vergütung / E`. In der
+Kostenübersicht erscheint die Einspeisung daher negativ und mindert den Saldo
+(`Saldo = Bezug + Einspeisung`).
 ```
 
 ```{spec} Wirtschaftlichkeit von PV-Anlagen

@@ -75,6 +75,32 @@ impl UnitPricing {
             Self::Dynamic { fallback, .. } => amount * fallback,
         }
     }
+
+    /// Preise als Gutschrift (Einspeisevergütung, SPEC_PV_FEED_IN): jeder
+    /// Arbeitspreis wird `-|Preis|`, unabhängig davon, ob er positiv oder
+    /// negativ erfasst wurde.
+    #[must_use]
+    pub fn as_credit(&self) -> Self {
+        let credit = |p: Decimal| -p.abs();
+        match self {
+            Self::Flat { price } => Self::Flat {
+                price: credit(*price),
+            },
+            Self::Tiered { tiers } => Self::Tiered {
+                tiers: tiers
+                    .iter()
+                    .map(|t| Tier {
+                        up_to: t.up_to,
+                        price: credit(t.price),
+                    })
+                    .collect(),
+            },
+            Self::Dynamic { markup, fallback } => Self::Dynamic {
+                markup: credit(*markup),
+                fallback: credit(*fallback),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
