@@ -22,6 +22,8 @@ struct SettingsPage {
     new_timezone: String,
     /// Hinweis zum Haushaltsarchiv mit Größengrenze
     backup_hint: String,
+    /// Offener Setup-Entwurf vorhanden (nur für Owner ermittelt)
+    setup_has_draft: bool,
     errors: FieldErrors,
 }
 
@@ -46,6 +48,14 @@ async fn page(
         Ok(h) => h,
         Err(e) => return ctx.fail(e),
     };
+    let setup_has_draft = if ctx.page.is_owner {
+        match state.uc.get_setup_draft.execute(&ctx.tenant).await {
+            Ok(d) => d.is_some(),
+            Err(e) => return ctx.fail(e),
+        }
+    } else {
+        false
+    };
     let pick = |key: &str, default: String| {
         form.and_then(|f| f.has(key).then(|| f.get(key).to_owned()))
             .unwrap_or(default)
@@ -62,6 +72,7 @@ async fn page(
                 state.cfg.max_backup_bytes.div_ceil(1024 * 1024).to_string(),
             )],
         ),
+        setup_has_draft,
         errors,
         ctx: ctx.page.clone(),
     };

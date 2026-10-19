@@ -2,14 +2,11 @@
 
 {% block content %}
 <h1>{{ ctx.lang.t("dashboard-title") }}</h1>
-{% if ctx.is_owner %}
-<div class="actions">
-  <a class="button secondary" href="/setup">{% if setup_has_draft %}{{ ctx.lang.t("setup-resume") }}{% else %}{{ ctx.lang.t("setup-start") }}{% endif %}</a>
-</div>
-{% endif %}
+{# Mit vorhandenen Messstellen liegt der Setup-Assistent in den Einstellungen #}
 {% if empty %}
 <p>{{ ctx.lang.t("dashboard-empty") }}</p>
 <div class="actions">
+  {% if ctx.is_owner %}<a class="button secondary" href="/setup">{% if setup_has_draft %}{{ ctx.lang.t("setup-resume") }}{% else %}{{ ctx.lang.t("setup-start") }}{% endif %}</a>{% endif %}
   {% if ctx.is_owner %}<a class="button" href="/meters/new">{{ ctx.lang.t("dashboard-create-meter") }}</a>{% endif %}
   {% if ctx.can_write %}<a class="button secondary" href="/import">{{ ctx.lang.t("dashboard-import") }}</a>{% endif %}
 </div>

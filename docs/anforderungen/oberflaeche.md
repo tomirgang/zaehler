@@ -89,7 +89,7 @@ schlägt es Zählernummer und Startstand vor ({need}`REQ_AI_007`), ohne
 AI-Konfiguration wird es nur als Belegfoto des Startstands gespeichert.
 
 **Akzeptanzkriterien**
-- In einem leeren Haushalt wird der Assistent auf der Übersicht angeboten; zusätzlich ist er jederzeit über Übersicht und Messstellen erreichbar, um ein bestehendes Setup zu erweitern.
+- In einem leeren Haushalt wird der Assistent auf der Übersicht angeboten; sobald Messstellen existieren, ist er über die Einstellungen und die Messstellenliste erreichbar, um ein bestehendes Setup zu erweitern.
 - Nur Eigentümer können den Assistenten nutzen.
 - Nicht zutreffende Schritte werden übersprungen.
 - Felder werden abhängig von den bisherigen Eingaben ein- und ausgeblendet, Pflichtfelder sind gekennzeichnet.

@@ -3522,6 +3522,29 @@ async fn setup_wizard_persists_and_resumes_an_owner_draft() {
 }
 
 #[tokio::test]
+async fn setup_entry_moves_from_dashboard_to_settings_once_meters_exist() {
+    let app = test_app(true);
+    let mut owner = Client::new(&app);
+    owner.login("setup-entry-owner").await;
+    let setup_link = "href=\"/setup\"";
+    assert!(text(owner.get("/").await).await.contains(setup_link));
+    assert!(
+        text(owner.get("/settings").await)
+            .await
+            .contains(setup_link)
+    );
+
+    let csrf = owner.csrf().await;
+    create_meter(&mut owner, &csrf, "Strom").await;
+    assert!(!text(owner.get("/").await).await.contains(setup_link));
+    assert!(
+        text(owner.get("/settings").await)
+            .await
+            .contains(setup_link)
+    );
+}
+
+#[tokio::test]
 async fn setup_photo_without_ai_is_kept_for_manual_entry() {
     let app = test_app(true);
     let mut owner = Client::new(&app);

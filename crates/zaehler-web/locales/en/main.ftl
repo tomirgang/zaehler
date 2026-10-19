@@ -387,6 +387,7 @@ err-import-meter_required = Choose a meter.
 # Members and invitations
 settings-members = Members
 settings-members-hint = People of this household, their roles and invitations.
+settings-setup-hint = Set up or extend meters, contracts, PV system and vehicles step by step.
 settings-members-link = Manage members
 members-title = Members
 members-list = Household members

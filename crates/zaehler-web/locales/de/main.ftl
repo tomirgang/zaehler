@@ -387,6 +387,7 @@ err-import-meter_required = Messstelle wählen.
 # Mitglieder und Einladungen
 settings-members = Mitglieder
 settings-members-hint = Personen dieses Haushalts, ihre Rollen und Einladungen.
+settings-setup-hint = Messstellen, Verträge, PV-Anlage und Fahrzeuge Schritt für Schritt einrichten oder ergänzen.
 settings-members-link = Mitglieder verwalten
 members-title = Mitglieder
 members-list = Mitglieder des Haushalts
