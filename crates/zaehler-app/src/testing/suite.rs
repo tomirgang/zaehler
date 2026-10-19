@@ -137,6 +137,7 @@ pub async fn run(f: &dyn UnitOfWorkFactory) {
     setup_drafts(f).await;
     devices(f).await;
     household_delete_cascades(f).await;
+    meter_delete_cascades(f).await;
     members(f).await;
     invitations(f).await;
     revisions(f).await;
@@ -900,6 +901,72 @@ async fn household_delete_cascades(f: &dyn UnitOfWorkFactory) {
             .is_empty()
     );
     assert!(uow.meters().list(&t).await.expect("list").is_empty());
+}
+
+/// Löschen einer Messstelle entfernt Register, Geräte und Ablesungen,
+/// lässt andere Messstellen unberührt und ist tenant-gebunden.
+// @test SPEC_MTR_DELETE, SPEC_SEC_TENANT_SCOPE
+async fn meter_delete_cascades(f: &dyn UnitOfWorkFactory) {
+    let t = tenant(f, "Messstelle löschen").await;
+    let foreign = tenant(f, "Fremd löschen").await;
+    let (gone, d, r) = meter(f, &t, "Strom").await;
+    let (kept, d2, r2) = meter(f, &t, "Wasser").await;
+    {
+        let mut uow = f.begin().await.expect("begin");
+        let first = reading(&t, r, d, 1, 5);
+        uow.readings()
+            .insert(&t, &[first.clone(), reading(&t, r2, d2, 1, 7)])
+            .await
+            .expect("insert");
+        let revision = Revision {
+            id: RevisionId(id()),
+            reading_id: first.id,
+            meter_id: gone,
+            register_id: r,
+            action: RevisionAction::Delete,
+            changed_by: t.user_id(),
+            changed_at: t0(),
+            old_read_at: first.read_at,
+            old_value: first.value,
+            old_note: None,
+            new_read_at: None,
+            new_value: None,
+            new_note: None,
+        };
+        uow.revisions()
+            .append(&t, &revision)
+            .await
+            .expect("revision");
+        assert!(matches!(
+            uow.meters().delete(&foreign, gone).await,
+            Err(PortError::NotFound)
+        ));
+        uow.meters().delete(&t, gone).await.expect("delete");
+        uow.commit().await.expect("commit");
+    }
+    let mut uow = f.begin().await.expect("begin");
+    assert!(uow.meters().get(&t, gone).await.expect("get").is_none());
+    assert!(
+        uow.readings()
+            .list_for_meter(&t, gone)
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    let list = uow.meters().list(&t).await.expect("list");
+    assert_eq!(list.len(), 1);
+    assert_eq!(
+        uow.readings()
+            .list_for_meter(&t, kept)
+            .await
+            .expect("kept readings")
+            .len(),
+        1
+    );
+    assert!(matches!(
+        uow.meters().delete(&t, gone).await,
+        Err(PortError::NotFound)
+    ));
 }
 
 fn draft(t: &Tenant, created_at: DateTime<Utc>, meter: Option<MeterId>) -> Draft {

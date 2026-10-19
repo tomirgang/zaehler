@@ -1054,6 +1054,23 @@ pub async fn restore(
     Ok(see_other(&format!("/meters/{id}")))
 }
 
+/// Messstelle endgültig löschen (SPEC_MTR_DELETE).
+pub async fn delete(
+    State(state): State<WebState>,
+    ctx: Ctx,
+    Path(id): Path<String>,
+) -> Result<Response, Response> {
+    let id = parse_meter_id(&id).map_err(|e| ctx.fail(e))?;
+    state
+        .uc
+        .delete_meter
+        .execute(&ctx.tenant, id)
+        .await
+        .map_err(|e| ctx.fail(e))?;
+    ctx.flash("flash-meter-deleted").await;
+    Ok(see_other("/meters"))
+}
+
 pub async fn update(
     State(state): State<WebState>,
     ctx: Ctx,

@@ -79,6 +79,9 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
             "/meters/{id}/swap",
             get(pages::meters::swap_form).post(pages::meters::swap),
         )
+        .route("/meters/{id}/archive", post(pages::meters::archive))
+        .route("/meters/{id}/restore", post(pages::meters::restore))
+        .route("/meters/{id}/delete", post(pages::meters::delete))
         .route("/meters/{id}/readings/new", get(pages::readings::new_form))
         .route("/meters/{id}/readings", post(pages::readings::record))
         .route("/meters/{id}/readings/check", post(pages::readings::check))

@@ -58,6 +58,12 @@
       <button type="submit" class="secondary">{{ ctx.lang.t("meter-archive") }}</button>
     </form>
     {% endif %}
+    {% if !is_vehicle %}
+    <form method="post" action="/meters/{{ id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("meter-delete-confirm") }}">
+      <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+      <button type="submit" class="link danger">{{ ctx.lang.t("action-delete") }}</button>
+    </form>
+    {% endif %}
     {% endif %}
   </div>
 </div>

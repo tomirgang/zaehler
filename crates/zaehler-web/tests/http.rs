@@ -745,6 +745,52 @@ async fn household_archive_download_and_import_as_new_household() {
     );
 }
 
+// @test SPEC_MTR_ARCHIVE, SPEC_MTR_DELETE
+#[tokio::test]
+async fn meters_can_be_archived_restored_and_deleted() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let meter = create_meter(&mut c, &csrf, "PV").await;
+    let detail = text(c.get(&format!("/meters/{meter}")).await).await;
+    assert!(detail.contains(&format!("action=\"/meters/{meter}/archive\"")));
+    assert!(detail.contains(&format!("action=\"/meters/{meter}/delete\"")));
+
+    let res = c
+        .post(
+            &format!("/meters/{meter}/archive"),
+            &[("_csrf", csrf.as_str())],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let detail = text(c.get(&format!("/meters/{meter}")).await).await;
+    assert!(detail.contains(&format!("action=\"/meters/{meter}/restore\"")));
+
+    let res = c
+        .post(
+            &format!("/meters/{meter}/restore"),
+            &[("_csrf", csrf.as_str())],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let detail = text(c.get(&format!("/meters/{meter}")).await).await;
+    assert!(detail.contains(&format!("action=\"/meters/{meter}/archive\"")));
+
+    let res = c
+        .post(
+            &format!("/meters/{meter}/delete"),
+            &[("_csrf", csrf.as_str())],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    assert_eq!(location(&res), "/meters");
+    assert_eq!(
+        c.get(&format!("/meters/{meter}")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
 // @test SPEC_UI_DASHBOARD, SPEC_UI_DASHBOARD_GROUPS
 #[tokio::test]
 async fn dashboard_renders_0_1_and_20_meters_grouped_by_name() {

@@ -108,3 +108,15 @@ Das System kann Messstellen archivieren. Archivierte Messstellen erscheinen nich
 mehr in Erfassung und Dashboard, bleiben aber in Auswertungen vergangener
 Zeiträume enthalten.
 ```
+
+```{req} Zähler löschen
+:id: REQ_MTR_009
+:status: accepted
+:priority: could
+:release: v1
+
+Eigentümer können eine Messstelle nach Bestätigung endgültig löschen, z.B. eine
+versehentlich angelegte. Mit ihr werden alle Ablesungen, Belegfotos und Verträge
+gelöscht. Solange andere Objekte (Zwischenzähler, PV-Anlage, Fahrzeug) auf die
+Messstelle verweisen, wird das Löschen mit einem Hinweis abgelehnt.
+```

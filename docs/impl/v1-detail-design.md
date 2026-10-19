@@ -347,6 +347,21 @@ archivierte Messstellen ergeben `Validation`. Verweisen Fahrzeug, PV-Anlage
 oder Zwischenzähler auf die Messstelle, bleibt der Verweis gültig.
 ```
 
+```{spec} Löschen von Messstellen
+:id: SPEC_MTR_DELETE
+:status: implemented
+:satisfies: REQ_MTR_009
+
+`DeleteMeter` (nur Eigentümer) löscht die Messstelle mit Geräten, Registern,
+Ablesungen, Revisionen und Verträgen; Belegfotos der Ablesungen werden nach dem
+Commit aus dem Objektspeicher entfernt. Dokumente und Foto-Entwürfe behalten
+ihren Datensatz und verlieren nur die Zuordnung. `Conflict` ergibt sich, wenn
+die Messstelle ein Fahrzeug ist (`meter.is_vehicle`), übergeordnete Messstelle
+eines Zwischenzählers ist (`meter.has_submeters`), einer PV-Anlage zugeordnet
+ist (`meter.in_pv_system`) oder Ladezähler eines Fahrzeugs ist
+(`meter.home_charging`).
+```
+
 ```{spec} Zwischenzähler und Verwendungszweck
 :id: SPEC_MTR_SUBMETER
 :status: implemented
@@ -894,6 +909,7 @@ Die manuelle Prüfung mit Tastatur und Bildschirmleser ist nicht erfolgt
 | GET, POST | `/readings/{id}/edit` | M | {need}`SPEC_RDG_HISTORY` |
 | GET | `/meters/{id}/history` | V | {need}`SPEC_RDG_HISTORY` |
 | POST | `/meters/{id}/archive`, `/meters/{id}/restore` | O | {need}`SPEC_MTR_ARCHIVE` |
+| POST | `/meters/{id}/delete` | O | {need}`SPEC_MTR_DELETE` |
 | GET, POST | `/meters/{id}/contracts/new`, `/contracts/{id}`, `/contracts/{id}/edit`, `/contracts/{id}/delete` | V/O | {need}`SPEC_TAR_CONTRACTS` |
 | POST | `/contracts/{id}/installments`, `/contracts/{id}/adjustments`, `/contracts/{id}/settlements` | O/M | {need}`SPEC_TAR_COST_VIEW`, {need}`SPEC_TAR_ACTUAL_SETTLEMENT` |
 | GET | `/meters/{id}/costs`, `/costs` | V | {need}`SPEC_TAR_COST_VIEW` |

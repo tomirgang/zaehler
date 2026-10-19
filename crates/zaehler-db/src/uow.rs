@@ -1204,6 +1204,48 @@ impl MeterRepository for SeaOrmUow {
         Ok(())
     }
 
+    // @impl SPEC_MTR_DELETE
+    async fn delete(&mut self, t: &Tenant, id: MeterId) -> PortResult<()> {
+        if !self.owns_meter(t, id.0).await? {
+            return Err(PortError::NotFound);
+        }
+        let hid = t.household_id().0;
+        // Spalten ohne Fremdschlüssel; der Rest folgt über ON DELETE CASCADE
+        reading_revision::Entity::delete_many()
+            .filter(reading_revision::Column::HouseholdId.eq(hid))
+            .filter(reading_revision::Column::MeterId.eq(id.0))
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        crate::entity::document::Entity::update_many()
+            .col_expr(
+                crate::entity::document::Column::MeterId,
+                Expr::value(Option::<Uuid>::None),
+            )
+            .filter(crate::entity::document::Column::HouseholdId.eq(hid))
+            .filter(crate::entity::document::Column::MeterId.eq(id.0))
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        ai_draft::Entity::update_many()
+            .col_expr(
+                ai_draft::Column::MatchedMeterId,
+                Expr::value(Option::<Uuid>::None),
+            )
+            .filter(ai_draft::Column::HouseholdId.eq(hid))
+            .filter(ai_draft::Column::MatchedMeterId.eq(id.0))
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        meter::Entity::delete_many()
+            .filter(meter::Column::Id.eq(id.0))
+            .filter(meter::Column::HouseholdId.eq(hid))
+            .exec(&self.txn)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn find_by_name(&mut self, t: &Tenant, name: &str) -> PortResult<Option<MeterId>> {
         Ok(meter::Entity::find()
             .filter(meter::Column::HouseholdId.eq(t.household_id().0))

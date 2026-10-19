@@ -361,6 +361,10 @@ pub trait MeterRepository: Send {
         id: MeterId,
         at: Option<DateTime<Utc>>,
     ) -> PortResult<()>;
+    /// Löscht die Messstelle mit Geräten, Registern, Ablesungen, Revisionen
+    /// und Verträgen; Dokumente und Foto-Entwürfe verlieren die Zuordnung
+    /// (SPEC_MTR_DELETE).
+    async fn delete(&mut self, t: &Tenant, id: MeterId) -> PortResult<()>;
 }
 
 #[async_trait]

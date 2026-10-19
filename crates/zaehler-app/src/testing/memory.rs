@@ -1396,6 +1396,54 @@ impl MeterRepository for MemoryUow {
         Ok(())
     }
 
+    async fn delete(&mut self, t: &Tenant, id: MeterId) -> PortResult<()> {
+        if !self.state.owns_meter(t, id) {
+            return Err(PortError::NotFound);
+        }
+        let hid = t.household_id();
+        let s = &mut self.state;
+        let registers: Vec<RegisterId> = s
+            .registers
+            .iter()
+            .filter(|(m, _)| *m == id)
+            .map(|(_, r)| r.id)
+            .collect();
+        let readings: Vec<ReadingId> = s
+            .readings
+            .iter()
+            .filter(|r| registers.contains(&r.register_id))
+            .map(|r| r.id)
+            .collect();
+        s.readings.retain(|r| !registers.contains(&r.register_id));
+        s.reading_tokens.retain(|r, _| !readings.contains(r));
+        for d in &mut s.drafts {
+            if d.draft.matched_meter_id == Some(id) {
+                d.draft.matched_meter_id = None;
+            }
+        }
+        s.registers.retain(|(m, _)| *m != id);
+        s.devices.retain(|(m, _)| *m != id);
+        s.contracts.retain(|c| c.meter_id != id);
+        s.revisions.retain(|(h, r)| *h != hid || r.meter_id != id);
+        for (h, d) in &mut s.documents {
+            if *h == hid && d.meter_id == Some(id) {
+                d.meter_id = None;
+            }
+        }
+        s.vehicles.retain(|v| v.meter_id != id);
+        s.charging.retain(|c| c.vehicle != id);
+        for v in &mut s.vehicles {
+            if v.data.home_charging_meter_id == Some(id) {
+                v.data.home_charging_meter_id = None;
+            }
+        }
+        for (_, p) in &mut s.pv_systems {
+            p.meters.retain(|(m, _)| *m != id);
+        }
+        s.meters.retain(|(h, m)| *h != hid || m.id != id);
+        Ok(())
+    }
+
     async fn find_by_name(&mut self, t: &Tenant, name: &str) -> PortResult<Option<MeterId>> {
         Ok(self
             .state

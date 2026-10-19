@@ -87,7 +87,62 @@ use_case!(
     ArchiveMeter,
     /// Archivierung aufheben (SPEC_MTR_ARCHIVE).
     RestoreMeter,
+    /// Messstelle endgültig löschen (SPEC_MTR_DELETE).
+    DeleteMeter,
 );
+
+impl DeleteMeter {
+    /// Löscht die Messstelle mit allen Ablesungen, Belegfotos und Verträgen.
+    /// Abgelehnt (`Conflict`), solange Zwischenzähler, PV-Anlagen oder
+    /// Fahrzeuge auf sie verweisen oder sie selbst ein Fahrzeug ist.
+    // @impl SPEC_MTR_DELETE
+    #[tracing::instrument(name = "DeleteMeter", skip_all)]
+    pub async fn execute(&self, t: &Tenant, id: MeterId) -> Result<(), AppError> {
+        t.require(Role::Owner)?;
+        let mut uow = self.p.uow.begin().await?;
+        let agg = uow.meters().get(t, id).await?.ok_or(AppError::NotFound)?;
+        if agg.meter.data.kind == MeterKind::Vehicle {
+            return Err(AppError::Conflict("meter.is_vehicle"));
+        }
+        if !uow.meters().submeters_of(t, id).await?.is_empty() {
+            return Err(AppError::Conflict("meter.has_submeters"));
+        }
+        let in_pv = uow
+            .pv()
+            .list(t)
+            .await?
+            .iter()
+            .any(|s| s.meters.iter().any(|(m, _)| *m == id));
+        if in_pv {
+            return Err(AppError::Conflict("meter.in_pv_system"));
+        }
+        let charges_vehicle = uow
+            .vehicles()
+            .list(t)
+            .await?
+            .iter()
+            .any(|v| v.data.home_charging_meter_id == Some(id));
+        if charges_vehicle {
+            return Err(AppError::Conflict("meter.home_charging"));
+        }
+        let photos: Vec<BlobKey> = uow
+            .readings()
+            .list_for_meter(t, id)
+            .await?
+            .into_iter()
+            .filter_map(|r| r.photo_key)
+            .collect();
+        uow.meters().delete(t, id).await?;
+        uow.commit().await?;
+        // Belegfotos erst nach dem commit (SPEC_ARCH_UOW)
+        for key in photos {
+            if let Err(e) = self.p.blobs.delete(&key).await {
+                tracing::warn!(error = %e, meter = %id, "photo not deleted");
+            }
+        }
+        Ok(())
+    }
+}
 
 impl ArchiveMeter {
     /// Die Messstelle verschwindet aus Erfassung, Übersicht und Erinnerungen;

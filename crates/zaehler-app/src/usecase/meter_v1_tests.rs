@@ -135,6 +135,45 @@ async fn archived_meters_leave_capture_and_dashboard_but_keep_their_analysis() {
     assert!(cards[0].overdue(), "nach 14 Tagen bei Plan alle 7 Tage");
 }
 
+// @test SPEC_MTR_DELETE
+#[tokio::test]
+async fn deleting_a_meter_removes_it_unless_a_submeter_refers_to_it() {
+    let (uc, t, _) = setup().await;
+    let grid = uc
+        .create_meter
+        .execute(
+            &t,
+            input("Strom", MeterKind::Electricity, "", berlin(2025, 12, 1)),
+        )
+        .await
+        .unwrap();
+    let mut heat_pump = input(
+        "Wärmepumpe",
+        MeterKind::Electricity,
+        "",
+        berlin(2025, 12, 1),
+    );
+    heat_pump.parent_meter_id = Some(grid);
+    let sub = uc.create_meter.execute(&t, heat_pump).await.unwrap();
+    record(&uc, &t, sub, berlin(2026, 1, 1), dec!(100)).await;
+
+    assert!(matches!(
+        uc.delete_meter.execute(&t, grid).await,
+        Err(AppError::Conflict("meter.has_submeters"))
+    ));
+    uc.delete_meter.execute(&t, sub).await.unwrap();
+    assert!(matches!(
+        uc.get_meter.execute(&t, sub).await,
+        Err(AppError::NotFound)
+    ));
+    uc.delete_meter.execute(&t, grid).await.unwrap();
+    assert!(uc.list_meters.execute(&t).await.unwrap().is_empty());
+    assert!(matches!(
+        uc.delete_meter.execute(&t, grid).await,
+        Err(AppError::NotFound)
+    ));
+}
+
 // @test SPEC_RDG_SCHEDULE, SPEC_UI_DASHBOARD
 #[tokio::test]
 async fn dashboard_due_follows_the_schedule() {
