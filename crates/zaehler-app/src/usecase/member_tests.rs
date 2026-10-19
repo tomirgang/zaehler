@@ -550,6 +550,7 @@ async fn role_matrix() {
                     values: Vec::new(),
                     note: None,
                     confirm_warnings: false,
+                    source: zaehler_domain::reading::ReadingSource::Manual,
                     drafts: Vec::new(),
                 },
             )

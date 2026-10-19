@@ -96,15 +96,58 @@ Stellen ergeben `reading.too_many_decimals`. Bei Bedarf rundet ein Filter wie
 
 ## Weitere Endpunkte
 
+Über die API sind alle Daten des Haushalts les- und schreibbar, die auch die
+Oberfläche bearbeitet: Messstellen, Ablesungen, Verträge, Kosten, Fahrzeuge,
+Kostenbücher, PV-Anlagen, Haushalt und Dokumente. Jeder Endpunkt ruft
+denselben Anwendungsfall wie die Oberfläche auf; ein Token darf daher genau
+das, was sein Ersteller in der Oberfläche darf, höchstens aber seine
+Token-Rolle. Nicht erlaubte Schreibzugriffe ergeben 403, Objekte anderer
+Haushalte 404. Rollen: L = Lesen, M = Mitglied, E = Eigentümer.
+
 | Methode | Pfad | Rolle |
 |---|---|---|
-| GET | `/api/v1/meters` | Lesen |
-| GET | `/api/v1/meters/{id}` | Lesen |
-| GET | `/api/v1/meters/{id}/readings?from&to&limit&cursor` | Lesen |
-| POST | `/api/v1/meters/{id}/readings` | Mitglied |
-| GET | `/api/v1/meters/{id}/analysis` | Lesen |
-| GET | `/api/v1/meters/{id}/costs` | Lesen |
-| GET | `/api/v1/contracts`, `/api/v1/contracts/{id}` | Lesen |
+| GET, PUT | `/api/v1/household` | L, E |
+| GET, POST | `/api/v1/meters` | L, E |
+| GET, PUT, DELETE | `/api/v1/meters/{id}` | L, E, E |
+| POST | `/api/v1/meters/{id}/archive`, `/restore`, `/swap` | E |
+| GET, POST | `/api/v1/meters/{id}/readings?from&to&limit&cursor` | L, M |
+| GET | `/api/v1/meters/{id}/history`, `/analysis`, `/costs` | L |
+| GET, PUT, DELETE | `/api/v1/readings/{id}` | L, M, M |
+| GET | `/api/v1/readings/{id}/photo` | L |
+| GET, POST | `/api/v1/meters/{id}/contracts` | L, E |
+| GET | `/api/v1/meters/{id}/contract-templates` | L |
+| GET | `/api/v1/contracts` | L |
+| GET, PUT, DELETE | `/api/v1/contracts/{id}` | L, E, E |
+| POST | `/api/v1/contracts/{id}/positions/{position}/price-components`, `/installments` | E |
+| POST | `/api/v1/contracts/{id}/adjustments`, `/settlements` | M |
+| DELETE | `/api/v1/contracts/{id}/{installments\|adjustments\|settlements}/{entry}` | E bzw. M |
+| GET | `/api/v1/costs?year` | L |
+| GET, POST | `/api/v1/vehicles` | L, E |
+| GET, PUT | `/api/v1/vehicles/{id}` | L, E |
+| POST, DELETE | `/api/v1/vehicles/{id}/profiles`, `/profiles/{profile}` | E |
+| PUT, DELETE | `/api/v1/vehicles/{id}/acquisition` | E |
+| GET, POST | `/api/v1/vehicles/{id}/charging` | L, M |
+| DELETE | `/api/v1/vehicles/{id}/charging/{session}` | M |
+| GET | `/api/v1/vehicles/{id}/report` | L |
+| GET, POST | `/api/v1/vehicles/{id}/costs?year`, `/api/v1/pv-systems/{id}/costs?year` | L, M |
+| GET, PUT, DELETE | `/api/v1/asset-costs/{id}` | L, M, M |
+| GET | `/api/v1/pv` | L |
+| GET, POST | `/api/v1/pv-systems` | L, E |
+| GET, PUT, DELETE | `/api/v1/pv-systems/{id}` | L, E, E |
+| GET | `/api/v1/pv-systems/{id}/report` | L |
+| GET | `/api/v1/pv-grid/{id}/analysis`, `/meters` | L |
+| POST | `/api/v1/pv-grid/{id}/readings` | M |
+| GET | `/api/v1/documents` | M |
+| GET | `/api/v1/documents/{id}`, `/file` | L |
+| DELETE | `/api/v1/documents/{id}` | M |
+
+Schreibende Endpunkte erwarten die vollständige Ressource (`PUT` ersetzt);
+die genauen Schemata stehen in `/api/v1/openapi.json`. Anlegen antwortet
+mit 201 und der angelegten Ressource (Einträge eines Vertrags: mit dem
+ganzen Vertrag), Löschen sowie Archivieren und Reaktivieren mit 204.
+Stände über die API erhalten die Quelle `api`. Nicht über die API verfügbar
+sind Anmeldung, Mitglieder und Einladungen, Benachrichtigungen, der
+Setup-Assistent, Foto- und Dokumenten-Uploads sowie Import und Export.
 
 Fehler sind `application/problem+json` (RFC 9457) mit `status`, bei
 Validierung `errors` je Feld und bei Plausibilitätswarnungen `warnings`.

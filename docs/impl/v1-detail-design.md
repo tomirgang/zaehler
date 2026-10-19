@@ -812,7 +812,30 @@ Ressourcen (JSON, Dezimalwerte als String, Zeitpunkte RFC 3339 in UTC):
 | GET | `/api/v1/meters/{id}/analysis` | V | Monatsserie, Vergleiche, Prognose, Ampel |
 | GET | `/api/v1/meters/{id}/costs` | V | Kostenansicht ({need}`SPEC_TAR_COST_VIEW`) |
 | GET | `/api/v1/contracts`, `/api/v1/contracts/{id}` | V | Verträge mit Positionen, Preisständen, Abschlägen |
+| GET, PUT | `/api/v1/household` | V, O | Haushalt (Name, Zeitzone, wirksame Rolle) |
+| POST, PUT, DELETE | `/api/v1/meters`, `/api/v1/meters/{id}` | O | Messstellen mit allen Stammdaten (Ableseplan, Ziele, Abrechnungsbeginn, Register) |
+| POST | `/api/v1/meters/{id}/archive`, `…/restore`, `…/swap` | O | Archivieren ({need}`SPEC_MTR_ARCHIVE`), Zählerwechsel |
+| GET | `/api/v1/meters/{id}/history` | V | Revisionen ({need}`SPEC_RDG_HISTORY`) |
+| GET, PUT, DELETE | `/api/v1/readings/{id}`, GET `…/photo` | V, M, M | Ablesung, Korrektur, Löschen, Belegfoto (JPEG) |
+| GET, POST | `/api/v1/meters/{id}/contracts`, GET `…/contract-templates` | V, O | Verträge der Messstelle, Vorlagen |
+| PUT, DELETE | `/api/v1/contracts/{id}` | O | Vertrag ersetzen, löschen |
+| POST, DELETE | `/api/v1/contracts/{id}/positions/{position}/price-components`, `…/installments`, `…/adjustments`, `…/settlements`, `…/{kind}/{entry}` | O/M | Preisstände, Abschläge, Anpassungen, Abrechnungen |
+| GET | `/api/v1/costs?year` | V | Haushaltskosten |
+| GET, POST, PUT | `/api/v1/vehicles`, `/api/v1/vehicles/{id}` | V, O | Fahrzeuge ({need}`SPEC_CAR_VEHICLES`) |
+| POST, PUT, DELETE | `/api/v1/vehicles/{id}/profiles`, `…/acquisition`, `…/charging` | O/M | Verbrauchsprofile, Anschaffung, Ladevorgänge; GET `…/charging`, `…/report` (V) |
+| GET, POST, PUT, DELETE | `/api/v1/vehicles/{id}/costs`, `/api/v1/pv-systems/{id}/costs`, `/api/v1/asset-costs/{id}` | V/M | Kostenbuch ({need}`SPEC_ASSET_COSTS`) |
+| GET, POST, PUT, DELETE | `/api/v1/pv`, `/api/v1/pv-systems`, `/api/v1/pv-systems/{id}`, `…/report` | V/O | PV-Anlagen mit Zuordnung ({need}`SPEC_PV_ASSIGNMENT`), Bericht |
+| GET, POST | `/api/v1/pv-grid/{id}/analysis`, `…/meters`, `…/readings` | V, M | Netzbilanz, Sammelerfassung ({need}`SPEC_PV_BULK_CAPTURE`, Quelle `api`) |
+| GET, DELETE | `/api/v1/documents`, `/api/v1/documents/{id}`, `…/file` | M/V | Dokumente: Metadaten, Datei, Verwerfen |
 | GET | `/api/v1/openapi.json` | | OpenAPI 3.1, ohne Authentifizierung |
+
+Die Rolle ergibt sich allein aus dem aufgerufenen Anwendungsfall, der auch
+die Oberfläche bedient; die API prüft keine eigenen Rollen. Die wirksame
+Rolle des Tokens ist das Minimum aus Token-Rolle und aktueller Rolle des
+Erstellers ({need}`SPEC_API_AUTH`). `PUT` ersetzt die ganze Ressource;
+Anlegen antwortet mit 201, Löschen mit 204. Nicht Teil der API: Anmeldung,
+Mitglieder, Einladungen, Benachrichtigungen, Setup-Assistent, Foto- und
+Dokument-Uploads, Import und Export.
 
 Fehler als `application/problem+json` (RFC 9457) mit `type`, `title`,
 `status`, bei Validierung `errors` je Feld (Fehlercode, nicht übersetzt).
@@ -820,7 +843,9 @@ Body-Limit 1 MiB, höchstens 1000 Stände je Anfrage. Die Versionierung erfolgt
 über den Pfad; Änderungen innerhalb von v1 sind nur additiv.
 
 Umsetzung: Modul `zaehler-web/src/api` mit `utoipa` 6 und `utoipa-axum`
-0.3; die Beschreibung entsteht aus den Handlern. Problem-Details mit
+0.3; die Beschreibung entsteht aus den Handlern. Je Bereich ein Untermodul
+(`meter_write`, `contracts`, `vehicles`, `pv`, `household`) mit eigenen
+DTOs. Problem-Details mit
 zusätzlichem `code` (fachlicher Fehlercode), `warnings` bei
 Plausibilitätswarnungen und `reference` bei internen Fehlern; 401 mit
 `WWW-Authenticate: Bearer`. Antworten mit `Cache-Control: no-store`.

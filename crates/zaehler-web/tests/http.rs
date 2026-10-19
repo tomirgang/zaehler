@@ -3061,15 +3061,75 @@ async fn openapi_matches_router() {
     }
     documented.sort();
     let expected: Vec<(String, String)> = [
+        ("DELETE", "/api/v1/asset-costs/{id}"),
+        ("DELETE", "/api/v1/contracts/{id}"),
+        ("DELETE", "/api/v1/contracts/{id}/{kind}/{entry}"),
+        ("DELETE", "/api/v1/documents/{id}"),
+        ("DELETE", "/api/v1/meters/{id}"),
+        ("DELETE", "/api/v1/pv-systems/{id}"),
+        ("DELETE", "/api/v1/readings/{id}"),
+        ("DELETE", "/api/v1/vehicles/{id}/acquisition"),
+        ("DELETE", "/api/v1/vehicles/{id}/charging/{session}"),
+        ("DELETE", "/api/v1/vehicles/{id}/profiles/{profile}"),
+        ("GET", "/api/v1/asset-costs/{id}"),
         ("GET", "/api/v1/contracts"),
         ("GET", "/api/v1/contracts/{id}"),
+        ("GET", "/api/v1/costs"),
+        ("GET", "/api/v1/documents"),
+        ("GET", "/api/v1/documents/{id}"),
+        ("GET", "/api/v1/documents/{id}/file"),
+        ("GET", "/api/v1/household"),
         ("GET", "/api/v1/meters"),
         ("GET", "/api/v1/meters/{id}"),
         ("GET", "/api/v1/meters/{id}/analysis"),
+        ("GET", "/api/v1/meters/{id}/contract-templates"),
+        ("GET", "/api/v1/meters/{id}/contracts"),
         ("GET", "/api/v1/meters/{id}/costs"),
+        ("GET", "/api/v1/meters/{id}/history"),
         ("GET", "/api/v1/meters/{id}/readings"),
+        ("GET", "/api/v1/pv"),
+        ("GET", "/api/v1/pv-grid/{id}/analysis"),
+        ("GET", "/api/v1/pv-grid/{id}/meters"),
+        ("GET", "/api/v1/pv-systems"),
+        ("GET", "/api/v1/pv-systems/{id}"),
+        ("GET", "/api/v1/pv-systems/{id}/costs"),
+        ("GET", "/api/v1/pv-systems/{id}/report"),
+        ("GET", "/api/v1/readings/{id}"),
+        ("GET", "/api/v1/readings/{id}/photo"),
+        ("GET", "/api/v1/vehicles"),
+        ("GET", "/api/v1/vehicles/{id}"),
+        ("GET", "/api/v1/vehicles/{id}/charging"),
+        ("GET", "/api/v1/vehicles/{id}/costs"),
+        ("GET", "/api/v1/vehicles/{id}/report"),
+        ("POST", "/api/v1/contracts/{id}/adjustments"),
+        ("POST", "/api/v1/contracts/{id}/installments"),
+        (
+            "POST",
+            "/api/v1/contracts/{id}/positions/{position}/price-components",
+        ),
+        ("POST", "/api/v1/contracts/{id}/settlements"),
+        ("POST", "/api/v1/meters"),
+        ("POST", "/api/v1/meters/{id}/archive"),
+        ("POST", "/api/v1/meters/{id}/contracts"),
         ("POST", "/api/v1/meters/{id}/readings"),
+        ("POST", "/api/v1/meters/{id}/restore"),
+        ("POST", "/api/v1/meters/{id}/swap"),
+        ("POST", "/api/v1/pv-grid/{id}/readings"),
+        ("POST", "/api/v1/pv-systems"),
+        ("POST", "/api/v1/pv-systems/{id}/costs"),
         ("POST", "/api/v1/readings"),
+        ("POST", "/api/v1/vehicles"),
+        ("POST", "/api/v1/vehicles/{id}/charging"),
+        ("POST", "/api/v1/vehicles/{id}/costs"),
+        ("POST", "/api/v1/vehicles/{id}/profiles"),
+        ("PUT", "/api/v1/asset-costs/{id}"),
+        ("PUT", "/api/v1/contracts/{id}"),
+        ("PUT", "/api/v1/household"),
+        ("PUT", "/api/v1/meters/{id}"),
+        ("PUT", "/api/v1/pv-systems/{id}"),
+        ("PUT", "/api/v1/readings/{id}"),
+        ("PUT", "/api/v1/vehicles/{id}"),
+        ("PUT", "/api/v1/vehicles/{id}/acquisition"),
     ]
     .iter()
     .map(|(m, p)| ((*m).to_owned(), (*p).to_owned()))
@@ -3077,7 +3137,11 @@ async fn openapi_matches_router() {
     assert_eq!(documented, expected);
     // jeder beschriebene Pfad trifft eine Route (401 statt 404 oder 405)
     for (method, path) in &documented {
-        let concrete = path.replace("{id}", &uuid::Uuid::now_v7().to_string());
+        let concrete = ["{id}", "{entry}", "{position}", "{profile}", "{session}"]
+            .iter()
+            .fold(path.replace("{kind}", "installments"), |p, k| {
+                p.replace(k, &uuid::Uuid::now_v7().to_string())
+            });
         let (status, body, _) = api(&mut c, method, &concrete, None, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
     }

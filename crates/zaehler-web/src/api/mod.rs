@@ -3,8 +3,13 @@
 //! auf. Die OpenAPI-Beschreibung entsteht aus den Handlern.
 
 pub mod auth;
+mod contracts;
 pub mod dto;
 pub mod error;
+mod household;
+mod meter_write;
+mod pv;
+mod vehicles;
 
 use axum::{
     Json, Router,
@@ -85,7 +90,7 @@ impl Modify for BearerAuth {
 /// Router der API und ihre OpenAPI-Beschreibung.
 // @impl SPEC_API_REST
 pub fn router() -> (Router<WebState>, utoipa::openapi::OpenApi) {
-    let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
+    let r = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(list_meters))
         .routes(routes!(get_meter))
         .routes(routes!(list_readings, record_readings))
@@ -93,8 +98,13 @@ pub fn router() -> (Router<WebState>, utoipa::openapi::OpenApi) {
         .routes(routes!(meter_analysis))
         .routes(routes!(meter_costs))
         .routes(routes!(list_contracts))
-        .routes(routes!(get_contract))
-        .split_for_parts();
+        .routes(routes!(get_contract));
+    let r = meter_write::routes(r);
+    let r = contracts::routes(r);
+    let r = vehicles::routes(r);
+    let r = pv::routes(r);
+    let r = household::routes(r);
+    let (router, api) = r.split_for_parts();
     let doc = serde_json::to_value(&api).unwrap_or_default();
     let router = router
         .route(

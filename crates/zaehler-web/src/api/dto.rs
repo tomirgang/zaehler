@@ -46,6 +46,52 @@ pub struct MeterDto {
     pub archived: bool,
     pub last_reading_at: Option<DateTime<Utc>>,
     pub registers: Vec<RegisterDto>,
+    /// Ableseplan; fehlt ohne Plan
+    pub schedule: Option<ScheduleDto>,
+    /// Höchster plausibler Tagesverbrauch
+    #[schema(value_type = Option<String>)]
+    pub max_daily_rate: Option<Decimal>,
+    /// Beginn des Abrechnungsjahres
+    pub billing_start: Option<MonthDayDto>,
+    /// Jahresziel, Toleranz und Saisonprofil
+    pub targets: TargetsDto,
+    /// Übergeordnete Messstelle des eingebauten Geräts (Zwischenzähler)
+    pub parent_meter_id: Option<Uuid>,
+    /// Zählernummer des eingebauten Geräts
+    pub serial_number: Option<String>,
+    pub archived_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Ableseplan einer Messstelle.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ScheduleDto {
+    /// `every_days` (1 bis 3650 Tage) oder `monthly` (Tag 1 bis 28)
+    pub kind: String,
+    pub value: u16,
+}
+
+/// Monat und Tag, z.B. Beginn des Abrechnungsjahres.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+pub struct MonthDayDto {
+    pub month: u8,
+    pub day: u8,
+}
+
+/// Vorgaben für Erwartung und Ampel.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct TargetsDto {
+    /// Erwarteter Jahresverbrauch in der Einheit der Messstelle
+    #[schema(value_type = Option<String>)]
+    #[serde(default)]
+    pub annual_target: Option<Decimal>,
+    /// Toleranz in Prozent (1 bis 100); ohne Angabe gilt 20
+    #[serde(default)]
+    pub tolerance_pct: Option<u8>,
+    /// Angepasstes Saisonprofil: 12 Gewichte Januar bis Dezember
+    #[schema(value_type = Option<Vec<String>>)]
+    #[serde(default)]
+    pub season_weights: Option<Vec<Decimal>>,
 }
 
 impl MeterDto {
@@ -77,6 +123,34 @@ impl MeterDto {
                     }
                 })
                 .collect(),
+            schedule: m.data.schedule.map(|s| ScheduleDto {
+                kind: s.kind().into(),
+                value: s.value(),
+            }),
+            max_daily_rate: m.data.max_daily_rate,
+            billing_start: m.data.billing_start.map(|b| MonthDayDto {
+                month: b.month,
+                day: b.day,
+            }),
+            targets: TargetsDto {
+                annual_target: m.data.targets.annual_target,
+                tolerance_pct: m.data.targets.tolerance_pct,
+                season_weights: m
+                    .data
+                    .targets
+                    .season_weights
+                    .as_ref()
+                    .map(|p| p.monthly_weights.to_vec()),
+            },
+            parent_meter_id: agg
+                .active_device()
+                .and_then(|d| d.data.parent_meter_id)
+                .map(|p| p.0),
+            serial_number: agg
+                .active_device()
+                .and_then(|d| d.data.serial_number.clone()),
+            archived_at: m.archived_at,
+            created_at: m.created_at,
         }
     }
 }
@@ -608,6 +682,8 @@ pub struct SettlementDto {
     pub period_end: NaiveDate,
     #[schema(value_type = String)]
     pub amount: Decimal,
+    /// Beleg aus dem Rechnungsimport
+    pub document_id: Option<Uuid>,
 }
 
 /// Vertrag mit Positionen, Preisständen, Abschlägen, Anpassungen und
@@ -698,6 +774,7 @@ impl From<&Contract> for ContractDto {
                     period_start: x.period_start,
                     period_end: x.period_end,
                     amount: x.amount,
+                    document_id: x.document_id,
                 })
                 .collect(),
         }

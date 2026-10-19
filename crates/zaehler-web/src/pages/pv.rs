@@ -1138,6 +1138,7 @@ pub async fn bulk(
                         values,
                         note: form.opt("note"),
                         confirm_warnings: form.get("confirm_warnings") == "true",
+                        source: zaehler_domain::reading::ReadingSource::Manual,
                         drafts: form
                             .0
                             .iter()

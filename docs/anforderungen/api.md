@@ -6,9 +6,13 @@
 :priority: should
 :release: v1
 
-Das System soll eine versionierte JSON-REST-API (`/api/v1`) für Zähler, Stände,
-Verträge und Auswertungen bereitstellen; die OpenAPI-Beschreibung wird aus dem
-Code erzeugt und unter `/api/v1/openapi.json` ausgeliefert.
+Das System soll eine versionierte JSON-REST-API (`/api/v1`) bereitstellen,
+über die alle Daten eines Haushalts gelesen und geschrieben werden können,
+die auch die Oberfläche bearbeitet: Zähler, Stände, Verträge, Kosten,
+Fahrzeuge mit Kostenbuch, PV-Anlagen mit Kostenbuch, Haushalt und Dokumente.
+Ein Token darf dabei höchstens, was der Nutzer, der es erstellt hat, mit
+seiner aktuellen Rolle darf. Die OpenAPI-Beschreibung wird aus dem Code
+erzeugt und unter `/api/v1/openapi.json` ausgeliefert.
 ```
 
 ```{req} API-Tokens

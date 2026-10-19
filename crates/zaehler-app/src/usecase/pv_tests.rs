@@ -270,6 +270,7 @@ async fn january(uc: &UseCases, t: &Tenant, grid: MeterId, generation: MeterId, 
                 values,
                 note: None,
                 confirm_warnings: false,
+                source: zaehler_domain::reading::ReadingSource::Manual,
                 drafts: Vec::new(),
             },
         )
@@ -323,6 +324,7 @@ async fn bulk_capture_and_grid_kpis() {
                 ],
                 note: None,
                 confirm_warnings: false,
+                source: zaehler_domain::reading::ReadingSource::Manual,
                 drafts: Vec::new(),
             },
         )
@@ -736,6 +738,7 @@ async fn bulk_capture_with_photos() {
         ],
         note: None,
         confirm_warnings: false,
+        source: zaehler_domain::reading::ReadingSource::Manual,
         drafts,
     };
     // Entwurf für eine Messstelle außerhalb des Hausanschlusses

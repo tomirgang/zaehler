@@ -275,6 +275,7 @@ async fn seed_pv(
                     values,
                     note: None,
                     confirm_warnings: true,
+                    source: zaehler_domain::reading::ReadingSource::Manual,
                     drafts: Vec::new(),
                 },
             )

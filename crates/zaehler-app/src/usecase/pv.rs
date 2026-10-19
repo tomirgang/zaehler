@@ -306,6 +306,9 @@ pub struct BulkInput {
     pub values: Vec<(MeterId, RegisterId, Decimal)>,
     pub note: Option<String>,
     pub confirm_warnings: bool,
+    /// Quelle der Stände ohne Foto (`manual` im Formular, `api` über die
+    /// REST-API); mit Foto immer `photo`
+    pub source: ReadingSource,
     /// Foto-Entwürfe und die Messstelle, deren Stände sie belegen
     pub drafts: Vec<(DraftId, MeterId)>,
 }
@@ -481,7 +484,7 @@ impl RecordBulkReadings {
             };
             (extras, ReadingSource::Photo)
         } else {
-            (ReadingExtras::default(), ReadingSource::Manual)
+            (ReadingExtras::default(), input.source)
         };
         let readings = ReadingsInput {
             meter_id: meter,
