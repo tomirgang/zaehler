@@ -104,6 +104,68 @@ document.addEventListener("DOMContentLoaded", focusableScrollTables);
 document.addEventListener("htmx:afterSettle", focusableScrollTables);
 window.addEventListener("resize", focusableScrollTables);
 
+// @impl SPEC_SETUP_FLOW
+// Bedingte Felder: `data-show-if` mit durch `;` getrennten Bedingungen
+// (`feld`, `feld=a|b`, `feld!=a|b`), ausgewertet gegen das eigene Formular
+// oder das in `data-show-form` genannte. Ausgeblendete Felder werden
+// deaktiviert und daher nicht gesendet; ohne JavaScript bleibt alles sichtbar.
+function conditionValue(form, name) {
+  const el = form.elements.namedItem(name);
+  if (!el || el.disabled) {
+    return "";
+  }
+  if (el instanceof HTMLInputElement && el.type === "checkbox") {
+    return el.checked ? el.value : "";
+  }
+  return el.value.trim();
+}
+
+function conditionHolds(form, condition) {
+  const match = /^([\w-]+)(?:(!?=)(.*))?$/.exec(condition.trim());
+  if (!match) {
+    return true;
+  }
+  const value = conditionValue(form, match[1]);
+  if (!match[2]) {
+    return value !== "";
+  }
+  const listed = match[3].split("|").includes(value);
+  return match[2] === "=" ? listed : !listed;
+}
+
+function updateConditionalFields() {
+  // Dokumentreihenfolge: Bedingungen verweisen auf vorangehende Felder
+  document.querySelectorAll("[data-show-if]").forEach((el) => {
+    const form = el.dataset.showForm
+      ? document.getElementById(el.dataset.showForm)
+      : el.closest("form");
+    if (!form) {
+      return;
+    }
+    const visible = el.dataset.showIf
+      .split(";")
+      .filter((c) => c.trim() !== "")
+      .every((c) => conditionHolds(form, c));
+    el.hidden = !visible;
+    const controls = el.matches("input, select, textarea, button")
+      ? [el]
+      : el.querySelectorAll("input, select, textarea, button");
+    controls.forEach((c) => {
+      c.disabled = !visible;
+    });
+  });
+}
+document.addEventListener("DOMContentLoaded", updateConditionalFields);
+document.addEventListener("htmx:afterSettle", updateConditionalFields);
+document.addEventListener("change", updateConditionalFields);
+document.addEventListener("input", (e) => {
+  if (e.target.closest("form")?.querySelector("[data-show-if]")) {
+    updateConditionalFields();
+  }
+});
+// Nach „Zurück“ im Browser stellt der Cache Formularwerte wieder her.
+window.addEventListener("pageshow", updateConditionalFields);
+
 // @impl SPEC_UI_PWA
 // Service Worker ohne Offline-Cache; macht die App installierbar.
 if ("serviceWorker" in navigator) {

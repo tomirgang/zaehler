@@ -24,7 +24,7 @@
   <a class="button secondary" href="/setup/contracts">{{ ctx.lang.t("setup-back") }}</a>
 </div>
 {% else %}
-<form method="post" action="/setup/{{ step }}" class="form" novalidate>
+<form method="post" action="/setup/{{ step }}" id="setup-form" class="form" novalidate>
   <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
   {% if step == "grid" %}
   <input type="hidden" name="enabled" value="true">
@@ -33,17 +33,20 @@
     <label><input type="checkbox" name="enabled" value="true"{% if selected %} checked{% endif %}> {{ ctx.lang.t("setup-enable-step") }}</label>
   </div>
   {% endif %}
+  {% if has_required %}<p class="muted" data-show-if="enabled">{{ ctx.lang.t("setup-required-hint") }}</p>{% endif %}
   {% for field in fields %}
-  <div class="field">
-    <label for="{{ field.name }}">{{ ctx.lang.t(&format!("setup-field-{}", field.name)) }}</label>
+  <div class="field" data-show-if="{{ field.show_if }}">
     {% if field.input_type == "checkbox" %}
-    <input id="{{ field.name }}" name="{{ field.name }}" type="checkbox" value="true"{% if field.value == "true" %} checked{% endif %}>
-    {% else if field.input_type == "select" %}
-    <select id="{{ field.name }}" name="{{ field.name }}">
+    <label><input id="{{ field.name }}" name="{{ field.name }}" type="checkbox" value="true"{% if field.value == "true" %} checked{% endif %}> {{ ctx.lang.t(&format!("setup-field-{}", field.name)) }}</label>
+    {% else %}
+    <label for="{{ field.name }}">{{ ctx.lang.t(&format!("setup-field-{}", field.name)) }}{% if field.required %} <span class="required" aria-hidden="true">*</span>{% endif %}</label>
+    {% if field.input_type == "select" %}
+    <select id="{{ field.name }}" name="{{ field.name }}"{% if field.required %} aria-required="true"{% endif %}>
       {% for option in field.options %}<option value="{{ option.value }}"{% if option.value == field.value %} selected{% endif %}>{{ option.label }}</option>{% endfor %}
     </select>
     {% else %}
-    <input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.input_type }}" value="{{ field.value }}">
+    <input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.input_type }}" value="{{ field.value }}"{% if field.required %} aria-required="true"{% endif %}>
+    {% endif %}
     {% endif %}
   </div>
   {% endfor %}
@@ -55,7 +58,7 @@
 </form>
 
 {% for slot in photos %}
-<form method="post" action="/setup/photo" enctype="multipart/form-data" class="form">
+<form method="post" action="/setup/photo" enctype="multipart/form-data" class="form" data-show-if="{{ slot.show_if }}" data-show-form="setup-form">
   <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
   <input type="hidden" name="object_key" value="{{ slot.key }}">
   <input type="hidden" name="return_step" value="{{ step }}">

@@ -34,6 +34,9 @@ struct Field {
     value: String,
     input_type: &'static str,
     options: Vec<SelectOption>,
+    /// Sichtbarkeitsregel für `app.js`, z.B. `enabled;existing_grid=`
+    show_if: String,
+    required: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +51,7 @@ struct PhotoSlot {
     label: String,
     saved: bool,
     confidence: Option<String>,
+    show_if: String,
 }
 
 /// Vorhandene Messstelle des Haushalts als Auswahlziel.
@@ -74,6 +78,7 @@ struct SetupPage {
     index: usize,
     selected: bool,
     fields: Vec<Field>,
+    has_required: bool,
     photos: Vec<PhotoSlot>,
     notice: Option<String>,
     enabled_steps: Vec<String>,
@@ -121,89 +126,227 @@ fn string_value(draft: &SetupDraft, key: &str, field: &str) -> String {
         .unwrap_or_default()
 }
 
-fn fields(step: &str, draft: &SetupDraft, lang: Lang, existing: &[ExistingMeter]) -> Vec<Field> {
-    let names: &[(&str, &str, &'static str)] = match step {
+/// Feld des Assistenten: Name, Eingabetyp, Objektschlüssel im Entwurf,
+/// Sichtbarkeitsregel (zusätzlich zu `enabled`) und Pflichtfeld.
+///
+/// Regeln: durch `;` getrennte Bedingungen, die alle gelten müssen; `feld`
+/// (angehakt bzw. nicht leer), `feld=a|b` oder `feld!=a|b`. Ohne JavaScript
+/// sind alle Felder sichtbar (SPEC_SETUP_FLOW).
+type FieldSpec = (&'static str, &'static str, &'static str, &'static str, bool);
+
+const NEW_GRID: &str = "existing_grid=";
+const NEW_HEAT_PUMP: &str = "existing_heat_pump=";
+const NEW_GENERATION: &str = "existing_generation=";
+const NEW_BATTERY: &str = "battery_meter=new";
+const NEW_MEDIA: &str = "existing_media=";
+const NEW_WALLBOX: &str = "drive_type!=combustion;home_meter=wallbox";
+const ACQ_TIME: &str = "has_acquisition;acquisition_mode=time";
+const ACQ_MILEAGE: &str = "has_acquisition;acquisition_mode=mileage";
+
+#[allow(clippy::too_many_lines)] // Tabelle, eine Zeile je Feld
+fn field_specs(step: &str) -> &'static [FieldSpec] {
+    match step {
         "grid" => &[
-            ("existing_grid", "select", "grid"),
-            ("name", "text", "grid"),
-            ("serial_number", "text", "grid"),
-            ("register", "text", "grid"),
-            ("start_value", "number", "grid"),
-            ("has_export", "checkbox", "grid"),
-            ("export_start", "number", "grid"),
+            ("existing_grid", "select", "grid", "", false),
+            ("name", "text", "grid", NEW_GRID, true),
+            ("serial_number", "text", "grid", NEW_GRID, false),
+            ("register", "text", "grid", NEW_GRID, false),
+            ("start_value", "number", "grid", NEW_GRID, false),
+            ("has_export", "checkbox", "grid", NEW_GRID, false),
+            (
+                "export_start",
+                "number",
+                "grid",
+                "existing_grid=;has_export",
+                false,
+            ),
         ],
         "heat_pump" => &[
-            ("mode", "select", "heat_pump"),
-            ("name", "text", "heat_pump"),
-            ("serial_number", "text", "heat_pump"),
-            ("register", "text", "heat_pump"),
-            ("start_value", "number", "heat_pump"),
+            ("existing_heat_pump", "select", "heat_pump", "", false),
+            ("mode", "select", "heat_pump", NEW_HEAT_PUMP, true),
+            ("name", "text", "heat_pump", NEW_HEAT_PUMP, true),
+            ("serial_number", "text", "heat_pump", NEW_HEAT_PUMP, false),
+            ("register", "text", "heat_pump", NEW_HEAT_PUMP, false),
+            ("start_value", "number", "heat_pump", NEW_HEAT_PUMP, false),
         ],
         "pv" => &[
-            ("system_name", "text", "pv"),
-            ("kind", "select", "pv"),
-            ("kwp", "number", "pv"),
-            ("commissioned_on", "date", "pv"),
-            ("existing_generation", "select", "pv_generation"),
-            ("generation_name", "text", "pv_generation"),
-            ("generation_serial_number", "text", "pv_generation"),
-            ("generation_register", "text", "pv_generation"),
-            ("generation_start", "number", "pv_generation"),
-            ("battery_name", "text", "pv_battery"),
-            ("battery_charge", "number", "pv_battery"),
-            ("battery_discharge", "number", "pv_battery"),
+            ("system_name", "text", "pv", "", true),
+            ("kind", "select", "pv", "", true),
+            ("kwp", "number", "pv", "", false),
+            ("commissioned_on", "date", "pv", "", false),
+            ("existing_generation", "select", "pv_generation", "", false),
+            (
+                "generation_name",
+                "text",
+                "pv_generation",
+                NEW_GENERATION,
+                true,
+            ),
+            (
+                "generation_serial_number",
+                "text",
+                "pv_generation",
+                NEW_GENERATION,
+                false,
+            ),
+            (
+                "generation_register",
+                "text",
+                "pv_generation",
+                NEW_GENERATION,
+                false,
+            ),
+            (
+                "generation_start",
+                "number",
+                "pv_generation",
+                NEW_GENERATION,
+                false,
+            ),
+            ("battery_meter", "select", "pv_battery", "", false),
+            ("battery_name", "text", "pv_battery", NEW_BATTERY, true),
+            ("battery_charge", "number", "pv_battery", NEW_BATTERY, false),
+            (
+                "battery_discharge",
+                "number",
+                "pv_battery",
+                NEW_BATTERY,
+                false,
+            ),
         ],
         "vehicle" => &[
-            ("name", "text", "vehicle"),
-            ("model", "text", "vehicle"),
-            ("plate", "text", "vehicle"),
-            ("drive_type", "select", "vehicle"),
-            ("odometer", "number", "vehicle"),
-            ("home_meter", "select", "vehicle"),
-            ("wallbox_name", "text", "wallbox"),
-            ("wallbox_start", "number", "wallbox"),
-            ("acquisition_date", "date", "vehicle"),
-            ("acquisition_price", "number", "vehicle"),
-            ("acquisition_mode", "select", "vehicle"),
-            ("acquisition_residual_value", "number", "vehicle"),
-            ("acquisition_planned_end", "date", "vehicle"),
-            ("acquisition_odometer", "number", "vehicle"),
-            ("acquisition_lifetime_km", "number", "vehicle"),
-            ("acquisition_end_value", "number", "vehicle"),
+            ("name", "text", "vehicle", "", true),
+            ("model", "text", "vehicle", "", true),
+            ("plate", "text", "vehicle", "", false),
+            ("drive_type", "select", "vehicle", "", true),
+            ("odometer", "number", "vehicle", "", false),
+            (
+                "home_meter",
+                "select",
+                "vehicle",
+                "drive_type!=combustion",
+                false,
+            ),
+            ("wallbox_name", "text", "wallbox", NEW_WALLBOX, true),
+            ("wallbox_start", "number", "wallbox", NEW_WALLBOX, false),
+            ("has_acquisition", "checkbox", "vehicle", "", false),
+            (
+                "acquisition_date",
+                "date",
+                "vehicle",
+                "has_acquisition",
+                true,
+            ),
+            (
+                "acquisition_price",
+                "number",
+                "vehicle",
+                "has_acquisition",
+                true,
+            ),
+            (
+                "acquisition_mode",
+                "select",
+                "vehicle",
+                "has_acquisition",
+                true,
+            ),
+            (
+                "acquisition_residual_value",
+                "number",
+                "vehicle",
+                ACQ_TIME,
+                true,
+            ),
+            ("acquisition_planned_end", "date", "vehicle", ACQ_TIME, true),
+            (
+                "acquisition_odometer",
+                "number",
+                "vehicle",
+                ACQ_MILEAGE,
+                true,
+            ),
+            (
+                "acquisition_lifetime_km",
+                "number",
+                "vehicle",
+                ACQ_MILEAGE,
+                true,
+            ),
+            (
+                "acquisition_end_value",
+                "number",
+                "vehicle",
+                ACQ_MILEAGE,
+                false,
+            ),
         ],
         "media" => &[
-            ("name", "text", "media_general"),
-            ("kind", "select", "media_general"),
-            ("unit", "text", "media_general"),
-            ("register", "text", "media_general"),
-            ("start_value", "number", "media_general"),
+            ("existing_media", "select", "media_general", "", false),
+            ("name", "text", "media_general", NEW_MEDIA, true),
+            ("kind", "select", "media_general", NEW_MEDIA, true),
+            ("unit", "text", "media_general", NEW_MEDIA, false),
+            ("register", "text", "media_general", NEW_MEDIA, false),
+            ("start_value", "number", "media_general", NEW_MEDIA, false),
         ],
         "contracts" => &[
-            ("provider", "text", "contracts"),
-            ("meter", "select", "contracts"),
-            ("second_meter", "select", "contracts"),
-            ("direction", "select", "contracts"),
-            ("starts_on", "date", "contracts"),
-            ("position_name", "text", "contracts"),
-            ("base_price", "number", "contracts"),
-            ("unit_price", "number", "contracts"),
+            ("provider", "text", "contracts", "", true),
+            ("meter", "select", "contracts", "", true),
+            ("second_meter", "select", "contracts", "", false),
+            ("direction", "select", "contracts", "", true),
+            ("starts_on", "date", "contracts", "", true),
+            ("position_name", "text", "contracts", "", false),
+            ("base_price", "number", "contracts", "", false),
+            ("unit_price", "number", "contracts", "", false),
         ],
         _ => &[],
-    };
-    names
+    }
+}
+
+/// Regel inklusive Schalter `enabled` des Schritts.
+fn show_rule(rule: &str) -> String {
+    if rule.is_empty() {
+        "enabled".to_owned()
+    } else {
+        format!("enabled;{rule}")
+    }
+}
+
+/// Wert eines Auswahlfelds, das zwischen „neu“ und vorhandener Messstelle
+/// unterscheidet, aus dem Entwurf.
+fn derived_value(name: &str, draft: &SetupDraft) -> Option<String> {
+    let has = |key: &str, field: &str| !string_value(draft, key, field).is_empty();
+    match name {
+        "battery_meter" => draft_object(draft, "pv_battery").map(|_| {
+            let id = string_value(draft, "pv_battery", "existing_id");
+            if id.is_empty() { "new".to_owned() } else { id }
+        }),
+        "has_acquisition" => Some(
+            (has("vehicle", "acquisition_date") || has("vehicle", "acquisition_price")).to_string(),
+        ),
+        _ => None,
+    }
+}
+
+fn fields(step: &str, draft: &SetupDraft, lang: Lang, existing: &[ExistingMeter]) -> Vec<Field> {
+    field_specs(step)
         .iter()
-        .map(|(name, input_type, key)| {
+        .map(|(name, input_type, key, rule, required)| {
             let object_field = match *name {
-                "system_name" | "wallbox_name" | "generation_name" => "name",
+                "system_name" | "wallbox_name" | "generation_name" | "battery_name" => "name",
                 "generation_serial_number" => "serial_number",
                 "generation_register" => "register",
                 "generation_start" | "wallbox_start" => "start_value",
                 "battery_charge" => "charge_start",
                 "battery_discharge" => "discharge_start",
-                "existing_grid" | "existing_generation" => "existing_id",
+                "existing_grid"
+                | "existing_generation"
+                | "existing_heat_pump"
+                | "existing_media" => "existing_id",
                 _ => name,
             };
-            let mut value = string_value(draft, key, object_field);
+            let mut value = derived_value(name, draft)
+                .unwrap_or_else(|| string_value(draft, key, object_field));
             if value.is_empty()
                 && let Some(photo_object) = recognition_object(name)
             {
@@ -214,6 +357,8 @@ fn fields(step: &str, draft: &SetupDraft, lang: Lang, existing: &[ExistingMeter]
                 value,
                 input_type,
                 options: options_for(step, name, draft, lang, existing),
+                show_if: show_rule(rule),
+                required: *required,
             }
         })
         .collect()
@@ -235,6 +380,7 @@ fn option(value: &str, label: String) -> SelectOption {
     }
 }
 
+#[allow(clippy::too_many_lines)] // ein Zweig je Auswahlfeld
 fn options_for(
     step: &str,
     name: &str,
@@ -262,8 +408,20 @@ fn options_for(
         "direction" => translated("contract-direction-", &["import", "export"]),
         "mode" => translated("setup-hp-mode-", &["submeter", "own"]),
         "acquisition_mode" => translated("setup-acq-mode-", &["time", "mileage"]),
-        "existing_grid" | "existing_generation" => {
+        "existing_grid" | "existing_generation" | "existing_heat_pump" | "existing_media" => {
             let mut out = vec![option("", lang.t("setup-option-new-meter"))];
+            out.extend(
+                existing_options(name != "existing_media")
+                    .into_iter()
+                    .map(|(id, label)| SelectOption { value: id, label }),
+            );
+            out
+        }
+        "battery_meter" => {
+            let mut out = vec![
+                option("", lang.t("setup-option-none")),
+                option("new", lang.t("setup-option-new-battery")),
+            ];
             out.extend(
                 existing_options(true)
                     .into_iter()
@@ -272,7 +430,10 @@ fn options_for(
             out
         }
         "home_meter" => {
-            let mut out = vec![option("", lang.t("setup-option-none"))];
+            let mut out = vec![
+                option("", lang.t("setup-option-none")),
+                option("wallbox", lang.t("setup-option-new-wallbox")),
+            ];
             out.extend(
                 existing_options(true)
                     .into_iter()
@@ -288,8 +449,26 @@ fn options_for(
             if name == "second_meter" {
                 out.push(option("", lang.t("setup-option-none")));
             }
-            out.push(option("grid", lang.t("setup-ref-grid")));
+            // Vorhandene Messstellen der Vorschritte erscheinen einmal, unter
+            // ihrem lokalen Schlüssel
+            let reused = |key: &str| {
+                draft_object(draft, key)
+                    .and_then(|o| o.get("existing_id"))
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+            };
+            let grid_existing = reused("grid");
+            let grid_label = grid_existing
+                .as_deref()
+                .and_then(|id| existing.iter().find(|m| m.id == id))
+                .map_or_else(
+                    || lang.t("setup-ref-grid"),
+                    |m| lang.ta("setup-ref-existing", &[("name", m.name.clone())]),
+                );
+            out.push(option("grid", grid_label));
             let own_heat_pump = draft.steps.get("heat_pump").copied().unwrap_or(false)
+                && reused("heat_pump").is_none()
                 && draft_object(draft, "heat_pump")
                     .and_then(|o| o.get("mode"))
                     .and_then(Value::as_str)
@@ -297,12 +476,15 @@ fn options_for(
             if own_heat_pump {
                 out.push(option("heat_pump", lang.t("setup-ref-heat_pump")));
             }
-            if draft.steps.get("media").copied().unwrap_or(false) {
+            if draft.steps.get("media").copied().unwrap_or(false)
+                && reused("media_general").is_none()
+            {
                 out.push(option("media_general", lang.t("setup-ref-media_general")));
             }
             out.extend(
                 existing_options(false)
                     .into_iter()
+                    .filter(|(id, _)| grid_existing.as_deref() != Some(id.as_str()))
                     .map(|(id, label)| SelectOption {
                         value: format!("id:{id}"),
                         label,
@@ -315,19 +497,27 @@ fn options_for(
 }
 
 fn photo_slots(step: &str, draft: &SetupDraft, lang: Lang) -> Vec<PhotoSlot> {
-    let keys: &[&'static str] = match step {
-        "grid" => &["grid", "grid_export"],
-        "heat_pump" => &["heat_pump"],
-        "pv" => &["pv_generation", "pv_battery_charge", "pv_battery_discharge"],
-        "vehicle" => &["wallbox"],
-        "media" => &["media_general"],
+    let keys: &[(&'static str, &str)] = match step {
+        "grid" => &[
+            ("grid", NEW_GRID),
+            ("grid_export", "existing_grid=;has_export"),
+        ],
+        "heat_pump" => &[("heat_pump", NEW_HEAT_PUMP)],
+        "pv" => &[
+            ("pv_generation", NEW_GENERATION),
+            ("pv_battery_charge", NEW_BATTERY),
+            ("pv_battery_discharge", NEW_BATTERY),
+        ],
+        "vehicle" => &[("wallbox", NEW_WALLBOX)],
+        "media" => &[("media_general", NEW_MEDIA)],
         _ => &[],
     };
     keys.iter()
-        .map(|key| PhotoSlot {
+        .map(|(key, rule)| PhotoSlot {
             key,
             label: lang.t(&format!("setup-photo-{key}")),
             saved: draft.photos.contains_key(*key),
+            show_if: show_rule(rule),
             confidence: draft_object(draft, key)
                 .and_then(|object| object.get("recognition"))
                 .and_then(Value::as_object)
@@ -352,6 +542,7 @@ fn page(
 ) -> Result<Response, Response> {
     let index = step_index(step).ok_or_else(|| ctx.fail(AppError::NotFound))?;
     let lang = ctx.page.lang;
+    let fields = fields(step, draft, lang, existing);
     Ok(render(&SetupPage {
         ctx: ctx.page.clone(),
         step: step.to_owned(),
@@ -365,7 +556,8 @@ fn page(
         ),
         index: index + 1,
         selected: draft.steps.get(step).copied().unwrap_or(step == "grid"),
-        fields: fields(step, draft, lang, existing),
+        has_required: fields.iter().any(|f| f.required),
+        fields,
         photos: photo_slots(step, draft, lang),
         notice: (removed > 0)
             .then(|| lang.ta("setup-photos-removed", &[("count", removed.to_string())])),
@@ -433,6 +625,10 @@ async fn existing_meters(state: &WebState, ctx: &Ctx) -> Result<Vec<ExistingMete
         .map_err(|error| ctx.fail(error))?;
     Ok(meters
         .into_iter()
+        .filter(|summary| {
+            !summary.meter.archived
+                && summary.meter.data.kind != zaehler_domain::meter::MeterKind::Vehicle
+        })
         .map(|summary| ExistingMeter {
             id: summary.meter.id.to_string(),
             name: summary.meter.data.name,
@@ -459,10 +655,17 @@ fn object(fields: &BTreeMap<String, String>, names: &[&str]) -> Value {
     Value::Object(object)
 }
 
+fn existing_object(form: &BTreeMap<String, String>, field: &str) -> Option<Value> {
+    form.get(field)
+        .map(|id| id.trim())
+        .filter(|id| !id.is_empty())
+        .map(|id| json!({ "existing_id": id }))
+}
+
 fn json_for_step(step: &str, form: &BTreeMap<String, String>) -> Vec<(String, Value)> {
     match step {
-        "grid" => match form.get("existing_grid").filter(|id| !id.trim().is_empty()) {
-            Some(id) => vec![("grid".into(), json!({ "existing_id": id.trim() }))],
+        "grid" => match existing_object(form, "existing_grid") {
+            Some(existing) => vec![("grid".into(), existing)],
             None => vec![(
                 "grid".into(),
                 object(
@@ -480,16 +683,20 @@ fn json_for_step(step: &str, form: &BTreeMap<String, String>) -> Vec<(String, Va
         },
         "heat_pump" => vec![(
             "heat_pump".into(),
-            object(
-                form,
-                &["mode", "name", "start_value", "serial_number", "register"],
-            ),
+            existing_object(form, "existing_heat_pump").unwrap_or_else(|| {
+                object(
+                    form,
+                    &["mode", "name", "start_value", "serial_number", "register"],
+                )
+            }),
         )],
         "pv" => pv_objects(form),
         "vehicle" => vehicle_objects(form),
         "media" => vec![(
             "media_general".into(),
-            object(form, &["name", "kind", "unit", "register", "start_value"]),
+            existing_object(form, "existing_media").unwrap_or_else(|| {
+                object(form, &["name", "kind", "unit", "register", "start_value"])
+            }),
         )],
         "contracts" => contract_objects(form),
         _ => Vec::new(),
@@ -534,17 +741,20 @@ fn pv_objects(form: &BTreeMap<String, String>) -> Vec<(String, Value)> {
             }
         }
     }
-    if let Some(id) = form
-        .get("existing_generation")
-        .filter(|id| !id.trim().is_empty())
-    {
-        generation = json!({ "existing_id": id.trim() });
+    if let Some(existing) = existing_object(form, "existing_generation") {
+        generation = existing;
     }
     let mut out = vec![("pv".into(), system), ("pv_generation".into(), generation)];
-    if form
-        .get("battery_name")
-        .is_some_and(|name| !name.trim().is_empty())
-    {
+    let battery_choice = form.get("battery_meter").map_or("", |v| v.trim());
+    // Ohne JavaScript genügt ein Name für einen neuen Speicherzähler
+    let new_battery = battery_choice == "new"
+        || (battery_choice.is_empty()
+            && form
+                .get("battery_name")
+                .is_some_and(|name| !name.trim().is_empty()));
+    if let Some(existing) = existing_object(form, "battery_meter").filter(|_| !new_battery) {
+        out.push(("pv_battery".into(), existing));
+    } else if new_battery {
         let mut battery = object(
             form,
             &["battery_name", "battery_charge", "battery_discharge"],
@@ -563,32 +773,48 @@ fn pv_objects(form: &BTreeMap<String, String>) -> Vec<(String, Value)> {
 }
 
 fn vehicle_objects(form: &BTreeMap<String, String>) -> Vec<(String, Value)> {
-    let mut vehicle = object(
-        form,
-        &[
-            "name",
-            "model",
-            "plate",
-            "drive_type",
-            "odometer",
-            "home_meter",
-            "acquisition_date",
-            "acquisition_price",
-            "acquisition_mode",
-            "acquisition_residual_value",
-            "acquisition_planned_end",
-            "acquisition_odometer",
-            "acquisition_lifetime_km",
-            "acquisition_end_value",
-        ],
-    );
-    let has_wallbox = form
-        .get("wallbox_name")
-        .is_some_and(|name| !name.trim().is_empty());
-    if let Some(fields) = vehicle.as_object_mut()
-        && has_wallbox
+    const ACQUISITION: [&str; 8] = [
+        "acquisition_date",
+        "acquisition_price",
+        "acquisition_mode",
+        "acquisition_residual_value",
+        "acquisition_planned_end",
+        "acquisition_odometer",
+        "acquisition_lifetime_km",
+        "acquisition_end_value",
+    ];
+    let mut names = vec![
+        "name",
+        "model",
+        "plate",
+        "drive_type",
+        "odometer",
+        "home_meter",
+    ];
+    // Ohne Haken bleibt die Anschaffung leer; ohne JavaScript genügen Datum
+    // oder Preis
+    let filled = |name: &str| form.get(name).is_some_and(|v| !v.trim().is_empty());
+    if form.contains_key("has_acquisition")
+        || filled("acquisition_date")
+        || filled("acquisition_price")
     {
-        fields.insert("home_meter".into(), Value::String("wallbox".into()));
+        names.extend(ACQUISITION);
+    }
+    let mut vehicle = object(form, &names);
+    let combustion = form.get("drive_type").is_some_and(|d| d == "combustion");
+    let home = form.get("home_meter").map_or("", |v| v.trim());
+    let has_wallbox = !combustion
+        && (home == "wallbox"
+            || (home.is_empty()
+                && form
+                    .get("wallbox_name")
+                    .is_some_and(|name| !name.trim().is_empty())));
+    if let Some(fields) = vehicle.as_object_mut() {
+        if has_wallbox {
+            fields.insert("home_meter".into(), Value::String("wallbox".into()));
+        } else if combustion {
+            fields.insert("home_meter".into(), Value::Null);
+        }
     }
     let mut out = vec![("vehicle".into(), vehicle)];
     if has_wallbox {

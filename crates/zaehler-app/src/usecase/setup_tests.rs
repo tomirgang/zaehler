@@ -493,6 +493,97 @@ async fn setup_extends_an_existing_household_with_existing_ids_and_acquisition()
     assert_eq!(uc.list_contracts.execute(&owner).await.unwrap().len(), 2);
 }
 
+// @test SPEC_SETUP_FLOW
+#[tokio::test]
+async fn every_setup_meter_can_reuse_an_existing_meter() {
+    let (ports, _, _) = memory_ports();
+    let uc = UseCases::new(&ports);
+    let owner = owner(&uc).await;
+    uc.start_setup.execute(&owner).await.unwrap();
+    save_grid_and_heat_pump(&uc, &owner).await;
+    save_pv(&uc, &owner).await;
+    save_vehicle(&uc, &owner).await;
+    save_objects(
+        &uc,
+        &owner,
+        "media",
+        vec![(
+            "media_general",
+            json!({"name": "Water", "kind": "water", "start_value": "5"}),
+        )],
+    )
+    .await;
+    let first = uc.complete_setup.execute(&owner).await.unwrap();
+    let meters = uc.list_meters.execute(&owner).await.unwrap().len();
+    // Erzeugungs- und Speicherzähler gehören höchstens zu einer Anlage
+    for system in uc.list_pv_systems.execute(&owner).await.unwrap() {
+        uc.delete_pv_system
+            .execute(&owner, system.id)
+            .await
+            .unwrap();
+    }
+
+    uc.start_setup.execute(&owner).await.unwrap();
+    let existing = |key: &str| json!({"existing_id": first[key].to_string()});
+    save_objects(&uc, &owner, "grid", vec![("grid", existing("grid"))]).await;
+    save_objects(
+        &uc,
+        &owner,
+        "heat_pump",
+        vec![("heat_pump", existing("heat_pump"))],
+    )
+    .await;
+    save_objects(
+        &uc,
+        &owner,
+        "pv",
+        vec![
+            (
+                "pv",
+                json!({"name": "Garage", "kind": "surplus", "kwp": "2",
+                       "grid": "grid", "generation": "pv_generation"}),
+            ),
+            ("pv_generation", existing("pv_generation")),
+            ("pv_battery", existing("pv_battery")),
+        ],
+    )
+    .await;
+    save_objects(
+        &uc,
+        &owner,
+        "media",
+        vec![("media_general", existing("media_general"))],
+    )
+    .await;
+    save_objects(
+        &uc,
+        &owner,
+        "vehicle",
+        vec![(
+            "vehicle",
+            json!({"name": "EV 2", "model": "M", "drive_type": "electric",
+                   "home_meter": format!("id:{}", first["wallbox"])}),
+        )],
+    )
+    .await;
+    let second = uc.complete_setup.execute(&owner).await.unwrap();
+
+    for key in [
+        "grid",
+        "heat_pump",
+        "pv_generation",
+        "pv_battery",
+        "media_general",
+    ] {
+        assert_eq!(second[key], first[key], "{key} reused");
+    }
+    // nur das zweite Fahrzeug ist neu
+    assert_eq!(
+        uc.list_meters.execute(&owner).await.unwrap().len(),
+        meters + 1
+    );
+}
+
 #[tokio::test]
 async fn setup_rejects_foreign_meters_and_invalid_acquisition_without_partial_data() {
     let (ports, _, _) = memory_ports();

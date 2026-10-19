@@ -440,7 +440,9 @@ impl CompleteSetup {
                 continue;
             };
             if let Some(id) = existing_id(object) {
-                let id = resolve_existing_meter(uow, t, id, key, true).await?;
+                // Medienzähler dürfen jede Art haben, alle übrigen sind Strom
+                let electricity_only = key != "media_general";
+                let id = resolve_existing_meter(uow, t, id, key, electricity_only).await?;
                 local.insert(key.to_owned(), id);
                 continue;
             }

@@ -92,6 +92,8 @@ AI-Konfiguration wird es nur als Belegfoto des Startstands gespeichert.
 - In einem leeren Haushalt wird der Assistent auf der Übersicht angeboten; zusätzlich ist er jederzeit über Übersicht und Messstellen erreichbar, um ein bestehendes Setup zu erweitern.
 - Nur Eigentümer können den Assistenten nutzen.
 - Nicht zutreffende Schritte werden übersprungen.
+- Felder werden abhängig von den bisherigen Eingaben ein- und ausgeblendet, Pflichtfelder sind gekennzeichnet.
+- Für jeden Zähler kann statt einer neuen eine vorhandene Messstelle gewählt werden, z.B. ein bestehender Wärmepumpen-Zwischenzähler.
 - Angelegt wird erst nach Bestätigung der Zusammenfassung, alle Objekte in einer Transaktion.
 - Ein begonnener Assistent bleibt als Entwurf erhalten und kann abgebrochen oder fortgesetzt werden.
 ```

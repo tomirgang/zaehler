@@ -89,6 +89,8 @@ h2 { font-size: 1.2rem; margin: 1.5rem 0 0.75rem; }
 
 .form { display: grid; gap: 1rem; }
 .field { display: grid; gap: 0.25rem; }
+[hidden] { display: none !important; }
+.required { color: var(--error); }
 .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
 label { font-weight: 600; }

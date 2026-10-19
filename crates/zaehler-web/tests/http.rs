@@ -3541,6 +3541,73 @@ async fn setup_wizard_offers_selects_photo_slots_and_existing_meters() {
     assert!(media.contains("value=\"gas\""));
 }
 
+// @test SPEC_SETUP_FLOW
+#[tokio::test]
+async fn setup_fields_follow_the_choices_and_every_meter_can_be_existing() {
+    let app = test_app(true);
+    let mut owner = Client::new(&app);
+    owner.login("setup-conditional-owner").await;
+    let csrf = owner.csrf().await;
+    let grid = create_meter(&mut owner, &csrf, "Strom").await;
+    let _ = owner.get("/setup").await;
+
+    let page = text(owner.get("/setup/grid").await).await;
+    assert!(page.contains("data-show-if=\"enabled;existing_grid=;has_export\""));
+    assert!(page.contains("data-show-form=\"setup-form\""));
+    assert!(
+        page.contains("class=\"required\""),
+        "Pflichtfelder markiert"
+    );
+
+    let heat = text(owner.get("/setup/heat_pump").await).await;
+    assert!(heat.contains("<select id=\"existing_heat_pump\""));
+    assert!(heat.contains(&format!("value=\"{grid}\"")));
+    assert!(heat.contains("data-show-if=\"enabled;existing_heat_pump=\""));
+    let saved = owner
+        .post(
+            "/setup/heat_pump",
+            &[
+                ("_csrf", csrf.as_str()),
+                ("enabled", "true"),
+                ("existing_heat_pump", grid.as_str()),
+                ("action", "next"),
+            ],
+        )
+        .await;
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+    let heat = text(owner.get("/setup/heat_pump").await).await;
+    assert!(heat.contains(&format!("value=\"{grid}\" selected")));
+
+    let pv = text(owner.get("/setup/pv").await).await;
+    assert!(pv.contains("<select id=\"battery_meter\""));
+    assert!(pv.contains("data-show-if=\"enabled;battery_meter=new\""));
+    let media = text(owner.get("/setup/media").await).await;
+    assert!(media.contains("<select id=\"existing_media\""));
+
+    let vehicle = text(owner.get("/setup/vehicle").await).await;
+    assert!(vehicle.contains("<option value=\"wallbox\""));
+    assert!(vehicle.contains("data-show-if=\"enabled;has_acquisition;acquisition_mode=mileage\""));
+    // Verbrenner: Wallbox-Angaben ohne JavaScript werden ignoriert
+    let saved = owner
+        .post(
+            "/setup/vehicle",
+            &[
+                ("_csrf", csrf.as_str()),
+                ("enabled", "true"),
+                ("name", "Golf"),
+                ("model", "Golf"),
+                ("drive_type", "combustion"),
+                ("home_meter", "wallbox"),
+                ("wallbox_name", "Wallbox"),
+                ("action", "next"),
+            ],
+        )
+        .await;
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+    let vehicle = text(owner.get("/setup/vehicle").await).await;
+    assert!(!vehicle.contains("value=\"Wallbox\""));
+}
+
 #[tokio::test]
 async fn setup_skip_reports_removed_photos() {
     let app = test_app(true);
