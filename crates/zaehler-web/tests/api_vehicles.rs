@@ -272,12 +272,13 @@ async fn vehicle_lifecycle_with_profiles_acquisition_charging_and_report() {
         &owner,
         "PUT",
         &acquisition,
-        Some(json!({"purchased_on": "2026-01-01", "price": "30000"})),
+        Some(json!({"purchased_on": "2026-01-01", "price": "30000", "residual_value": "12000"})),
     )
     .await;
+    // Restwert nur zusammen mit dem Halteende
     assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
     let fields: Vec<String> = field_codes(&res.json).into_iter().map(|f| f.0).collect();
-    assert!(fields.contains(&"residual_value".to_owned()), "{fields:?}");
+    assert!(fields.contains(&"planned_end".to_owned()), "{fields:?}");
     let res = call(
         &app,
         &owner,
@@ -287,6 +288,7 @@ async fn vehicle_lifecycle_with_profiles_acquisition_charging_and_report() {
             "purchased_on": "2026-01-01",
             "price": "30000",
             "mode": "time",
+            "first_registration": "2024-06-01",
             "residual_value": "12000",
             "planned_end": "2032-01-01",
         })),
@@ -294,6 +296,7 @@ async fn vehicle_lifecycle_with_profiles_acquisition_charging_and_report() {
     .await;
     assert_eq!(res.status, StatusCode::OK, "{}", res.json);
     assert_eq!(res.json["mode"], "time");
+    assert_eq!(res.json["first_registration"], "2024-06-01");
 
     // Ladevorgänge; ein kleinerer Kilometerstand braucht die Bestätigung
     let charging = format!("/api/v1/vehicles/{id}/charging");

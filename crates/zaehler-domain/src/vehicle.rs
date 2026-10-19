@@ -116,24 +116,66 @@ pub struct Holding {
     pub purchased_on: NaiveDate,
     pub price: Decimal,
     pub mode: DepreciationMode,
+    /// Erstzulassung; ohne Angabe gilt das Fahrzeug beim Kauf als neu
+    #[serde(default)]
+    pub first_registration: Option<NaiveDate>,
     /// Zeitmodus: geschätzter Restwert am geplanten Ende
     pub residual_value: Option<Decimal>,
     /// Zeitmodus: Ende der Haltedauer (ausschließlich)
     pub planned_end: Option<NaiveDate>,
     /// Laufleistungsmodus: Kilometerstand bei Kauf
     pub odometer_at_purchase: Option<Decimal>,
-    /// Laufleistungsmodus: Lebenslaufleistung als absoluter Kilometerstand
+    /// Laufleistungsmodus: Lebenslaufleistung als absoluter Kilometerstand,
+    /// nur für die Restlebensdauer
     pub lifetime_km: Option<Decimal>,
-    /// Laufleistungsmodus: Wert bei Erreichen der Lebenslaufleistung
+    /// Nicht mehr verwendet (Endwert des früheren linearen
+    /// Laufleistungsmodus); bleibt für ältere Daten erhalten
     pub end_value: Option<Decimal>,
     pub sold_on: Option<NaiveDate>,
     pub sale_price: Option<Decimal>,
 }
 
+/// Restwertkurve: Anteil des Neupreises nach Fahrzeugalter in Jahren
+/// (SPEC_CAR_DEPRECIATION). Zwischen den Stützstellen linear.
+const RESIDUAL_CURVE: [(i64, i64); 5] = [(0, 1000), (1, 775), (3, 500), (5, 425), (10, 250)];
+
+/// Nach zehn Jahren je Jahr 2 %-Punkte weniger, höchstens bis 10 %.
+const LATE_LOSS_PER_YEAR: Decimal = Decimal::from_parts(2, 0, 0, false, 2);
+const RESIDUAL_FLOOR: Decimal = Decimal::from_parts(10, 0, 0, false, 2);
+
+/// Durchschnittliche Jahresfahrleistung und Zu- bzw. Abschlag je 10.000 km
+/// Abweichung (SPEC_CAR_MILEAGE_DEPRECIATION).
+pub const AVERAGE_KM_PER_YEAR: Decimal = Decimal::from_parts(13_500, 0, 0, false, 0);
+const MILEAGE_SHARE_PER_10K: Decimal = Decimal::from_parts(15, 0, 0, false, 3);
+
+const DAYS_PER_YEAR: Decimal = Decimal::from_parts(36_525, 0, 0, false, 2);
+
+/// Restwert in Anteilen des Neupreises für ein Fahrzeugalter in Jahren.
+// @impl SPEC_CAR_DEPRECIATION
+#[must_use]
+pub fn residual_ratio(age_years: Decimal) -> Decimal {
+    let age = age_years.max(Decimal::ZERO);
+    for pair in RESIDUAL_CURVE.windows(2) {
+        let (y0, r0) = (Decimal::from(pair[0].0), Decimal::new(pair[0].1, 3));
+        let (y1, r1) = (Decimal::from(pair[1].0), Decimal::new(pair[1].1, 3));
+        if age <= y1 {
+            return r0 + (r1 - r0) * (age - y0) / (y1 - y0);
+        }
+    }
+    let (last_year, last) = RESIDUAL_CURVE[RESIDUAL_CURVE.len() - 1];
+    (Decimal::new(last, 3) - LATE_LOSS_PER_YEAR * (age - Decimal::from(last_year)))
+        .max(RESIDUAL_FLOOR)
+}
+
+/// Jahre zwischen zwei Tagen (365,25 Tage je Jahr), nicht negativ.
+fn years_between(from: NaiveDate, to: NaiveDate) -> Decimal {
+    Decimal::from((to - from).num_days().max(0)) / DAYS_PER_YEAR
+}
+
 impl Holding {
     /// Anschaffung des Zeitmodus. Bei Verkauf ersetzt der Erlös den
     /// Restwert, die Haltedauer endet mit dem Verkauf
-    /// (SPEC_CAR_DEPRECIATION); ohne Werte des Zeitmodus `None`.
+    /// (SPEC_CAR_DEPRECIATION); ohne Restwert und Halteende `None`.
     #[must_use]
     pub fn acquisition(&self) -> Option<Acquisition> {
         if self.mode != DepreciationMode::Time {
@@ -155,42 +197,117 @@ impl Holding {
         }
     }
 
-    /// Grundlage des Laufleistungsmodus; bei Verkauf ersetzt der Erlös den
-    /// Endwert (SPEC_CAR_MILEAGE_DEPRECIATION).
+    /// Grundlage der Restlebensdauer im Laufleistungsmodus.
     #[must_use]
     pub fn mileage(&self) -> Option<Mileage> {
         if self.mode != DepreciationMode::Mileage {
             return None;
         }
-        let end_value = match (self.sold_on, self.sale_price) {
-            (Some(_), Some(p)) => p,
-            _ => self.end_value.unwrap_or(Decimal::ZERO),
-        };
         Some(Mileage {
-            purchased_on: self.purchased_on,
-            price: self.price,
-            end_value,
             odometer_at_purchase: self.odometer_at_purchase?,
-            lifetime_km: self.lifetime_km?,
+            lifetime_km: self.lifetime_km,
             sold_on: self.sold_on,
         })
     }
 
+    /// Erstzulassung, ohne Angabe der Kauftag.
+    fn registered(&self) -> NaiveDate {
+        self.first_registration
+            .unwrap_or(self.purchased_on)
+            .min(self.purchased_on)
+    }
+
+    /// Wert nach der Restwertkurve relativ zum Kaufpreis am Tag `d`.
+    fn curve_value(&self, d: NaiveDate) -> Decimal {
+        let d = d.max(self.purchased_on);
+        let at_purchase = residual_ratio(years_between(self.registered(), self.purchased_on));
+        if at_purchase.is_zero() {
+            return self.price;
+        }
+        self.price * residual_ratio(years_between(self.registered(), d)) / at_purchase
+    }
+
+    /// Wertverlust vom Kauf bis zum Beginn des Tages `d` im Zeitmodus: die
+    /// Restwertkurve, mit Restwert und Halteende so skaliert, dass sie am
+    /// Halteende genau den Restwert trifft.
+    fn time_loss(&self, d: NaiveDate) -> Decimal {
+        let curve_loss = |x: NaiveDate| self.price - self.curve_value(x);
+        match self.acquisition() {
+            Some(a) => {
+                if a.planned_end <= a.date {
+                    return Decimal::ZERO;
+                }
+                let at = d.clamp(a.date, a.planned_end);
+                let full = curve_loss(a.planned_end);
+                let share = if full > Decimal::ZERO {
+                    curve_loss(at) / full
+                } else {
+                    // ohne Kurvenverlauf linear über die Tage
+                    Decimal::from((at - a.date).num_days())
+                        / Decimal::from((a.planned_end - a.date).num_days())
+                };
+                (a.price - a.residual_value) * share
+            }
+            None => curve_loss(self.sold_on.map_or(d, |s| d.min(s))),
+        }
+    }
+
+    /// Wertverlust vom Kauf bis zum Beginn des Tages `d` im
+    /// Laufleistungsmodus: Restwertkurve plus Zu- bzw. Abschlag von 1,5 %
+    /// des Kaufpreises je 10.000 km Abweichung von 13.500 km je Jahr; nach
+    /// einem Verkauf `Kaufpreis - Erlös`.
+    fn mileage_loss(
+        &self,
+        d: NaiveDate,
+        odometer: &impl Fn(NaiveDate) -> Option<Decimal>,
+    ) -> Decimal {
+        if let Some(sold) = self.sold_on
+            && d > sold
+        {
+            if let Some(p) = self.sale_price {
+                return self.price - p;
+            }
+            return self.mileage_loss(sold, odometer);
+        }
+        let d = d.max(self.purchased_on);
+        let s0 = self.odometer_at_purchase.unwrap_or(Decimal::ZERO);
+        let driven = odometer(d)
+            .map_or(Decimal::ZERO, |s| s - s0)
+            .max(Decimal::ZERO);
+        let expected = AVERAGE_KM_PER_YEAR * years_between(self.purchased_on, d);
+        let adjustment =
+            self.price * MILEAGE_SHARE_PER_10K * (driven - expected) / Decimal::from(10_000);
+        let value = (self.curve_value(d) - adjustment).clamp(Decimal::ZERO, self.price);
+        self.price - value
+    }
+
     /// Wertverlust im Zeitraum je nach Modus; `odometer` liefert den
-    /// Kilometerstand zu Beginn eines Tages.
+    /// Kilometerstand zu Beginn eines Tages. Ohne Verkauf im Zeitraum nie
+    /// negativ (wenig gefahrene Monate im Laufleistungsmodus).
     #[must_use]
     pub fn depreciation_in(
         &self,
         period: Period,
         odometer: impl Fn(NaiveDate) -> Option<Decimal>,
     ) -> Decimal {
+        if period.end <= self.purchased_on {
+            return Decimal::ZERO;
+        }
+        let (a, b) = (period.start.max(self.purchased_on), period.end);
         match self.mode {
-            DepreciationMode::Time => self
-                .acquisition()
-                .map_or(Decimal::ZERO, |a| depreciation_in(&a, period)),
-            DepreciationMode::Mileage => self
-                .mileage()
-                .map_or(Decimal::ZERO, |m| m.depreciation_in(period, odometer)),
+            DepreciationMode::Time => (self.time_loss(b) - self.time_loss(a)).max(Decimal::ZERO),
+            DepreciationMode::Mileage => {
+                if self.mileage().is_none() {
+                    return Decimal::ZERO;
+                }
+                let diff = self.mileage_loss(b, &odometer) - self.mileage_loss(a, &odometer);
+                let sale_inside = self.sold_on.is_some_and(|s| s >= a && s < b);
+                if sale_inside {
+                    diff
+                } else {
+                    diff.max(Decimal::ZERO)
+                }
+            }
         }
     }
 
@@ -209,86 +326,21 @@ impl Holding {
     }
 }
 
-/// Linearer Wertverlust im Zeitraum (tagesgenau).
-// @impl SPEC_CAR_DEPRECIATION
-#[must_use]
-pub fn depreciation_in(acq: &Acquisition, period: Period) -> Decimal {
-    let total_days = (acq.planned_end - acq.date).num_days();
-    if total_days <= 0 {
-        return Decimal::ZERO;
-    }
-    let start = period.start.max(acq.date);
-    let end = period.end.min(acq.planned_end);
-    let days = (end - start).num_days().max(0);
-    (acq.price - acq.residual_value) * Decimal::from(days) / Decimal::from(total_days)
-}
-
-/// Grundlage des Wertverlusts nach Lebenslaufleistung
+/// Grundlage der Restlebensdauer im Laufleistungsmodus
 /// (SPEC_CAR_MILEAGE_DEPRECIATION).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mileage {
-    pub purchased_on: NaiveDate,
-    pub price: Decimal,
-    /// Endwert, bei Verkauf der Erlös
-    pub end_value: Decimal,
     /// Kilometerstand bei Kauf *s₀*
     pub odometer_at_purchase: Decimal,
-    /// Lebenslaufleistung *S* als absoluter Kilometerstand
-    pub lifetime_km: Decimal,
+    /// Lebenslaufleistung *S* als absoluter Kilometerstand, optional
+    pub lifetime_km: Option<Decimal>,
     pub sold_on: Option<NaiveDate>,
 }
 
 impl Mileage {
-    /// Nutzbare Strecke `S - s₀`.
-    fn usable(&self) -> Decimal {
-        self.lifetime_km - self.odometer_at_purchase
-    }
-
-    /// `s*(t) = min(max(s(t), s₀), S)`.
-    fn clamp(&self, odometer: Decimal) -> Decimal {
-        odometer
-            .max(self.odometer_at_purchase)
-            .min(self.lifetime_km)
-    }
-
-    /// Wertverlust je km bis zur Lebenslaufleistung.
-    fn per_km(&self) -> Decimal {
-        (self.price - self.end_value) / self.usable()
-    }
-
-    /// `(K - W) · (s*(b) - s*(a)) / (S - s₀)` innerhalb der Haltedauer;
-    /// liegt der Verkauf im Zeitraum, zusätzlich der Rest bis zur
-    /// Lebenslaufleistung, damit die Summe `K - Erlös` ergibt. Ohne
-    /// Kilometerstand gilt der Stand bei Kauf.
-    // @impl SPEC_CAR_MILEAGE_DEPRECIATION
-    #[must_use]
-    pub fn depreciation_in(
-        &self,
-        period: Period,
-        odometer: impl Fn(NaiveDate) -> Option<Decimal>,
-    ) -> Decimal {
-        if self.usable() <= Decimal::ZERO {
-            return Decimal::ZERO;
-        }
-        let at = |d: NaiveDate| self.clamp(odometer(d).unwrap_or(self.odometer_at_purchase));
-        let start = period.start.max(self.purchased_on);
-        let end = self.sold_on.map_or(period.end, |s| period.end.min(s));
-        let mut out = Decimal::ZERO;
-        if start < end {
-            out += self.per_km() * (at(end) - at(start)).max(Decimal::ZERO);
-        }
-        if let Some(sold) = self.sold_on
-            && sold >= period.start
-            && sold < period.end
-            && sold > self.purchased_on
-        {
-            out += self.per_km() * (self.lifetime_km - at(sold));
-        }
-        out
-    }
-
     /// Restlebensdauer aus dem heutigen Kilometerstand und der
-    /// Jahresfahrleistung; ohne Fahrleistung undefiniert.
+    /// Jahresfahrleistung; ohne Lebenslaufleistung oder Fahrleistung
+    /// undefiniert.
     // @impl SPEC_CAR_MILEAGE_DEPRECIATION
     #[must_use]
     pub fn remaining(
@@ -300,7 +352,10 @@ impl Mileage {
         if self.sold_on.is_some_and(|s| s <= today) {
             return Remaining::Sold;
         }
-        let rest = self.lifetime_km - odometer.unwrap_or(self.odometer_at_purchase);
+        let Some(lifetime) = self.lifetime_km else {
+            return Remaining::InsufficientData;
+        };
+        let rest = lifetime - odometer.unwrap_or(self.odometer_at_purchase);
         if rest <= Decimal::ZERO {
             return Remaining::Reached;
         }
@@ -789,19 +844,10 @@ mod tests {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
     }
 
-    // @test SPEC_CAR_COST_PER_KM, SPEC_CAR_DEPRECIATION
+    // @test SPEC_CAR_COST_PER_KM
     #[test]
     fn full_cost_per_km() {
-        let acq = Acquisition {
-            date: d(2026, 1, 1),
-            price: dec!(30000),
-            residual_value: dec!(10000),
-            planned_end: d(2031, 1, 1),
-        };
-        let dep = depreciation_in(&acq, Period::year(2026));
-        // 20000 € Wertverlust über 1826 Tage, davon 365 in 2026
-        assert_eq!(dep.round_dp(2), dec!(3997.81));
-        let r = cost_per_km(dec!(1000), dec!(500), dep, dec!(10000));
+        let r = cost_per_km(dec!(1000), dec!(500), dec!(3997.81), dec!(10000));
         assert_eq!(r.variable_per_km, Some(dec!(0.1)));
         assert_eq!(r.total_per_km, Some(dec!(0.5498)));
         assert_eq!(
@@ -810,50 +856,98 @@ mod tests {
         );
     }
 
-    // @test SPEC_CAR_DEPRECIATION
-    #[test]
-    fn depreciation_is_linear_within_the_holding_period() {
-        let acq = Acquisition {
-            date: d(2026, 7, 1),
-            price: dec!(12000),
-            residual_value: dec!(2000),
-            planned_end: d(2028, 7, 1),
-        };
-        // 731 Tage Haltedauer, davon 184 in 2026, 365 in 2027, 182 in 2028
-        let parts: Vec<Decimal> = [2025, 2026, 2027, 2028, 2029]
-            .map(|y| depreciation_in(&acq, Period::year(y)))
-            .to_vec();
-        assert_eq!(parts[0], Decimal::ZERO, "vor dem Kauf");
-        assert_eq!(parts[4], Decimal::ZERO, "nach dem geplanten Ende");
-        assert_eq!(parts.iter().sum::<Decimal>().round_dp(6), dec!(10000));
-        assert_eq!(parts[1].round_dp(2), dec!(2517.10));
-        // Verkauf: Verkaufserlös ersetzt den Restwert, Ende beim Verkauf
-        let holding = Holding {
-            purchased_on: d(2026, 7, 1),
-            price: dec!(12000),
+    fn time_holding(registered: Option<NaiveDate>) -> Holding {
+        Holding {
+            purchased_on: d(2026, 1, 1),
+            price: dec!(30000),
             mode: DepreciationMode::Time,
-            residual_value: Some(dec!(2000)),
-            planned_end: Some(d(2028, 7, 1)),
+            first_registration: registered,
+            residual_value: Some(dec!(10000)),
+            planned_end: Some(d(2031, 1, 1)),
             odometer_at_purchase: None,
             lifetime_km: None,
             end_value: None,
+            sold_on: None,
+            sale_price: None,
+        }
+    }
+
+    fn none(_: NaiveDate) -> Option<Decimal> {
+        None
+    }
+
+    // @test SPEC_CAR_DEPRECIATION
+    #[test]
+    fn residual_curve_follows_the_guide_values() {
+        assert_eq!(residual_ratio(dec!(0)), dec!(1));
+        assert_eq!(residual_ratio(dec!(1)), dec!(0.775));
+        assert_eq!(residual_ratio(dec!(2)), dec!(0.6375));
+        assert_eq!(residual_ratio(dec!(3)), dec!(0.5));
+        assert_eq!(residual_ratio(dec!(5)), dec!(0.425));
+        assert_eq!(residual_ratio(dec!(10)), dec!(0.25));
+        assert_eq!(residual_ratio(dec!(12)), dec!(0.21));
+        assert_eq!(residual_ratio(dec!(40)), dec!(0.10), "Untergrenze");
+        assert_eq!(residual_ratio(dec!(-1)), dec!(1));
+    }
+
+    // @test SPEC_CAR_DEPRECIATION
+    #[test]
+    fn time_mode_follows_the_curve_and_meets_the_residual_value() {
+        let h = time_holding(None);
+        let years: Vec<Decimal> = (2025..=2032)
+            .map(|y| h.depreciation_in(Period::year(y), none))
+            .collect();
+        assert_eq!(years[0], Decimal::ZERO, "vor dem Kauf");
+        assert_eq!(years[7], Decimal::ZERO, "nach dem geplanten Ende");
+        assert_eq!(years.iter().sum::<Decimal>().round_dp(6), dec!(20000));
+        // im ersten Jahr der größte Verlust, ab dem vierten Jahr deutlich
+        // weniger (2028 hat einen Tag mehr)
+        assert!(years[1] > years[2] && years[3] > years[4], "{years:?}");
+        // 22,5 % von 57,5 % Kurvenverlust bis zum Halteende ≈ 39 % von 20.000 €
+        assert_eq!(years[1].round_dp(0), dec!(7821));
+    }
+
+    // @test SPEC_CAR_DEPRECIATION
+    #[test]
+    fn time_mode_without_residual_uses_the_curve_alone() {
+        let h = Holding {
+            residual_value: None,
+            planned_end: None,
+            ..time_holding(None)
+        };
+        // nach drei Jahren rund 50 % des Neupreises
+        let three = h.depreciation_in(Period::new(d(2026, 1, 1), d(2029, 1, 1)), none);
+        assert_eq!(three.round_dp(0), dec!(15001));
+        // Gebrauchtwagen, Erstzulassung 2016: Kurve ab Alter 10 relativ zum
+        // Kaufpreis (25 % → 23 % des Neupreises im ersten Jahr)
+        let used = Holding {
+            first_registration: Some(d(2016, 1, 1)),
+            ..h
+        };
+        let first = used.depreciation_in(Period::year(2026), none);
+        assert_eq!(first.round_dp(0), dec!(2399));
+    }
+
+    // @test SPEC_CAR_DEPRECIATION
+    #[test]
+    fn sale_replaces_the_residual_value() {
+        let h = Holding {
             sold_on: Some(d(2027, 7, 1)),
-            sale_price: Some(dec!(9000)),
+            sale_price: Some(dec!(19000)),
+            ..time_holding(None)
+        };
+        let total = h.depreciation_in(Period::new(d(2026, 1, 1), d(2030, 1, 1)), none);
+        assert_eq!(total.round_dp(6), dec!(11000));
+        assert_eq!(h.held(d(2030, 1, 1)).end, d(2027, 7, 1));
+        // Haltedauer ohne Tage
+        let empty = Holding {
+            planned_end: Some(d(2026, 1, 1)),
+            ..time_holding(None)
         };
         assert_eq!(
-            depreciation_in(
-                &holding.acquisition().unwrap(),
-                Period::new(d(2026, 1, 1), d(2030, 1, 1))
-            ),
-            dec!(3000)
+            empty.depreciation_in(Period::year(2026), none),
+            Decimal::ZERO
         );
-        assert_eq!(holding.held(d(2030, 1, 1)).end, d(2027, 7, 1));
-        // Haltedauer ohne Tage
-        let empty = Acquisition {
-            planned_end: d(2026, 7, 1),
-            ..acq
-        };
-        assert_eq!(depreciation_in(&empty, Period::year(2026)), Decimal::ZERO);
     }
 
     fn fill(day: u32, litres: Decimal, km: Option<Decimal>, full: bool) -> FuelFill {
@@ -1035,6 +1129,7 @@ mod mileage_tests {
             purchased_on: d(2026, 1, 1),
             price: dec!(30000),
             mode: DepreciationMode::Mileage,
+            first_registration: None,
             residual_value: Some(dec!(10000)),
             planned_end: Some(d(2031, 1, 1)),
             odometer_at_purchase: Some(dec!(20000)),
@@ -1045,92 +1140,79 @@ mod mileage_tests {
         }
     }
 
-    /// 15.000 km je Jahr ab Kauf, linear über die Tage.
-    #[allow(clippy::unnecessary_wraps)] // dieselbe Signatur wie die Kilometerstand-Abfrage
-    fn odometer(day: NaiveDate) -> Option<Decimal> {
-        let days = Decimal::from((day - d(2026, 1, 1)).num_days().max(0));
-        Some(dec!(20000) + days * dec!(15000) / dec!(365))
+    /// Kilometerstand bei `per_year` km je Jahr ab Kauf, linear über die Tage.
+    fn driving(per_year: Decimal) -> impl Fn(NaiveDate) -> Option<Decimal> {
+        move |day| {
+            let years = Decimal::from((day - d(2026, 1, 1)).num_days().max(0)) / dec!(365.25);
+            Some(dec!(20000) + years * per_year)
+        }
     }
 
     // @test SPEC_CAR_MILEAGE_DEPRECIATION
     #[test]
-    fn depreciation_follows_the_driven_km() {
+    fn average_driving_follows_the_age_curve() {
         let h = holding(None);
-        // 15.000 km von 200.000 km nutzbarer Laufleistung: 30.000 € · 0,075
-        assert_eq!(
-            h.depreciation_in(Period::year(2026), odometer).round_dp(2),
-            dec!(2250.00)
-        );
-        assert_eq!(
-            h.depreciation_in(Period::year(2025), odometer),
-            Decimal::ZERO
-        );
-        // Zeitmodus mit denselben Daten bleibt unverändert verfügbar
-        let time = Holding {
+        let curve_only = Holding {
             mode: DepreciationMode::Time,
+            residual_value: None,
+            planned_end: None,
             ..h.clone()
         };
+        for y in 2026..2031 {
+            assert_eq!(
+                h.depreciation_in(Period::year(y), driving(AVERAGE_KM_PER_YEAR))
+                    .round_dp(6),
+                curve_only
+                    .depreciation_in(Period::year(y), |_| None)
+                    .round_dp(6),
+                "{y}"
+            );
+        }
         assert_eq!(
-            time.depreciation_in(Period::year(2026), odometer)
-                .round_dp(2),
-            dec!(3997.81)
+            h.depreciation_in(Period::year(2025), driving(AVERAGE_KM_PER_YEAR)),
+            Decimal::ZERO
         );
-        assert!(time.mileage().is_none() && h.acquisition().is_none());
+        assert!(curve_only.mileage().is_none() && h.acquisition().is_none());
     }
 
     // @test SPEC_CAR_MILEAGE_DEPRECIATION
     #[test]
-    fn depreciation_stops_at_the_lifetime_mileage() {
+    fn more_km_cost_value_less_km_save_value() {
         let h = holding(None);
-        let far = |day: NaiveDate| {
-            Some(if day.year() < 2030 {
-                dec!(20000)
-            } else {
-                dec!(500000)
-            })
-        };
-        let total = h.depreciation_in(Period::new(d(2026, 1, 1), d(2050, 1, 1)), far);
-        assert_eq!(total, dec!(30000));
-        // Endwert wird nicht unterschritten
-        let h = Holding {
-            end_value: Some(dec!(2000)),
-            ..holding(None)
-        };
-        assert_eq!(
-            h.depreciation_in(Period::new(d(2026, 1, 1), d(2050, 1, 1)), far),
-            dec!(28000)
-        );
+        let year = Period::year(2026);
+        let average = h.depreciation_in(year, driving(AVERAGE_KM_PER_YEAR));
+        let many = h.depreciation_in(year, driving(dec!(33500)));
+        let few = h.depreciation_in(year, driving(dec!(3500)));
+        // ±20.000 km je Jahr: 2 · 1,5 % von 30.000 €, anteilig für 365 von
+        // 365,25 Tagen
+        assert_eq!((many - average).round_dp(2), dec!(899.38));
+        // 3.500 km je Jahr: 10.000 km unter dem Schnitt
+        assert_eq!((average - few).round_dp(2), dec!(449.69));
+        // kein Wertzuwachs in Zeiträumen ohne Fahrt
+        let parked = |_: NaiveDate| Some(dec!(20000));
+        assert!(h.depreciation_in(Period::year(2040), parked) >= Decimal::ZERO);
     }
 
     // @test SPEC_CAR_MILEAGE_DEPRECIATION
     #[test]
     fn sale_distributes_the_full_loss() {
         let h = holding(Some((d(2027, 7, 1), dec!(21000))));
+        let km = driving(dec!(15000));
         let parts: Vec<Decimal> = [2026, 2027, 2028]
-            .map(|y| h.depreciation_in(Period::year(y), odometer))
+            .map(|y| h.depreciation_in(Period::year(y), &km))
             .to_vec();
         assert_eq!(parts[2], Decimal::ZERO, "nach dem Verkauf");
         assert_eq!(parts.iter().sum::<Decimal>().round_dp(6), dec!(9000));
-        // Haltedauer bis zum Verkauf
         assert_eq!(
-            h.depreciation_in(h.held(d(2030, 1, 1)), odometer)
-                .round_dp(6),
+            h.depreciation_in(h.held(d(2030, 1, 1)), &km).round_dp(6),
             dec!(9000)
         );
-    }
-
-    // @test SPEC_CAR_MILEAGE_DEPRECIATION
-    #[test]
-    fn sale_on_new_year_belongs_to_the_sale_year() {
+        // Verkauf am Neujahrstag gehört zum Verkaufsjahr
         let h = holding(Some((d(2027, 1, 1), dec!(21000))));
-        let before = h.depreciation_in(Period::year(2026), odometer);
-        let sale_year = h.depreciation_in(Period::year(2027), odometer);
-        assert!(sale_year > before);
+        let before = h.depreciation_in(Period::year(2026), &km);
+        let sale_year = h.depreciation_in(Period::year(2027), &km);
         assert_eq!((before + sale_year).round_dp(6), dec!(9000));
-        assert_eq!(
-            h.depreciation_in(Period::year(2028), odometer),
-            Decimal::ZERO
-        );
+        assert_eq!(h.depreciation_in(Period::year(2028), &km), Decimal::ZERO);
     }
 
     // @test SPEC_CAR_MILEAGE_DEPRECIATION
@@ -1153,6 +1235,19 @@ mod mileage_tests {
         assert_eq!(
             m.remaining(d(2027, 1, 1), Some(dec!(230000)), Some(dec!(1))),
             Remaining::Reached
+        );
+        // ohne Lebenslaufleistung keine Restlebensdauer
+        let no_lifetime = Holding {
+            lifetime_km: None,
+            ..holding(None)
+        };
+        assert_eq!(
+            no_lifetime.mileage().unwrap().remaining(
+                d(2027, 1, 1),
+                Some(dec!(35000)),
+                Some(dec!(15000))
+            ),
+            Remaining::InsufficientData
         );
         let acq = Acquisition {
             date: d(2026, 1, 1),

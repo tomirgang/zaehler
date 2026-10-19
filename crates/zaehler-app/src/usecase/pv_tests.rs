@@ -645,6 +645,7 @@ async fn charging_price_with_pv_is_estimated() {
                     home_charging_meter_id: Some(wallbox),
                     // bekannter PV-Anteil aus der Wallbox: 50 %
                     pv_share_pct: Some(dec!(50)),
+                    home_charging_price: None,
                 },
                 odometer: dec!(0),
                 start_at: berlin(2025, 1, 1),

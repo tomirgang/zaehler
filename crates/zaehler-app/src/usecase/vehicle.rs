@@ -62,6 +62,8 @@ pub struct VehicleInput {
     pub drive_type: DriveType,
     pub home_charging_meter_id: Option<MeterId>,
     pub pv_share_pct: Option<Decimal>,
+    /// €/kWh beim Heimladen ohne Vertragspreis
+    pub home_charging_price: Option<Decimal>,
 }
 
 /// Neues Fahrzeug mit Messstelle.
@@ -145,6 +147,12 @@ fn validate_vehicle(e: &mut FieldErrors, v: &VehicleInput) {
     {
         e.add("pv_share_pct", "vehicle.share_invalid");
     }
+    if let Some(p) = v.home_charging_price {
+        if p < Decimal::ZERO {
+            e.add("home_charging_price", "contract.amount_negative");
+        }
+        money(e, "home_charging_price", p, 4);
+    }
     if v.drive_type == DriveType::Combustion && v.home_charging_meter_id.is_some() {
         e.add("home_charging_meter_id", "vehicle.home_charging_invalid");
     }
@@ -184,6 +192,7 @@ fn vehicle_data(v: &VehicleInput) -> VehicleData {
         drive_type: v.drive_type,
         home_charging_meter_id: v.home_charging_meter_id,
         pv_share_pct: v.pv_share_pct,
+        home_charging_price: v.home_charging_price,
     }
 }
 
@@ -520,21 +529,23 @@ fn validate_holding_modes(e: &mut FieldErrors, h: &Holding) {
     if h.end_value.is_some_and(|w| w > h.price) {
         e.add("end_value", "vehicle.end_value_above_price");
     }
+    if h.first_registration.is_some_and(|r| r > h.purchased_on) {
+        e.add("first_registration", "vehicle.registration_after_purchase");
+    }
+    if h.residual_value.is_some_and(|r| r > h.price) {
+        e.add("residual_value", "vehicle.residual_above_price");
+    }
     match h.mode {
-        DepreciationMode::Time => {
-            if h.residual_value.is_none() {
-                e.add("residual_value", "form.number_required");
-            }
-            if h.planned_end.is_none() {
-                e.add("planned_end", "form.date_required");
-            }
-        }
+        // Restwert und Halteende sind optional, aber nur gemeinsam sinnvoll
+        // (Skalierung der Restwertkurve, SPEC_CAR_DEPRECIATION)
+        DepreciationMode::Time => match (h.residual_value, h.planned_end) {
+            (Some(_), None) => e.add("planned_end", "form.date_required"),
+            (None, Some(_)) => e.add("residual_value", "form.number_required"),
+            _ => {}
+        },
         DepreciationMode::Mileage => {
             if h.odometer_at_purchase.is_none() {
                 e.add("odometer_at_purchase", "form.number_required");
-            }
-            if h.lifetime_km.is_none() {
-                e.add("lifetime_km", "form.number_required");
             }
         }
     }

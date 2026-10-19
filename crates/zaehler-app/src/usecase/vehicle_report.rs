@@ -167,9 +167,22 @@ impl Inputs {
         (p.start < end).then(|| Period::new(p.start, end))
     }
 
-    /// Kilometerstand zu Beginn des Tages.
+    /// Kilometerstand zu Beginn des Tages. Vor der ersten Ablesung
+    /// gleichmäßig zwischen dem Stand bei Kauf und der ersten Ablesung
+    /// verteilt (SPEC_CAR_MILEAGE_DEPRECIATION).
     fn odometer(&self, d: NaiveDate) -> Option<Decimal> {
-        self.km.value_at(self.cal, d)
+        if let Some(v) = self.km.value_at(self.cal, d) {
+            return Some(v);
+        }
+        let h = self.vehicle.holding.as_ref()?;
+        let s0 = h.odometer_at_purchase?;
+        let (first_day, first) = self.km.first_reading(self.cal)?;
+        let span = (first_day - h.purchased_on).num_days();
+        if span <= 0 || d >= first_day {
+            return Some(first);
+        }
+        let done = (d - h.purchased_on).num_days().clamp(0, span);
+        Some(s0 + (first - s0) * Decimal::from(done) / Decimal::from(span))
     }
 
     /// Morgen, Ende der Zeiträume bis einschließlich heute.
@@ -283,13 +296,40 @@ impl Inputs {
         })
     }
 
-    /// Fahrleistung im Zeitraum, nur ab der ersten Ablesung.
+    /// Fahrleistung im Zeitraum: ab der ersten Ablesung aus der Messstelle,
+    /// davor aus dem gleichmäßig verteilten Kilometerstand zwischen Kauf und
+    /// erster Ablesung (nur mit Kilometerstand bei Kauf, geschätzt).
     fn km(&self, p: Period) -> Option<Estimated<Decimal>> {
         let first = self.km.first_day(self.cal)?;
         let start = p.start.max(first);
-        (start < p.end)
+        let measured = (start < p.end)
             .then(|| self.km.import_quantity(self.cal, Period::new(start, p.end)))
-            .flatten()
+            .flatten();
+        let before = self.km_before_first_reading(p, first);
+        match (measured, before) {
+            (Some(m), Some(b)) => Some(Estimated {
+                value: m.value + b,
+                estimated: true,
+            }),
+            (Some(m), None) => Some(m),
+            (None, Some(b)) => Some(Estimated {
+                value: b,
+                estimated: true,
+            }),
+            (None, None) => None,
+        }
+    }
+
+    /// km im Teil des Zeitraums zwischen Kauf und erster Ablesung.
+    fn km_before_first_reading(&self, p: Period, first: NaiveDate) -> Option<Decimal> {
+        let h = self.vehicle.holding.as_ref()?;
+        h.odometer_at_purchase?;
+        let start = p.start.max(h.purchased_on);
+        let end = p.end.min(first);
+        if start >= end {
+            return None;
+        }
+        Some((self.odometer(end)? - self.odometer(start)?).max(Decimal::ZERO))
     }
 
     fn energy(&self, p: Period, km: Option<Decimal>) -> Option<EnergyCost> {
@@ -317,25 +357,32 @@ impl Inputs {
                 } else {
                     None
                 };
-                let price = price_meter.as_ref().and_then(|m| {
-                    let house = m.unit_price(p)?;
-                    // mit PV: Mischpreis aus Einspeisevergütung und
-                    // Arbeitspreis, immer als Schätzung (REQ_CAR_011)
-                    Some(match &self.pv {
-                        Some(src) => super::pv::pv_charging_price(
-                            src,
-                            m,
-                            p,
-                            self.vehicle.data.pv_share_pct,
-                            house.value,
-                        )
-                        .map_or(house, |v| Estimated {
-                            value: v,
-                            estimated: true,
-                        }),
-                        None => house,
-                    })
+                let fallback = self.vehicle.data.home_charging_price.map(|v| Estimated {
+                    value: v,
+                    estimated: false,
                 });
+                // ohne Arbeitspreis aus einem Vertrag gilt der Preis am Fahrzeug
+                let price = match price_meter.as_ref() {
+                    Some(m) => m.unit_price(p).or(fallback).map(|house| {
+                        // mit PV: Mischpreis aus Einspeisevergütung und
+                        // Arbeitspreis, immer als Schätzung (REQ_CAR_011)
+                        match &self.pv {
+                            Some(src) => super::pv::pv_charging_price(
+                                src,
+                                m,
+                                p,
+                                self.vehicle.data.pv_share_pct,
+                                house.value,
+                            )
+                            .map_or(house, |v| Estimated {
+                                value: v,
+                                estimated: true,
+                            }),
+                            None => house,
+                        }
+                    }),
+                    None => fallback,
+                };
                 (measured, price)
             }
             None => (None, None),
@@ -434,10 +481,13 @@ impl Inputs {
             return None;
         }
         let year = Period::year(self.today.year());
-        let first = self.km.first_day(self.cal)?;
-        let km = self
-            .km
-            .import_quantity(self.cal, Period::new(year.start.max(first), year.end))?;
+        // Dieselbe Hochrechnung wie die Auswertung der Messstelle: auch die
+        // Zeit vor der ersten Ablesung zählt (geschätzt) zum Jahr
+        let projected = self.km.import_forecast(self.cal, year)?;
+        let km = Estimated {
+            value: projected.projected_total.round_dp(0),
+            estimated: true,
+        };
         let fixed: Decimal = self
             .costs
             .iter()
@@ -489,12 +539,11 @@ impl Inputs {
     fn fuel_forecast(&self, year: Period, km_year: Decimal) -> Option<Estimated<Decimal>> {
         let price = self.fuel_price()?.for_forecast()?;
         let v = self.fuel_consumption()?;
-        let driven = self
-            .km(Period::new(year.start, self.tomorrow()))
-            .map_or(Decimal::ZERO, |k| k.value);
+        // Rest des Jahres als Anteil der Jahresprognose nach dem Saisonprofil
+        let rest_of_year = Period::new(self.tomorrow().min(year.end), year.end);
         // Der Vollbetankungsverbrauch bezieht sich auf alle km, beim
         // Plug-in-Hybrid also bereits auf den Mix aus elektrisch und Kraftstoff
-        let rest = (km_year - driven).max(Decimal::ZERO);
+        let rest = (km_year * self.km.profile_share(rest_of_year, year)).max(Decimal::ZERO);
         Some(Estimated {
             value: (rest * v / Decimal::ONE_HUNDRED * price.value).round_dp(2),
             estimated: true,

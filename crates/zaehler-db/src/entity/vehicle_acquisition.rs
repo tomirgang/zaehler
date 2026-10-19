@@ -17,6 +17,8 @@ pub struct Model {
     pub odometer_at_purchase_milli: Option<i64>,
     pub lifetime_km_milli: Option<i64>,
     pub end_value_micro: Option<i64>,
+    /// `m20261019_000019_vehicle_registration`
+    pub first_registration_on: Option<Date>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -1071,6 +1071,9 @@ pub struct VehicleData {
     pub home_charging_meter_id: Option<MeterId>,
     /// Bekannter PV-Anteil beim Heimladen in Prozent (ab M8)
     pub pv_share_pct: Option<Decimal>,
+    /// Strompreis beim Heimladen in €/kWh, wenn die Preis-Messstelle keinen
+    /// Arbeitspreis aus einem Vertrag liefert (SPEC_CAR_ENERGY_COST)
+    pub home_charging_price: Option<Decimal>,
 }
 
 /// Verbrauchsprofil mit ID.

@@ -56,6 +56,12 @@
       <p class="hint">{{ ctx.lang.t("vehicle-pv-share-hint") }}</p>
       {% for e in self.errs("pv_share_pct") %}<p class="field-error">{{ e }}</p>{% endfor %}
     </div>
+    <div class="field{% if self.has_errs("home_charging_price") %} has-error{% endif %}">
+      <label for="home_charging_price">{{ ctx.lang.t("vehicle-home-price") }}</label>
+      <input id="home_charging_price" name="home_charging_price" value="{{ form.home_price }}" inputmode="decimal">
+      <p class="hint">{{ ctx.lang.t("vehicle-home-price-hint") }}</p>
+      {% for e in self.errs("home_charging_price") %}<p class="field-error">{{ e }}</p>{% endfor %}
+    </div>
   </div>
   {% if meter_id.is_none() %}
   <div class="grid">

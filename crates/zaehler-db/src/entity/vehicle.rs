@@ -12,6 +12,8 @@ pub struct Model {
     pub drive_type: String,
     pub home_charging_meter_id: Option<Uuid>,
     pub pv_share_override_pct_milli: Option<i64>,
+    /// `m20261019_000020_home_charging_price`
+    pub home_charging_price_micro: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

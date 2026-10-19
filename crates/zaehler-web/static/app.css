@@ -217,8 +217,8 @@ summary { cursor: pointer; color: var(--accent); }
 
 /* Foto-Ansicht (SPEC_UI_PHOTO_VIEW) */
 .photo-view { display: grid; gap: 1rem; }
-.form:has([name="depreciation_mode"][value="time"]:checked) .depreciation-mileage,
-.form:has([name="depreciation_mode"][value="mileage"]:checked) .depreciation-time { display: none; }
+.form:has([name="depreciation_by_mileage"]:not(:checked)) .depreciation-mileage,
+.form:has([name="depreciation_by_mileage"]:checked) .depreciation-time { display: none; }
 .photo-view-image { max-width: 100%; max-height: 75vh; justify-self: start; border: 1px solid var(--border); border-radius: 6px; }
 @media (min-width: 48rem) {
   .photo-view { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); align-items: start; }

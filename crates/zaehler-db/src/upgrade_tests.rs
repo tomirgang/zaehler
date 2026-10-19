@@ -614,6 +614,7 @@ fn vehicles_fixture(data: &mut BackupData) {
         drive_type: "plugin_hybrid".into(),
         home_charging_meter_id: Some(id(3)),
         pv_share_override_pct_milli: Some(35_500),
+        home_charging_price_micro: Some(312_000),
     });
     data.consumption_profiles.push(ConsumptionProfileRecord {
         id: id(51),
@@ -634,6 +635,7 @@ fn vehicles_fixture(data: &mut BackupData) {
         odometer_at_purchase_milli: None,
         lifetime_km_milli: None,
         end_value_micro: None,
+        first_registration_on: chrono::NaiveDate::from_ymd_opt(2024, 3, 1),
         sold_on: None,
         sale_price_micro: None,
     });

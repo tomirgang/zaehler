@@ -753,10 +753,19 @@ Fixkosten + prognostizierte km × variable Kosten je km der letzten 12 Monate.
 
 Umsetzung: Zeiträume enden heute; Kilometer stammen aus der Messstelle ab
 der ersten Ablesung, außerhalb der Ablesungen geschätzt und gekennzeichnet.
+Zwischen Kauf und erster Ablesung werden die km gleichmäßig aus dem
+Kilometerstand bei Kauf und der ersten Ablesung verteilt (geschätzt), damit
+auch Jahre vor der ersten Ablesung Kosten pro km haben; ohne Kilometerstand
+bei Kauf haben diese Jahre keine km.
 Die Kategorie „Laden“ enthält Kostenbuch-Einträge und die Ladekosten
 (extern und zu Hause). Die erwarteten Jahreskosten enthalten keinen
-Wertverlust; die Prognose der Fahrleistung rechnet wie die Kostenprognose
-mit der Rate des gemessenen Anteils und dem Saisonprofil. Diagramm der
+Wertverlust. Die Fahrleistung des laufenden Jahres ist dieselbe
+Kalenderjahr-Prognose wie in der Auswertung der Messstelle
+({need}`SPEC_FC_CURRENT_YEAR`): gemessener Anteil, die Zeit vor der ersten
+Ablesung mit derselben Rate geschätzt, hochgerechnet mit dem Saisonprofil
+der Messstelle; beide Ansichten zeigen denselben Wert. Die
+Kraftstoffprognose verwendet den Anteil des restlichen Jahres an dieser
+Prognose nach dem Saisonprofil. Diagramm der
 Kosten je Jahr (variabel, fix, Wertverlust) über
 `/vehicles/{id}/chart.json`.
 ```

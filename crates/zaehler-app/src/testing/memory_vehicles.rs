@@ -60,6 +60,7 @@ pub(super) fn export(s: &State, data: &mut BackupData) {
             drive_type: v.data.drive_type.as_str().into(),
             home_charging_meter_id: v.data.home_charging_meter_id.map(|m| m.0),
             pv_share_override_pct_milli: v.data.pv_share_pct.map(|p| scaled(p, 3)),
+            home_charging_price_micro: v.data.home_charging_price.map(|p| scaled(p, 6)),
         });
         for p in &v.profiles {
             data.consumption_profiles.push(ConsumptionProfileRecord {
@@ -145,6 +146,7 @@ pub(super) fn import(s: &mut State, d: &BackupData) -> PortResult<()> {
                 drive_type: v.drive_type.parse().map_err(invalid)?,
                 home_charging_meter_id: v.home_charging_meter_id.map(MeterId),
                 pv_share_pct: v.pv_share_override_pct_milli.map(|p| Decimal::new(p, 3)),
+                home_charging_price: v.home_charging_price_micro.map(|p| Decimal::new(p, 6)),
             },
             profiles,
             holding,

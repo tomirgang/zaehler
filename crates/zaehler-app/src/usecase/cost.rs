@@ -429,6 +429,45 @@ impl MeterPricing {
         self.readings.first().map(|r| cal.local_date(r.read_at))
     }
 
+    /// Tag (lokal) und Stand der ersten Ablesung.
+    pub(crate) fn first_reading(&self, cal: Calendar) -> Option<(NaiveDate, Decimal)> {
+        self.readings
+            .first()
+            .map(|r| (cal.local_date(r.read_at), r.value))
+    }
+
+    /// Prognose der Bezugsregister für einen laufenden Zeitraum, wie die
+    /// Auswertung der Messstelle (SPEC_FC_CURRENT_YEAR): Zeit vor der ersten
+    /// Ablesung mit derselben Rate geschätzt.
+    pub(crate) fn import_forecast(
+        &self,
+        cal: Calendar,
+        period: Period,
+    ) -> Option<zaehler_domain::forecast::Forecast> {
+        let regs: Vec<&[Interval]> = self
+            .per_register
+            .iter()
+            .filter(|r| r.register.data.direction == Direction::Import)
+            .map(|r| r.intervals.as_deref().unwrap_or(&[]))
+            .collect();
+        if regs.is_empty() {
+            return None;
+        }
+        zaehler_domain::analysis::forecast_period(&regs, cal, period, &self.profile)
+            .projected()
+            .cloned()
+    }
+
+    /// Anteil von `part` an `whole` nach dem Saisonprofil der Messstelle.
+    pub(crate) fn profile_share(&self, part: Period, whole: Period) -> Decimal {
+        let total = self.profile.weight(whole);
+        if total.is_zero() {
+            Decimal::ZERO
+        } else {
+            self.profile.weight(part) / total
+        }
+    }
+
     /// Stand zu Beginn des Tages `d`: erste Ablesung plus Menge bis `d`;
     /// bis einschließlich zum Tag der ersten Ablesung `None`
     /// (Kilometerstand für SPEC_CAR_MILEAGE_DEPRECIATION).

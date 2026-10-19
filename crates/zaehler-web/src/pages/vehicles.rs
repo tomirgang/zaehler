@@ -144,6 +144,7 @@ pub struct VehicleForm {
     pub drive_type: String,
     pub home: String,
     pub pv_share: String,
+    pub home_price: String,
     pub odometer: String,
     pub start: String,
 }
@@ -227,6 +228,7 @@ fn read_form(f: &FormData) -> VehicleForm {
         drive_type: g("drive_type"),
         home: g("home_charging_meter_id"),
         pv_share: g("pv_share_pct"),
+        home_price: g("home_charging_price"),
         odometer: g("odometer"),
         start: g("start_at"),
     }
@@ -252,12 +254,14 @@ fn parse_vehicle(e: &mut FieldErrors, f: &VehicleForm) -> Option<VehicleInput> {
         )
     };
     let pv = decimal(e, "pv_share_pct", &f.pv_share);
+    let home_price = decimal(e, "home_charging_price", &f.home_price);
     Some(VehicleInput {
         plate: f.plate.clone(),
         model: f.model.clone(),
         drive_type: drive?,
         home_charging_meter_id: home,
         pv_share_pct: pv,
+        home_charging_price: home_price,
     })
 }
 
@@ -345,6 +349,11 @@ fn form_of(v: Option<&Vehicle>, lang: Lang) -> VehicleForm {
             pv_share: v
                 .data
                 .pv_share_pct
+                .map(|p| plain(lang, p))
+                .unwrap_or_default(),
+            home_price: v
+                .data
+                .home_charging_price
                 .map(|p| plain(lang, p))
                 .unwrap_or_default(),
             ..VehicleForm::default()
@@ -575,6 +584,10 @@ fn detail_page(
             ("purchased_on", date_input(h.purchased_on)),
             ("price", plain(lang, h.price)),
             ("depreciation_mode", h.mode.as_str().to_owned()),
+            (
+                "first_registration",
+                h.first_registration.map(date_input).unwrap_or_default(),
+            ),
             ("residual_value", opt(h.residual_value)),
             (
                 "planned_end",
@@ -582,7 +595,6 @@ fn detail_page(
             ),
             ("odometer_at_purchase", opt(h.odometer_at_purchase)),
             ("lifetime_km", opt(h.lifetime_km)),
-            ("end_value", opt(h.end_value)),
             ("sold_on", h.sold_on.map(date_input).unwrap_or_default()),
             ("sale_price", opt(h.sale_price)),
         ] {
@@ -1075,14 +1087,19 @@ pub async fn set_acquisition(
         let mut e = FieldErrors::default();
         let purchased = required_date(&mut e, "purchased_on", form.get("purchased_on"));
         let price = required_decimal(&mut e, "price", form.get("price"));
-        let mode = match form.get("depreciation_mode") {
-            "" | "time" => Some(DepreciationMode::Time),
-            "mileage" => Some(DepreciationMode::Mileage),
+        // Checkbox; `depreciation_mode` bleibt für ältere Formulare gültig
+        let mode = match (
+            form.get("depreciation_by_mileage"),
+            form.get("depreciation_mode"),
+        ) {
+            ("true", _) | (_, "mileage") => Some(DepreciationMode::Mileage),
+            (_, "" | "time") => Some(DepreciationMode::Time),
             _ => {
                 e.add("depreciation_mode", "form.kind_invalid");
                 None
             }
         };
+        let first_registration = date(&mut e, "first_registration", form.get("first_registration"));
         let residual = decimal(&mut e, "residual_value", form.get("residual_value"));
         let planned = date(&mut e, "planned_end", form.get("planned_end"));
         let odometer_at_purchase = decimal(
@@ -1091,7 +1108,6 @@ pub async fn set_acquisition(
             form.get("odometer_at_purchase"),
         );
         let lifetime_km = decimal(&mut e, "lifetime_km", form.get("lifetime_km"));
-        let end_value = decimal(&mut e, "end_value", form.get("end_value"));
         let sold_on = date(&mut e, "sold_on", form.get("sold_on"));
         let sale_price = decimal(&mut e, "sale_price", form.get("sale_price"));
         match (purchased, price, mode, e.is_empty()) {
@@ -1106,11 +1122,12 @@ pub async fn set_acquisition(
                             purchased_on,
                             price,
                             mode,
+                            first_registration,
                             residual_value: residual,
                             planned_end: planned,
                             odometer_at_purchase,
                             lifetime_km,
-                            end_value,
+                            end_value: None,
                             sold_on,
                             sale_price,
                         }),

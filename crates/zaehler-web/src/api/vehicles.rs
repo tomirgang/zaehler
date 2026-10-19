@@ -80,6 +80,9 @@ pub struct VehicleDataDto {
     /// PV-Anteil beim Heimladen in Prozent
     #[schema(value_type = Option<String>)]
     pub pv_share_pct: Option<Decimal>,
+    /// Strompreis beim Heimladen in €/kWh, wenn kein Vertragspreis vorliegt
+    #[schema(value_type = Option<String>)]
+    pub home_charging_price: Option<Decimal>,
 }
 
 impl From<&VehicleData> for VehicleDataDto {
@@ -90,6 +93,7 @@ impl From<&VehicleData> for VehicleDataDto {
             drive_type: d.drive_type.as_str().into(),
             home_charging_meter_id: d.home_charging_meter_id.map(|m| m.0),
             pv_share_pct: d.pv_share_pct,
+            home_charging_price: d.home_charging_price,
         }
     }
 }
@@ -142,6 +146,8 @@ pub struct VehicleAcquisitionDto {
     pub price: Decimal,
     /// `time` oder `mileage`
     pub mode: String,
+    /// Erstzulassung; ohne Angabe gilt das Fahrzeug beim Kauf als neu
+    pub first_registration: Option<NaiveDate>,
     #[schema(value_type = Option<String>)]
     pub residual_value: Option<Decimal>,
     /// Ende der Haltedauer (ausschließlich)
@@ -164,6 +170,7 @@ impl From<&Holding> for VehicleAcquisitionDto {
             purchased_on: h.purchased_on,
             price: h.price,
             mode: h.mode.as_str().into(),
+            first_registration: h.first_registration,
             residual_value: h.residual_value,
             planned_end: h.planned_end,
             odometer_at_purchase: h.odometer_at_purchase,
@@ -239,6 +246,9 @@ pub struct VehicleBody {
     pub home_charging_meter_id: Option<Uuid>,
     #[schema(value_type = Option<String>)]
     pub pv_share_pct: Option<Decimal>,
+    /// Strompreis beim Heimladen in €/kWh, wenn kein Vertragspreis vorliegt
+    #[schema(value_type = Option<String>)]
+    pub home_charging_price: Option<Decimal>,
 }
 
 /// Neues Fahrzeug mit Messstelle (Einheit km, Register `km`).
@@ -272,7 +282,10 @@ pub struct VehicleProfileBody {
     pub electric_share_pct: Option<Decimal>,
 }
 
-/// Anschaffung setzen; die Werte des gewählten Modus sind Pflicht.
+/// Anschaffung setzen. Zeitmodus: Restwert und Halteende optional, nur
+/// gemeinsam; Laufleistungsmodus: Kilometerstand bei Kauf Pflicht,
+/// Lebenslaufleistung optional (Restlebensdauer). `end_value` wird nicht mehr
+/// verwendet.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct VehicleAcquisitionBody {
     pub purchased_on: NaiveDate,
@@ -280,6 +293,8 @@ pub struct VehicleAcquisitionBody {
     pub price: Decimal,
     /// `time` (Standard) oder `mileage`
     pub mode: Option<String>,
+    /// Erstzulassung; ohne Angabe gilt das Fahrzeug beim Kauf als neu
+    pub first_registration: Option<NaiveDate>,
     #[schema(value_type = Option<String>)]
     pub residual_value: Option<Decimal>,
     pub planned_end: Option<NaiveDate>,
@@ -731,6 +746,7 @@ fn vehicle_input(b: VehicleBody) -> Result<VehicleInput, AppError> {
         drive_type,
         home_charging_meter_id: b.home_charging_meter_id.map(MeterId),
         pv_share_pct: b.pv_share_pct,
+        home_charging_price: b.home_charging_price,
     })
 }
 
@@ -1048,6 +1064,7 @@ async fn set_acquisition(
         purchased_on: b.purchased_on,
         price: b.price,
         mode,
+        first_registration: b.first_registration,
         residual_value: b.residual_value,
         planned_end: b.planned_end,
         odometer_at_purchase: b.odometer_at_purchase,

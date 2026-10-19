@@ -2412,10 +2412,10 @@ async fn vehicle_v11_mileage_and_fuel_price_workflow() {
                 ("_csrf", &csrf),
                 ("purchased_on", "2025-01-01"),
                 ("price", "30000"),
-                ("depreciation_mode", "mileage"),
+                ("depreciation_by_mileage", "true"),
+                ("first_registration", "2023-05-01"),
                 ("odometer_at_purchase", "20000"),
                 ("lifetime_km", "220000"),
-                ("end_value", "0"),
             ],
         )
         .await;
@@ -2423,7 +2423,8 @@ async fn vehicle_v11_mileage_and_fuel_price_workflow() {
     let page = text(c.get(&vehicle).await).await;
     assert!(page.contains("Aktueller Restwert"));
     assert!(page.contains("Zu wenig Daten"));
-    assert!(page.contains("value=\"mileage\" checked"));
+    assert!(page.contains("name=\"depreciation_by_mileage\" value=\"true\" checked"));
+    assert!(page.contains("name=\"first_registration\" type=\"date\" value=\"2023-05-01\""));
     let res = c
         .post(
             &format!("{vehicle}/profiles"),
@@ -3650,7 +3651,7 @@ async fn setup_fields_follow_the_choices_and_every_meter_can_be_existing() {
 
     let vehicle = text(owner.get("/setup/vehicle").await).await;
     assert!(vehicle.contains("<option value=\"wallbox\""));
-    assert!(vehicle.contains("data-show-if=\"enabled;has_acquisition;acquisition_mode=mileage\""));
+    assert!(vehicle.contains("data-show-if=\"enabled;has_acquisition;acquisition_by_mileage\""));
     // Verbrenner: Wallbox-Angaben ohne JavaScript werden ignoriert
     let saved = owner
         .post(

@@ -207,7 +207,10 @@ Für einen Zeitraum *P*:
 - *Extern:* `E_ext` = Σ kWh, `K_ext` = Σ Beträge der externen Ladevorgänge in *P*.
 - *Arbeitspreis Hausstrom:* `p_haus` = Arbeitspreiskosten / Menge des
   Hausstromvertrags in *P* (Durchschnitt, berücksichtigt Preisstände und
-  Staffeln; ohne Grundpreis, Boni und Einspeisung).
+  Staffeln; ohne Grundpreis, Boni und Einspeisung). Liefert die
+  Preis-Messstelle keinen Arbeitspreis (kein Vertrag oder kein Verbrauch in
+  *P*), gilt der am Fahrzeug hinterlegte Strompreis fürs Heimladen (€/kWh,
+  optional); ohne beides bleiben die Kosten des Heimladens offen.
 - *Ladepreis:* ohne PV am Hausanschluss `p_lade = p_haus`. Mit PV
   `p_lade = s · v_ein + (1 - s) · p_haus` mit PV-Anteil *s* (Standard:
   Autarkiegrad des Hausanschlusses in *P*, {need}`SPEC_PV_KPI`; überschreibbar
@@ -216,13 +219,15 @@ Für einen Zeitraum *P*:
   gekennzeichnet.
 - *Heimladen mit Zwischenzähler:* `E_heim` = Verbrauch des Zwischenzählers in
   *P* ({need}`SPEC_CONS_INTERPOLATION`), `K_heim = E_heim · p_lade`.
-- *Heimladen ohne Zwischenzähler (Schätzung):*
+- *Heimladen ohne Zwischenzähler (Laden am Hausstrom, Schätzung aus den
+  erfassten km):*
   `E_bedarf = km(P) · a · v / 100 · (1 + l / 100)` mit Durchschnittsverbrauch
   *v* (kWh/100 km, gültig nach `valid_from`, bei Wechsel in *P* tagesanteilig),
   Ladeverlust *l* (%) und elektrischem Fahranteil *a* (Elektro: 1,
   Plug-in-Hybrid: hinterlegter Anteil, ohne Angabe keine Schätzung).
-  `E_heim = max(0, E_bedarf - E_ext)`, `K_heim = E_heim · p_lade`; Ergebnis
-  als Schätzung gekennzeichnet.
+  `E_heim = max(0, E_bedarf - E_ext)`: separat erfasste kWh externer
+  Ladevorgänge werden abgezogen. `K_heim = E_heim · p_lade`; Ergebnis als
+  Schätzung gekennzeichnet.
 - `K_heim` und `K_ext` gehen als variable Kosten der Kategorie `charging` in
   {need}`SPEC_CAR_COST_PER_KM` ein. kWh/100 km = `(E_heim + E_ext) / km(P) · 100`,
   nur ausgewiesen, wenn `E_heim` gemessen ist.
@@ -237,36 +242,61 @@ dahin gilt `p_lade = p_haus`. Profile vor dem ersten `valid_from` gelten
 wie das erste Profil.
 ```
 
-```{spec} Linearer Wertverlust
+```{spec} Wertverlust nach Fahrzeugalter
 :id: SPEC_CAR_DEPRECIATION
 :status: implemented
 :satisfies: REQ_CAR_004
 
-`(Kaufpreis - Restwert) · Tage(Zeitraum ∩ Haltedauer) / Tage(Haltedauer)`.
-Bei Verkauf ersetzt der Verkaufserlös den geschätzten Restwert.
+Restwertkurve *r(a)* als Anteil des Neupreises nach Fahrzeugalter *a* in
+Jahren (365,25 Tage), stückweise linear zwischen den Stützstellen
+0 → 100 %, 1 → 77,5 %, 3 → 50 %, 5 → 42,5 %, 10 → 25 %; danach 2
+Prozentpunkte je Jahr weniger, mindestens 10 %. Richtwerte: im ersten Jahr
+20–25 % Wertverlust, nach drei Jahren rund 50 %, nach fünf Jahren 40–50 %
+Restwert, nach zehn Jahren 20–30 %. Das Alter zählt ab der Erstzulassung
+*z* (ohne Angabe der Kauftag *k*, also Neuwagen).
+
+Kurvenwert relativ zum Kaufpreis *K*: `V(t) = K · r(a(t)) / r(a(k))`, damit
+auch Gebrauchtwagen ab ihrem Alter beim Kauf weiter der Kurve folgen.
+Kurvenverlust bis *t*: `L(t) = K - V(t)`.
+
+Zeitmodus: Sind geschätzter Restwert *R* und Halteende *e* angegeben, wird die
+Kurve so skaliert, dass sie *R* am Halteende genau trifft:
+`Wertverlust[k, t) = (K - R) · L(min(t, e)) / L(e)`. Ohne beide Angaben gilt
+die Kurve allein (`L(t)`); nur eine der beiden Angaben ist ungültig. Bei
+Verkauf ersetzt der Verkaufserlös den Restwert, die Haltedauer endet mit dem
+Verkauf. Wertverlust eines Zeitraums [*a*, *b*) ist die Differenz der
+kumulierten Werte an *b* und *a*.
 ```
 
-```{spec} Wertverlust nach Lebenslaufleistung
+```{spec} Wertverlust nach Laufleistung
 :id: SPEC_CAR_MILEAGE_DEPRECIATION
 :status: implemented
 :satisfies: REQ_CAR_012
 :links: SPEC_CAR_DEPRECIATION, SPEC_CAR_COST_PER_KM, SPEC_FC_PERIOD_FORECAST
 
-Bezeichner: Kaufpreis *K*, Endwert *W* (Standard 0, bei Verkauf der Erlös),
-Kilometerstand bei Kauf *s₀*, Lebenslaufleistung *S* (absoluter
-Kilometerstand, *S* > *s₀*), Kilometerstand *s(t)* der Fahrzeug-Messstelle
-({need}`SPEC_CONS_INTERPOLATION`). Mit `s*(t) = min(max(s(t), s₀), S)` gilt
-für einen Zeitraum [*a*, *b*) innerhalb der Haltedauer:
+Bezeichner: Kaufpreis *K*, Kauftag *k*, Kilometerstand bei Kauf *s₀*,
+Kilometerstand *s(t)* der Fahrzeug-Messstelle
+({need}`SPEC_CONS_INTERPOLATION`), Kurvenwert *V(t)* aus
+{need}`SPEC_CAR_DEPRECIATION`. Zur Restwertkurve kommt ein Zu- bzw. Abschlag
+für die Laufleistung: je 10.000 km über bzw. unter der durchschnittlichen
+Fahrleistung von 13.500 km je Jahr 1,5 % des Kaufpreises:
 
-`Wertverlust = (K - W) · (s*(b) - s*(a)) / (S - s₀)`
+`Wert(t) = V(t) - K · 0,015 · ((s(t) - s₀) - 13.500 · Jahre(k, t)) / 10.000`,
+begrenzt auf [0, *K*]; `Wertverlust[k, t) = K - Wert(t)`. Wer genau
+durchschnittlich fährt, folgt der Kurve; Vielfahrer verlieren mehr,
+Wenigfahrer weniger. Ein Zeitraum ohne Verkauf hat keinen negativen
+Wertverlust (Monate mit wenig Fahrt).
 
-Nach Erreichen von *S* fällt kein weiterer Wertverlust an. Bei Verkauf am Tag
-*v* endet die Haltedauer mit *v*; der restliche Betrag
-`(K - W) · (S - s*(v)) / (S - s₀)` fällt zusätzlich am Verkaufstag an, damit
-die Summe über die Haltedauer `K - Erlös` ergibt (Verteilung nach den bis zum
-Verkauf gefahrenen km).
+Kilometerstand vor der ersten Ablesung: gleichmäßig zwischen *s₀* am Kauftag
+und der ersten Ablesung verteilt, damit der Wertverlust lange vor der
+Messung gekaufter Fahrzeuge auf die Jahre seit dem Kauf fällt.
 
-Restwert am Tag *t*: `K - Wertverlust[Kauf, t)`. Restlebensdauer:
+Bei Verkauf am Tag *v* ist der Wertverlust ab dem Tag nach *v* `K - Erlös`;
+der Unterschied zum Modellwert fällt am Verkaufstag an, damit die Summe über
+die Haltedauer `K - Erlös` ergibt.
+
+Restwert am Tag *t*: `K - Wertverlust[Kauf, t)`. Restlebensdauer, nur mit
+optionaler Lebenslaufleistung *S* (absoluter Kilometerstand):
 `(S - s(t)) / prognostizierte Jahresfahrleistung` in Jahren, Datum = *t* +
 Restlebensdauer. Die Jahresfahrleistung stammt aus
 {need}`SPEC_FC_PERIOD_FORECAST` über die letzten 12 Monate; ist sie

@@ -33,6 +33,7 @@ fn input(drive: DriveType, home: Option<MeterId>) -> VehicleInput {
         drive_type: drive,
         home_charging_meter_id: home,
         pv_share_pct: None,
+        home_charging_price: None,
     }
 }
 
@@ -590,6 +591,7 @@ async fn combustion_report_with_full_tank_method_and_sale() {
                 purchased_on: day(2025, 1, 1),
                 price: dec!(30000),
                 mode: zaehler_domain::vehicle::DepreciationMode::Time,
+                first_registration: None,
                 residual_value: Some(dec!(10000)),
                 planned_end: Some(day(2030, 1, 1)),
                 odometer_at_purchase: None,
@@ -608,8 +610,13 @@ async fn combustion_report_with_full_tank_method_and_sale() {
     let y = r.years.iter().find(|y| y.year == Some(2025)).unwrap();
     assert_eq!(y.fuel_per_100km, Some(dec!(6)));
     assert!(y.energy.is_none());
-    // 8000 € Wertverlust über 374 Tage, davon 365 in 2025
-    let dep = (dec!(8000) * dec!(365) / dec!(374)).round_dp(2);
+    // 8000 € Wertverlust bis zum Verkauf nach 374 Tagen, nach der
+    // Restwertkurve verteilt: 365 Tage in 2025
+    let curve = |days: i64| {
+        Decimal::ONE - zaehler_domain::vehicle::residual_ratio(Decimal::from(days) / dec!(365.25))
+    };
+    let dep = (dec!(8000) * curve(365) / curve(374)).round_dp(2);
+    assert_eq!(dep, dec!(7879.17));
     assert_eq!(y.cost.depreciation, dep);
     // variabel 150 € / 10 000 km, Vollkosten (150 + 600 + Wertverlust) / km
     assert_eq!(y.cost.variable_per_km, Some(dec!(0.015)));
@@ -663,6 +670,219 @@ async fn forecast_of_mileage_and_annual_costs() {
     let v = f.variable_per_km.unwrap();
     assert!(v > Decimal::ZERO);
     assert_eq!(f.expected, Some((dec!(600) + f.km.value * v).round_dp(2)));
+}
+
+/// Fahrzeug mit erster Ablesung am `start` (Startstand `odometer`).
+async fn vehicle_from(
+    uc: &UseCases,
+    t: &Tenant,
+    start: DateTime<Utc>,
+    odometer: Decimal,
+) -> MeterId {
+    uc.create_vehicle
+        .execute(
+            t,
+            NewVehicle {
+                name: "Fiat 500e".into(),
+                vehicle: input(DriveType::Electric, None),
+                odometer,
+                start_at: start,
+            },
+        )
+        .await
+        .unwrap()
+}
+
+/// Die Fahrleistung des laufenden Jahres ist dieselbe Hochrechnung wie in
+/// der Auswertung der Messstelle, auch wenn erst im Jahr gemessen wird.
+// @test SPEC_CAR_REPORT, SPEC_FC_CURRENT_YEAR
+#[tokio::test]
+async fn vehicle_forecast_matches_the_meter_analysis() {
+    let (uc, t, clock) = setup().await;
+    let car = vehicle_from(&uc, &t, berlin(2026, 4, 27), dec!(1000)).await;
+    super::contract_tests::set_today(&clock, day(2026, 10, 19));
+    record(&uc, &t, car, berlin(2026, 10, 19), dec!(6258)).await;
+
+    let f = uc
+        .vehicle_report
+        .execute(&t, car)
+        .await
+        .unwrap()
+        .forecast
+        .unwrap();
+    let analysis = uc.meter_analysis.execute(&t, car, None).await.unwrap();
+    let year = analysis
+        .forecasts
+        .iter()
+        .find(|s| s.scope == super::analysis::ForecastScope::CalendarYear)
+        .and_then(|s| s.forecast.projected())
+        .unwrap();
+    assert!(year.estimated_start(), "Januar bis April geschätzt");
+    assert_eq!(f.km.value, year.projected_total.round_dp(0));
+    // nur ab der ersten Ablesung wären es rund 8600 km
+    assert!(f.km.value > dec!(9500), "{}", f.km.value);
+}
+
+/// Laufleistungsmodus mit Kauf lange vor der ersten Ablesung: die km bis
+/// zur ersten Ablesung werden gleichmäßig auf die Haltedauer verteilt.
+// @test SPEC_CAR_MILEAGE_DEPRECIATION, SPEC_CAR_REPORT
+#[tokio::test]
+async fn mileage_depreciation_spreads_km_before_the_first_reading() {
+    let (uc, t, clock) = setup().await;
+    let car = vehicle_from(&uc, &t, berlin(2026, 4, 27), dec!(150000)).await;
+    super::contract_tests::set_today(&clock, day(2026, 10, 19));
+    record(&uc, &t, car, berlin(2026, 10, 19), dec!(155258)).await;
+    uc.set_acquisition
+        .execute(
+            &t,
+            car,
+            Some(Holding {
+                purchased_on: day(2016, 1, 1),
+                price: dec!(25000),
+                mode: zaehler_domain::vehicle::DepreciationMode::Mileage,
+                first_registration: Some(day(2016, 1, 1)),
+                residual_value: None,
+                planned_end: None,
+                odometer_at_purchase: Some(dec!(15000)),
+                lifetime_km: None,
+                end_value: None,
+                sold_on: None,
+                sale_price: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let r = uc.vehicle_report.execute(&t, car).await.unwrap();
+    let year = |y: i32| {
+        r.years
+            .iter()
+            .find(|p| p.year == Some(y))
+            .map_or(Decimal::ZERO, |p| p.cost.depreciation)
+    };
+    let total = r.holding.as_ref().unwrap().cost.depreciation;
+    for y in 2016..2026 {
+        assert!(year(y) > Decimal::ZERO, "Wertverlust {y}");
+    }
+    assert!(year(2016) > year(2020), "größter Verlust im ersten Jahr");
+    assert!(
+        year(2026) * dec!(5) < total,
+        "2026: {} von {total}",
+        year(2026)
+    );
+    let sum: Decimal = (2016..=2026).map(year).sum();
+    assert!((sum - total).abs() <= dec!(0.1), "{sum} ≠ {total}");
+    // km vor der ersten Ablesung gleichmäßig verteilt, damit auch Kosten
+    // pro km: 135.000 km über 3769 Tage, 2020 hat 366 Tage
+    let y2020 = r.years.iter().find(|p| p.year == Some(2020)).unwrap();
+    let km = y2020.km.unwrap();
+    assert!(km.estimated);
+    assert_eq!(km.value.round_dp(0), dec!(13110));
+    assert!(y2020.cost.total_per_km.is_some(), "Kosten pro km 2020");
+    let km_total: Decimal = r.years.iter().filter_map(|p| p.km.map(|k| k.value)).sum();
+    // 15.000 → 155.258 km, dazu der laufende Tag nach der letzten Ablesung
+    // (rund 30 km/Tag)
+    assert!((km_total - dec!(140258)).abs() < dec!(50), "{km_total}");
+}
+
+/// Elektroauto lädt am Hausstrom ohne Vertrag: kWh aus den gefahrenen km
+/// und dem Profil abzüglich Fremdladen, Kosten mit dem Preis am Fahrzeug.
+// @test SPEC_CAR_ENERGY_COST
+#[tokio::test]
+async fn home_charging_without_contract_uses_the_vehicle_price() {
+    use zaehler_domain::vehicle::ProfileEnergy;
+    let (uc, t, clock) = setup().await;
+    let house = uc
+        .create_meter
+        .execute(
+            &t,
+            meter_input(
+                "Strom",
+                MeterKind::Electricity,
+                &[("1.8.0", Direction::Import)],
+                berlin(2025, 1, 1),
+            ),
+        )
+        .await
+        .unwrap();
+    let car = uc
+        .create_vehicle
+        .execute(
+            &t,
+            NewVehicle {
+                name: "Fiat 500e".into(),
+                vehicle: VehicleInput {
+                    home_charging_price: Some(dec!(0.30)),
+                    ..input(DriveType::Electric, Some(house))
+                },
+                odometer: dec!(10000),
+                start_at: berlin(2025, 1, 1),
+            },
+        )
+        .await
+        .unwrap();
+    uc.set_consumption_profile
+        .execute(
+            &t,
+            car,
+            ConsumptionProfile {
+                valid_from: day(2025, 1, 1),
+                kwh_per_100km: dec!(16),
+                charging_loss_pct: dec!(20),
+                electric_share_pct: None,
+                energy: ProfileEnergy::Electric,
+            },
+        )
+        .await
+        .unwrap();
+    saved(
+        uc.record_charging
+            .execute(&t, car, charging(berlin(2025, 3, 1), dec!(100), dec!(60)))
+            .await,
+    );
+    super::contract_tests::set_today(&clock, day(2025, 7, 2));
+    record(&uc, &t, car, berlin(2025, 7, 2), dec!(16000)).await;
+
+    let r = uc.vehicle_report.execute(&t, car).await.unwrap();
+    let y = r.years.iter().find(|y| y.year == Some(2025)).unwrap();
+    let km = y.km.unwrap().value;
+    assert!(km >= dec!(6000), "{km}");
+    let e = y.energy.as_ref().unwrap();
+    let kwh = (km * dec!(0.16) * dec!(1.2) - dec!(100)).round_dp(3);
+    assert_eq!(e.home_kwh.unwrap().value, kwh, "Fremdladen abgezogen");
+    let cost = e.home_cost.unwrap();
+    assert_eq!(cost.value, (kwh * dec!(0.30)).round_dp(2));
+    let charging_total = y
+        .categories
+        .iter()
+        .find(|(c, _)| *c == VehicleCostCategory::Charging)
+        .map(|(_, v)| *v)
+        .unwrap();
+    assert_eq!(charging_total, cost.value + dec!(60));
+
+    // mit Vertrag und Verbrauch gilt weiter der Arbeitspreis des Vertrags
+    record(&uc, &t, house, berlin(2025, 7, 2), dec!(2500)).await;
+    uc.create_contract
+        .execute(
+            &t,
+            house,
+            contract(
+                day(2025, 1, 1),
+                vec![position(
+                    "Energie",
+                    None,
+                    vec![flat(day(2025, 1, 1), dec!(0), dec!(0.40))],
+                )],
+            ),
+        )
+        .await
+        .unwrap();
+    let r = uc.vehicle_report.execute(&t, car).await.unwrap();
+    let y = r.years.iter().find(|y| y.year == Some(2025)).unwrap();
+    let e = y.energy.as_ref().unwrap();
+    assert_eq!(
+        e.home_cost.unwrap().value,
+        (e.home_kwh.unwrap().value * dec!(0.40)).round_dp(2)
+    );
 }
 
 /// Haushaltsarchiv mit Fahrzeug: neue IDs, Verweise auf Heimlade-Messstelle

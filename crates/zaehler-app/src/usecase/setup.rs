@@ -812,6 +812,7 @@ fn vehicle_input(object: &Value, home_meter_id: Option<MeterId>) -> Result<Vehic
         drive_type,
         home_charging_meter_id: home_meter_id,
         pv_share_pct: decimal_field(object, "pv_share_pct", "vehicle")?,
+        home_charging_price: decimal_field(object, "home_charging_price", "vehicle")?,
     })
 }
 
@@ -884,7 +885,11 @@ fn holding_from(object: &Value) -> Result<Option<Holding>, AppError> {
             ));
         }
     };
+    let by_mileage = object
+        .get("acquisition_by_mileage")
+        .is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
     let mode = match object_string(object, "acquisition_mode").filter(|s| !s.is_empty()) {
+        _ if by_mileage => DepreciationMode::Mileage,
         None | Some("time") => DepreciationMode::Time,
         Some("mileage") => DepreciationMode::Mileage,
         Some(_) => {
@@ -898,6 +903,7 @@ fn holding_from(object: &Value) -> Result<Option<Holding>, AppError> {
         purchased_on,
         price,
         mode,
+        first_registration: date("acquisition_first_registration")?,
         residual_value: decimal_field(object, "acquisition_residual_value", "vehicle")?,
         planned_end: date("acquisition_planned_end")?,
         odometer_at_purchase: decimal_field(object, "acquisition_odometer", "vehicle")?,

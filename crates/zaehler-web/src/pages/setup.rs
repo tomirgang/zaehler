@@ -140,8 +140,8 @@ const NEW_GENERATION: &str = "existing_generation=";
 const NEW_BATTERY: &str = "battery_meter=new";
 const NEW_MEDIA: &str = "existing_media=";
 const NEW_WALLBOX: &str = "drive_type!=combustion;home_meter=wallbox";
-const ACQ_TIME: &str = "has_acquisition;acquisition_mode=time";
-const ACQ_MILEAGE: &str = "has_acquisition;acquisition_mode=mileage";
+const ACQ_TIME: &str = "has_acquisition;acquisition_by_mileage=";
+const ACQ_MILEAGE: &str = "has_acquisition;acquisition_by_mileage";
 
 #[allow(clippy::too_many_lines)] // Tabelle, eine Zeile je Feld
 fn field_specs(step: &str) -> &'static [FieldSpec] {
@@ -227,6 +227,13 @@ fn field_specs(step: &str) -> &'static [FieldSpec] {
                 "drive_type!=combustion",
                 false,
             ),
+            (
+                "home_charging_price",
+                "number",
+                "vehicle",
+                "drive_type!=combustion;home_meter",
+                false,
+            ),
             ("wallbox_name", "text", "wallbox", NEW_WALLBOX, true),
             ("wallbox_start", "number", "wallbox", NEW_WALLBOX, false),
             ("has_acquisition", "checkbox", "vehicle", "", false),
@@ -245,20 +252,33 @@ fn field_specs(step: &str) -> &'static [FieldSpec] {
                 true,
             ),
             (
-                "acquisition_mode",
-                "select",
+                "acquisition_first_registration",
+                "date",
                 "vehicle",
                 "has_acquisition",
-                true,
+                false,
+            ),
+            (
+                "acquisition_by_mileage",
+                "checkbox",
+                "vehicle",
+                "has_acquisition",
+                false,
             ),
             (
                 "acquisition_residual_value",
                 "number",
                 "vehicle",
                 ACQ_TIME,
-                true,
+                false,
             ),
-            ("acquisition_planned_end", "date", "vehicle", ACQ_TIME, true),
+            (
+                "acquisition_planned_end",
+                "date",
+                "vehicle",
+                ACQ_TIME,
+                false,
+            ),
             (
                 "acquisition_odometer",
                 "number",
@@ -268,13 +288,6 @@ fn field_specs(step: &str) -> &'static [FieldSpec] {
             ),
             (
                 "acquisition_lifetime_km",
-                "number",
-                "vehicle",
-                ACQ_MILEAGE,
-                true,
-            ),
-            (
-                "acquisition_end_value",
                 "number",
                 "vehicle",
                 ACQ_MILEAGE,
@@ -321,6 +334,12 @@ fn derived_value(name: &str, draft: &SetupDraft) -> Option<String> {
             let id = string_value(draft, "pv_battery", "existing_id");
             if id.is_empty() { "new".to_owned() } else { id }
         }),
+        // ältere Entwürfe speichern den Modus als `acquisition_mode`
+        "acquisition_by_mileage" => Some(
+            (string_value(draft, "vehicle", "acquisition_by_mileage") == "true"
+                || string_value(draft, "vehicle", "acquisition_mode") == "mileage")
+                .to_string(),
+        ),
         "has_acquisition" => Some(
             (has("vehicle", "acquisition_date") || has("vehicle", "acquisition_price")).to_string(),
         ),
@@ -407,7 +426,6 @@ fn options_for(
         "drive_type" => translated("drive-", &["electric", "plugin_hybrid", "combustion"]),
         "direction" => translated("contract-direction-", &["import", "export"]),
         "mode" => translated("setup-hp-mode-", &["submeter", "own"]),
-        "acquisition_mode" => translated("setup-acq-mode-", &["time", "mileage"]),
         "existing_grid" | "existing_generation" | "existing_heat_pump" | "existing_media" => {
             let mut out = vec![option("", lang.t("setup-option-new-meter"))];
             out.extend(
@@ -776,12 +794,12 @@ fn vehicle_objects(form: &BTreeMap<String, String>) -> Vec<(String, Value)> {
     const ACQUISITION: [&str; 8] = [
         "acquisition_date",
         "acquisition_price",
-        "acquisition_mode",
+        "acquisition_first_registration",
+        "acquisition_by_mileage",
         "acquisition_residual_value",
         "acquisition_planned_end",
         "acquisition_odometer",
         "acquisition_lifetime_km",
-        "acquisition_end_value",
     ];
     let mut names = vec![
         "name",
@@ -790,6 +808,7 @@ fn vehicle_objects(form: &BTreeMap<String, String>) -> Vec<(String, Value)> {
         "drive_type",
         "odometer",
         "home_meter",
+        "home_charging_price",
     ];
     // Ohne Haken bleibt die Anschaffung leer; ohne JavaScript genügen Datum
     // oder Preis

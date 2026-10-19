@@ -349,6 +349,9 @@ pub struct VehicleRecord {
     pub drive_type: String,
     pub home_charging_meter_id: Option<Uuid>,
     pub pv_share_override_pct_milli: Option<i64>,
+    /// €/kWh beim Heimladen (ab `m20261019_000020_home_charging_price`)
+    #[serde(default)]
+    pub home_charging_price_micro: Option<i64>,
 }
 
 /// Verbrauchsprofil (ab `m20261018_000013_vehicles`).
@@ -392,6 +395,9 @@ pub struct AcquisitionRecord {
     pub lifetime_km_milli: Option<i64>,
     #[serde(default)]
     pub end_value_micro: Option<i64>,
+    /// Erstzulassung (ab `m20261019_000019_vehicle_registration`)
+    #[serde(default)]
+    pub first_registration_on: Option<NaiveDate>,
 }
 
 impl AcquisitionRecord {
@@ -413,6 +419,7 @@ impl AcquisitionRecord {
             odometer_at_purchase_milli: h.odometer_at_purchase.map(|v| scaled(v, 3)),
             lifetime_km_milli: h.lifetime_km.map(|v| scaled(v, 3)),
             end_value_micro: h.end_value.map(|v| scaled(v, 6)),
+            first_registration_on: h.first_registration,
         }
     }
 
@@ -423,6 +430,7 @@ impl AcquisitionRecord {
             purchased_on: self.purchased_on,
             price: Decimal::new(self.price_micro, 6),
             mode: self.depreciation_mode.parse()?,
+            first_registration: self.first_registration_on,
             residual_value: self.residual_micro.map(|v| Decimal::new(v, 6)),
             planned_end: self.planned_end_on,
             odometer_at_purchase: self.odometer_at_purchase_milli.map(|v| Decimal::new(v, 3)),

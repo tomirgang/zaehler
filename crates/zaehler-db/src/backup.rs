@@ -783,6 +783,7 @@ async fn read_vehicles(db: &DatabaseTransaction, data: &mut BackupData) -> PortR
             drive_type: r.get("drive_type")?,
             home_charging_meter_id: r.get("home_charging_meter_id")?,
             pv_share_override_pct_milli: r.get("pv_share_override_pct_milli")?,
+            home_charging_price_micro: r.opt("home_charging_price_micro")?,
         })
     })
     .await?;
@@ -811,6 +812,7 @@ async fn read_vehicles(db: &DatabaseTransaction, data: &mut BackupData) -> PortR
             odometer_at_purchase_milli: r.opt("odometer_at_purchase_milli")?,
             lifetime_km_milli: r.opt("lifetime_km_milli")?,
             end_value_micro: r.opt("end_value_micro")?,
+            first_registration_on: r.opt("first_registration_on")?,
         })
     })
     .await?;
@@ -870,6 +872,7 @@ async fn write_vehicles(txn: &DatabaseTransaction, d: &BackupData) -> PortResult
                 drive_type: Set(x.drive_type.clone()),
                 home_charging_meter_id: Set(x.home_charging_meter_id),
                 pv_share_override_pct_milli: Set(x.pv_share_override_pct_milli),
+                home_charging_price_micro: Set(x.home_charging_price_micro),
             })
             .collect(),
     )
@@ -906,6 +909,7 @@ async fn write_vehicles(txn: &DatabaseTransaction, d: &BackupData) -> PortResult
                 odometer_at_purchase_milli: Set(x.odometer_at_purchase_milli),
                 lifetime_km_milli: Set(x.lifetime_km_milli),
                 end_value_micro: Set(x.end_value_micro),
+                first_registration_on: Set(x.first_registration_on),
             })
             .collect(),
     )

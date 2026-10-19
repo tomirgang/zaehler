@@ -57,6 +57,7 @@ fn holding_from(a: &vehicle_acquisition::Model) -> PortResult<Holding> {
         purchased_on: a.purchased_on,
         price: fixed::money_from_db(a.price_micro),
         mode: a.depreciation_mode.parse().map_err(data_err)?,
+        first_registration: a.first_registration_on,
         residual_value: a.residual_micro.map(fixed::money_from_db),
         planned_end: a.planned_end_on,
         odometer_at_purchase: a.odometer_at_purchase_milli.map(fixed::quantity_from_db),
@@ -172,6 +173,7 @@ impl SeaOrmUow {
                         drive_type: v.drive_type.parse().map_err(data_err)?,
                         home_charging_meter_id: v.home_charging_meter_id.map(MeterId),
                         pv_share_pct: v.pv_share_override_pct_milli.map(fixed::quantity_from_db),
+                        home_charging_price: v.home_charging_price_micro.map(fixed::money_from_db),
                     },
                     profiles: profiles
                         .iter()
@@ -231,6 +233,7 @@ impl VehicleRepository for SeaOrmUow {
             drive_type: Set(data.drive_type.as_str().to_owned()),
             home_charging_meter_id: Set(data.home_charging_meter_id.map(|m| m.0)),
             pv_share_override_pct_milli: Set(data.pv_share_pct.map(quantity).transpose()?),
+            home_charging_price_micro: Set(data.home_charging_price.map(money).transpose()?),
         })
         .on_conflict(
             OnConflict::column(vehicle::Column::MeterId)
@@ -240,6 +243,7 @@ impl VehicleRepository for SeaOrmUow {
                     vehicle::Column::DriveType,
                     vehicle::Column::HomeChargingMeterId,
                     vehicle::Column::PvShareOverridePctMilli,
+                    vehicle::Column::HomeChargingPriceMicro,
                 ])
                 .to_owned(),
         )
@@ -312,6 +316,7 @@ impl VehicleRepository for SeaOrmUow {
             odometer_at_purchase_milli: Set(h.odometer_at_purchase.map(quantity).transpose()?),
             lifetime_km_milli: Set(h.lifetime_km.map(quantity).transpose()?),
             end_value_micro: Set(h.end_value.map(money).transpose()?),
+            first_registration_on: Set(h.first_registration),
         })
         .exec_without_returning(&self.txn)
         .await

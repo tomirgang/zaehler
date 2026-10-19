@@ -21,6 +21,8 @@ mod m20261019_000015_api;
 mod m20261019_000016_vehicle_mileage;
 mod m20261019_000017_fuel_price;
 mod m20261019_000018_setup_drafts;
+mod m20261019_000019_vehicle_registration;
+mod m20261019_000020_home_charging_price;
 
 pub struct Migrator;
 
@@ -46,6 +48,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20261019_000016_vehicle_mileage::Migration),
             Box::new(m20261019_000017_fuel_price::Migration),
             Box::new(m20261019_000018_setup_drafts::Migration),
+            Box::new(m20261019_000019_vehicle_registration::Migration),
+            Box::new(m20261019_000020_home_charging_price::Migration),
         ]
     }
 }

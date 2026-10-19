@@ -404,6 +404,7 @@ async fn seed_vehicle(uc: &UseCases, tenant: &zaehler_app::Tenant, house: MeterI
                     drive_type: DriveType::PluginHybrid,
                     home_charging_meter_id: Some(house),
                     pv_share_pct: None,
+                    home_charging_price: None,
                 },
                 odometer: Decimal::ZERO,
                 start_at: start,

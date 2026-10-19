@@ -37,6 +37,10 @@ Das System soll einem Elektrofahrzeug oder Plug-in-Hybrid optional einen
 Zwischenzähler (z.B. Wallbox-Zähler) zuordnen. Die Energie für Heimladen
 ergibt sich aus dem Verbrauch dieses Zählers, die Kosten aus dem Ladepreis
 ({need}`REQ_CAR_011`) des Hausanschlusses, hinter dem der Zwischenzähler liegt.
+Lädt das Fahrzeug ohne Zwischenzähler am Hausstrom, ergibt sich die Energie aus
+den erfassten km und dem hinterlegten Verbrauch abzüglich der separat
+erfassten kWh externer Ladevorgänge. Ohne Vertragspreis gilt ein optional am
+Fahrzeug hinterlegter Strompreis fürs Heimladen.
 
 **Akzeptanzkriterien**
 - Der Zwischenzähler ist eine Messstelle der Art Strom mit Verweis auf die übergeordnete Hausstrom-Messstelle.
@@ -122,11 +126,14 @@ hinterlegte Durchschnittsverbrauch.
 :priority: should
 :release: v1
 
-Das System soll Kaufpreis, geschätzten Restwert bzw. Verkaufserlös und
-geplante Haltedauer erfassen und den Wertverlust linear auf die Haltedauer
-verteilen. Leasing- und Kreditraten werden als Finanzierungskosten geführt.
-Alternativ zur Haltedauer kann der Wertverlust nach Laufleistung verteilt
-werden ({need}`REQ_CAR_012`).
+Das System soll Kaufpreis, Erstzulassung (optional, sonst Neuwagen beim
+Kauf), geschätzten Restwert bzw. Verkaufserlös und geplante Haltedauer
+erfassen und den Wertverlust nach einer typischen Restwertkurve nach
+Fahrzeugalter verteilen (1. Jahr 20–25 %, nach drei Jahren rund 50 %, nach
+zehn Jahren 20–30 % Restwert). Sind Restwert und Halteende angegeben, trifft
+die Kurve diesen Restwert. Leasing- und Kreditraten werden als
+Finanzierungskosten geführt. Per Checkbox kann der Wertverlust zusätzlich
+nach Laufleistung berechnet werden ({need}`REQ_CAR_012`).
 ```
 
 ```{req} Kosten pro Kilometer
@@ -156,13 +163,15 @@ hochrechnen und daraus die erwarteten Jahreskosten ableiten.
 :priority: should
 :release: v1.1
 
-Das System soll je Fahrzeug wahlweise den Zeitmodus (geplantes Halteende und
-geschätzter Restwert, {need}`REQ_CAR_004`) oder den Laufleistungsmodus führen.
-Im Laufleistungsmodus werden Kaufpreis, Kilometerstand bei Kauf, eine
-Lebenslaufleistung als absoluter Kilometerstand (z.B. 250.000 km) und ein
-optionaler Endwert (Standard 0) erfasst. Der Wertverlust eines Zeitraums ist
-`km im Zeitraum × (Kaufpreis - Endwert) / (Lebenslaufleistung - km bei Kauf)`,
-gedeckelt auf die restliche Lebenslaufleistung.
+Das System soll je Fahrzeug per Checkbox wählen lassen, ob der Wertverlust
+nach Alter und Haltedauer ({need}`REQ_CAR_004`) oder nach Laufleistung
+berechnet wird. Nach Laufleistung gilt die Restwertkurve nach Alter mit einem
+Zu- bzw. Abschlag von 1,5 % des Kaufpreises je 10.000 km über bzw. unter der
+durchschnittlichen Fahrleistung von 13.500 km im Jahr. Erfasst werden
+Kaufpreis, Kilometerstand bei Kauf und optional eine Lebenslaufleistung als
+absoluter Kilometerstand (z.B. 250.000 km) für die Restlebensdauer. Fehlen
+Kilometerstände zwischen Kauf und erster Ablesung, werden die km gleichmäßig
+auf diese Zeit verteilt.
 
 Das System soll in beiden Modi den aktuellen Restwert (`Kaufpreis - Wertverlust
 bis heute`) und die Restlebensdauer anzeigen. Im Laufleistungsmodus ist die

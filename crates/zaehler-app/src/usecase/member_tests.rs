@@ -270,6 +270,7 @@ async fn role_matrix() {
             drive_type: DriveType::Electric,
             home_charging_meter_id: None,
             pv_share_pct: None,
+            home_charging_price: None,
         };
         forbidden(
             uc.create_vehicle

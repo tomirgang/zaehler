@@ -50,6 +50,7 @@ fn vehicle_data(home: Option<MeterId>) -> VehicleData {
         drive_type: DriveType::PluginHybrid,
         home_charging_meter_id: home,
         pv_share_pct: Some(Decimal::new(40_500, 3)),
+        home_charging_price: Some(Decimal::new(3120, 4)),
     }
 }
 
@@ -113,6 +114,7 @@ pub(super) async fn vehicles(f: &dyn UnitOfWorkFactory) {
         purchased_on: day(1, 1),
         price: Decimal::new(3_000_000, 2),
         mode: zaehler_domain::vehicle::DepreciationMode::Mileage,
+        first_registration: NaiveDate::from_ymd_opt(2019, 3, 15),
         residual_value: Some(Decimal::from(10_000)),
         planned_end: NaiveDate::from_ymd_opt(2031, 1, 1),
         odometer_at_purchase: Some(Decimal::from(12_000)),
@@ -240,6 +242,7 @@ pub(super) async fn vehicles(f: &dyn UnitOfWorkFactory) {
         drive_type: DriveType::Electric,
         home_charging_meter_id: None,
         pv_share_pct: None,
+        home_charging_price: None,
         ..vehicle_data(None)
     };
     uow.vehicles().save(&t, car, &data).await.expect("save");

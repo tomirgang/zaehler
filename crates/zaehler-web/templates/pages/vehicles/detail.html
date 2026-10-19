@@ -325,12 +325,10 @@
   <p class="hint">{{ ctx.lang.t("vehicle-acquisition-hint") }}</p>
   <form method="post" action="/vehicles/{{ id }}/acquisition" class="form" novalidate>
     <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
-    <fieldset class="depreciation-choice">
-      <legend>{{ ctx.lang.t("vehicle-depreciation-mode") }}</legend>
-      <label><input type="radio" name="depreciation_mode" value="time"{% if self.val_or("depreciation_mode", "time") == "time" %} checked{% endif %}> {{ ctx.lang.t("vehicle-mode-time") }}</label>
-      <label><input type="radio" name="depreciation_mode" value="mileage"{% if self.val("depreciation_mode") == "mileage" %} checked{% endif %}> {{ ctx.lang.t("vehicle-mode-mileage") }}</label>
+    <div class="field">
+      <label><input type="checkbox" name="depreciation_by_mileage" value="true"{% if self.val("depreciation_mode") == "mileage" || self.val("depreciation_by_mileage") == "true" %} checked{% endif %}> {{ ctx.lang.t("vehicle-by-mileage") }}</label>
       {% for e in self.errs("depreciation_mode") %}<p class="field-error">{{ e }}</p>{% endfor %}
-    </fieldset>
+    </div>
     <div class="grid">
       <div class="field">
         <label for="purchased_on">{{ ctx.lang.t("vehicle-purchased-on") }}</label>
@@ -341,6 +339,11 @@
         <label for="price">{{ ctx.lang.t("vehicle-price") }}</label>
         <input id="price" name="price" value="{{ self.val("price") }}" inputmode="decimal" required>
         {% for e in self.errs("price") %}<p class="field-error">{{ e }}</p>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="first_registration">{{ ctx.lang.t("vehicle-first-registration") }}</label>
+        <input id="first_registration" name="first_registration" type="date" value="{{ self.val("first_registration") }}">
+        {% for e in self.errs("first_registration") %}<p class="field-error">{{ e }}</p>{% endfor %}
       </div>
       <div class="field depreciation-time">
         <label for="residual_value">{{ ctx.lang.t("vehicle-residual") }}</label>
@@ -361,11 +364,6 @@
         <label for="lifetime_km">{{ ctx.lang.t("vehicle-lifetime-km") }}</label>
         <input id="lifetime_km" name="lifetime_km" value="{{ self.val("lifetime_km") }}" inputmode="decimal">
         {% for e in self.errs("lifetime_km") %}<p class="field-error">{{ e }}</p>{% endfor %}
-      </div>
-      <div class="field depreciation-mileage">
-        <label for="end_value">{{ ctx.lang.t("vehicle-end-value") }}</label>
-        <input id="end_value" name="end_value" value="{{ self.val_or("end_value", "0") }}" inputmode="decimal">
-        {% for e in self.errs("end_value") %}<p class="field-error">{{ e }}</p>{% endfor %}
       </div>
       <div class="field">
         <label for="sold_on">{{ ctx.lang.t("vehicle-sold-on") }}</label>
