@@ -740,7 +740,7 @@ ZIP-Datei (`zaehler_app::backup`, Crate `zip` mit Deflate): `data.json` mit
 allen Datensätzen (`BackupData`, Werte wie gespeichert: Festkomma in
 Tausendsteln, Zeitpunkte in UTC, Vorschläge als JSON-Text), Fotos unter
 `blobs/<Objektschlüssel>` ohne erneute Kompression, zuletzt `manifest.json`
-mit `format = "zaehler-backup"`, `format_version` (1), Umfang (`installation`
+mit `format = "zaehler-backup"`, `format_version` (ab v1.1: 2; Version 1 bleibt lesbar), Umfang (`installation`
 oder `household`), Programmversion, Schemastand, Zeitpunkt, Anzahlen, SHA-256
 von `data.json` sowie Größe und SHA-256 jedes Fotos und der Liste fehlender
 Fotos. Enthalten sind Belegfotos und Fotos offener Entwürfe; abgeschlossene

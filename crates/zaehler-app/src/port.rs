@@ -25,8 +25,8 @@ use crate::{
         MeterAggregate, MeterData, MeterSummary, NewApiToken, NewInvitation, Notification,
         NotificationKind, NotificationLogEntry, NotificationSettings, OutboxEntry, OutboxEvent,
         OutboxResult, PriceComponentRow, ProfileRow, PvSystem, Reading, ReadingUpdate,
-        ReceiptExtraction, Recipient, Recognition, RegisterData, Revision, SettlementRow, User,
-        Vehicle, VehicleData,
+        ReceiptExtraction, Recipient, Recognition, RegisterData, Revision, SettlementRow,
+        SetupDraft, User, Vehicle, VehicleData,
     },
     tenant::{Role, Tenant},
 };
@@ -60,6 +60,7 @@ pub trait UnitOfWork: Send {
     fn asset_costs(&mut self) -> &mut dyn AssetCostRepository;
     fn pv(&mut self) -> &mut dyn PvRepository;
     fn api_tokens(&mut self) -> &mut dyn ApiTokenRepository;
+    fn setup_drafts(&mut self) -> &mut dyn SetupDraftRepository;
     async fn commit(self: Box<Self>) -> PortResult<()>;
 }
 
@@ -553,6 +554,15 @@ pub trait DraftRepository: Send {
     ) -> PortResult<()>;
 }
 
+/// Ein Setup-Entwurf je Haushalt. Alle Methoden erzwingen Tenant-Isolation.
+#[async_trait]
+pub trait SetupDraftRepository: Send {
+    async fn get(&mut self, t: &Tenant) -> PortResult<Option<SetupDraft>>;
+    async fn save(&mut self, t: &Tenant, draft: &SetupDraft) -> PortResult<()>;
+    /// Löscht den Entwurf und liefert ausschließlich zugehörige Setup-Fotos.
+    async fn delete(&mut self, t: &Tenant) -> PortResult<Vec<BlobKey>>;
+}
+
 /// Abfragen ohne Haushaltsbezug; verwendet nur der Anwendungsfall
 /// `Housekeeping`. Alle Operationen sind idempotent.
 // @impl SPEC_OPS_HOUSEKEEPING
@@ -565,6 +575,8 @@ pub trait MaintenanceRepository: Send + Sync {
         cutoff: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> PortResult<Vec<BlobKey>>;
+    /// Entfernt Setup-Entwürfe, deren letzte Änderung vor `cutoff` liegt.
+    async fn expire_setup_drafts(&self, cutoff: DateTime<Utc>) -> PortResult<Vec<BlobKey>>;
     /// Entfernt Sitzungen mit Ablauf vor `now`; liefert die Anzahl.
     async fn delete_expired_sessions(&self, now: DateTime<Utc>) -> PortResult<u64>;
     /// Entfernt erledigte Outbox-Einträge, abgeschlossen vor `before`.

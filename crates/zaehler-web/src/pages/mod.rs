@@ -15,11 +15,13 @@ pub mod import;
 pub mod members;
 pub mod meters;
 pub mod notifications;
+pub mod photos;
 pub mod pv;
 pub mod pwa;
 pub mod readings;
 pub mod receipts;
 pub mod settings;
+pub mod setup;
 pub mod tokens;
 pub mod vehicles;
 

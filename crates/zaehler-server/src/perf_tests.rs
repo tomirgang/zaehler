@@ -288,8 +288,9 @@ async fn seed_pv(
             AssetCostInput {
                 booked_on: start.date_naive(),
                 category: AssetCategory::Pv(PvCostCategory::Investment),
-                amount: Decimal::from(14_500),
+                amount: Some(Decimal::from(14_500)),
                 quantity: None,
+                unit_price: None,
                 odometer: None,
                 full_tank: false,
                 recurrence: None,
@@ -414,6 +415,7 @@ async fn seed_vehicle(uc: &UseCases, tenant: &zaehler_app::Tenant, house: MeterI
             tenant,
             car,
             ConsumptionProfile {
+                energy: zaehler_domain::vehicle::ProfileEnergy::Electric,
                 valid_from: start.date_naive(),
                 kwh_per_100km: Decimal::from(18),
                 charging_loss_pct: Decimal::from(10),
@@ -425,8 +427,9 @@ async fn seed_vehicle(uc: &UseCases, tenant: &zaehler_app::Tenant, house: MeterI
     let mut insurance = AssetCostInput {
         booked_on: start.date_naive(),
         category: AssetCategory::Vehicle(VehicleCostCategory::Insurance),
-        amount: Decimal::from(600),
+        amount: Some(Decimal::from(600)),
         quantity: None,
+        unit_price: None,
         odometer: None,
         full_tank: false,
         recurrence: Some(Recurrence {
@@ -452,7 +455,7 @@ async fn seed_vehicle(uc: &UseCases, tenant: &zaehler_app::Tenant, house: MeterI
                 AssetCostInput {
                     booked_on: at.date_naive(),
                     category: AssetCategory::Vehicle(VehicleCostCategory::Fuel),
-                    amount: Decimal::from(75),
+                    amount: Some(Decimal::from(75)),
                     quantity: Some(Decimal::from(42)),
                     odometer: Some(km),
                     full_tank: true,
@@ -470,7 +473,7 @@ async fn seed_vehicle(uc: &UseCases, tenant: &zaehler_app::Tenant, house: MeterI
                 AssetCostInput {
                     booked_on: at.date_naive(),
                     category: AssetCategory::Vehicle(VehicleCostCategory::Parking),
-                    amount: Decimal::from(12),
+                    amount: Some(Decimal::from(12)),
                     ..insurance.clone()
                 },
             )

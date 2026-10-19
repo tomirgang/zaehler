@@ -26,7 +26,7 @@ use zaehler_domain::{
     calendar::Calendar,
     cost::Estimated,
     meter::{MeterKind, MeterPurpose},
-    vehicle::{ConsumptionProfile, DriveType, Holding},
+    vehicle::{ConsumptionProfile, DepreciationMode, DriveType, Holding, ProfileEnergy, Remaining},
 };
 
 use crate::{
@@ -435,6 +435,7 @@ pub struct ForecastView {
 
 #[derive(Template)]
 #[template(path = "pages/vehicles/detail.html")]
+#[allow(clippy::struct_excessive_bools)] // unabhängige Sichtbarkeiten im Template
 struct DetailPage {
     ctx: PageCtx,
     id: String,
@@ -443,6 +444,10 @@ struct DetailPage {
     has_vehicle: bool,
     charges: bool,
     plugin_hybrid: bool,
+    fuels: bool,
+    residual: Vec<(String, String)>,
+    fuel_price: Vec<(String, String)>,
+    fuel_prices: Vec<(String, String)>,
     rows: Vec<ReportRow>,
     /// (Kategorie, laufendes Jahr, Haltedauer)
     categories: Vec<(String, String, String)>,
@@ -569,8 +574,15 @@ fn detail_page(
         for (k, val) in [
             ("purchased_on", date_input(h.purchased_on)),
             ("price", plain(lang, h.price)),
-            ("residual_value", plain(lang, h.residual_value)),
-            ("planned_end", date_input(h.planned_end)),
+            ("depreciation_mode", h.mode.as_str().to_owned()),
+            ("residual_value", opt(h.residual_value)),
+            (
+                "planned_end",
+                h.planned_end.map(date_input).unwrap_or_default(),
+            ),
+            ("odometer_at_purchase", opt(h.odometer_at_purchase)),
+            ("lifetime_km", opt(h.lifetime_km)),
+            ("end_value", opt(h.end_value)),
             ("sold_on", h.sold_on.map(date_input).unwrap_or_default()),
             ("sale_price", opt(h.sale_price)),
         ] {
@@ -694,7 +706,15 @@ fn detail_page(
                     id: p.id.to_string(),
                     cells: vec![
                         format::date(lang, p.profile.valid_from),
-                        format!("{} kWh", plain(lang, p.profile.kwh_per_100km)),
+                        format!(
+                            "{} {}",
+                            plain(lang, p.profile.kwh_per_100km),
+                            if p.profile.energy == ProfileEnergy::Fuel {
+                                "l"
+                            } else {
+                                "kWh"
+                            }
+                        ),
                         format!("{} %", plain(lang, p.profile.charging_loss_pct)),
                         p.profile
                             .electric_share_pct
@@ -706,6 +726,72 @@ fn detail_page(
         })
         .unwrap_or_default();
     let drive = v.map(|v| v.data.drive_type);
+    if !values.contains_key("odometer_at_purchase")
+        && let Some(initial) = d.initial_odometer
+    {
+        values.insert("odometer_at_purchase".into(), plain(lang, initial));
+    }
+    let residual = report
+        .and_then(|r| r.residual)
+        .map(|r| {
+            let remaining = match r.remaining {
+                Remaining::Until { years, until } => lang.ta(
+                    "vehicle-remaining-until",
+                    &[
+                        ("years", format::decimal(lang, years, 1)),
+                        ("date", format::date(lang, until)),
+                    ],
+                ),
+                Remaining::Reached => lang.t("vehicle-remaining-reached"),
+                Remaining::Sold => lang.t("vehicle-remaining-sold"),
+                Remaining::InsufficientData => lang.t("vehicle-remaining-insufficient"),
+            };
+            vec![
+                (lang.t("vehicle-current-value"), money(lang, r.value)),
+                (lang.t("vehicle-remaining"), remaining),
+            ]
+        })
+        .unwrap_or_default();
+    let fuel_price = report
+        .and_then(|r| r.fuel_price.as_ref())
+        .map(|p| {
+            let mut facts = Vec::new();
+            if let Some((date, price)) = p.last {
+                facts.push((
+                    lang.t("vehicle-fuel-last"),
+                    format!(
+                        "{} €/l ({})",
+                        format::decimal(lang, price, 3),
+                        format::date(lang, date)
+                    ),
+                ));
+            } else if let Some(price) = p.estimate {
+                facts.push((
+                    lang.t("vehicle-fuel-estimate"),
+                    format!("{} €/l", format::decimal(lang, price, 3)),
+                ));
+            }
+            if let Some(f) = report
+                .and_then(|r| r.forecast.as_ref())
+                .and_then(|f| f.fuel_cost)
+            {
+                facts.push((
+                    lang.t("vehicle-fuel-forecast"),
+                    estimated(lang, Some(f), 2, "€"),
+                ));
+            }
+            facts
+        })
+        .unwrap_or_default();
+    let fuel_prices = report
+        .and_then(|r| r.fuel_price.as_ref())
+        .map(|p| {
+            p.points
+                .iter()
+                .map(|(date, price)| (format::date(lang, *date), format::decimal(lang, *price, 3)))
+                .collect()
+        })
+        .unwrap_or_default();
     DetailPage {
         id: d.meter.meter.id.to_string(),
         name: d.meter.meter.data.name.clone(),
@@ -713,6 +799,10 @@ fn detail_page(
         has_vehicle: v.is_some(),
         charges: drive.is_some_and(DriveType::charges),
         plugin_hybrid: drive == Some(DriveType::PluginHybrid),
+        fuels: drive.is_some_and(DriveType::fuels),
+        residual,
+        fuel_price,
+        fuel_prices,
         rows,
         categories,
         category_year,
@@ -918,14 +1008,23 @@ pub async fn add_profile(
     let kwh = required_decimal(&mut e, "profile_kwh", form.get("profile_kwh"));
     let loss = decimal(&mut e, "profile_loss", form.get("profile_loss")).unwrap_or(Decimal::ZERO);
     let share = decimal(&mut e, "profile_share", form.get("profile_share"));
-    let result = match (from, kwh, e.is_empty()) {
-        (Some(valid_from), Some(kwh), true) => state
+    let energy = match form.get("profile_energy") {
+        "" | "electric" => Some(ProfileEnergy::Electric),
+        "fuel" => Some(ProfileEnergy::Fuel),
+        _ => {
+            e.add("profile_energy", "form.kind_invalid");
+            None
+        }
+    };
+    let result = match (from, kwh, energy, e.is_empty()) {
+        (Some(valid_from), Some(kwh), Some(energy), true) => state
             .uc
             .set_consumption_profile
             .execute(
                 &ctx.tenant,
                 id,
                 ConsumptionProfile {
+                    energy,
                     valid_from,
                     kwh_per_100km: kwh,
                     charging_loss_pct: loss,
@@ -976,12 +1075,27 @@ pub async fn set_acquisition(
         let mut e = FieldErrors::default();
         let purchased = required_date(&mut e, "purchased_on", form.get("purchased_on"));
         let price = required_decimal(&mut e, "price", form.get("price"));
-        let residual = required_decimal(&mut e, "residual_value", form.get("residual_value"));
-        let planned = required_date(&mut e, "planned_end", form.get("planned_end"));
+        let mode = match form.get("depreciation_mode") {
+            "" | "time" => Some(DepreciationMode::Time),
+            "mileage" => Some(DepreciationMode::Mileage),
+            _ => {
+                e.add("depreciation_mode", "form.kind_invalid");
+                None
+            }
+        };
+        let residual = decimal(&mut e, "residual_value", form.get("residual_value"));
+        let planned = date(&mut e, "planned_end", form.get("planned_end"));
+        let odometer_at_purchase = decimal(
+            &mut e,
+            "odometer_at_purchase",
+            form.get("odometer_at_purchase"),
+        );
+        let lifetime_km = decimal(&mut e, "lifetime_km", form.get("lifetime_km"));
+        let end_value = decimal(&mut e, "end_value", form.get("end_value"));
         let sold_on = date(&mut e, "sold_on", form.get("sold_on"));
         let sale_price = decimal(&mut e, "sale_price", form.get("sale_price"));
-        match (purchased, price, residual, planned, e.is_empty()) {
-            (Some(purchased_on), Some(price), Some(residual_value), Some(planned_end), true) => {
+        match (purchased, price, mode, e.is_empty()) {
+            (Some(purchased_on), Some(price), Some(mode), true) => {
                 state
                     .uc
                     .set_acquisition
@@ -991,8 +1105,12 @@ pub async fn set_acquisition(
                         Some(Holding {
                             purchased_on,
                             price,
-                            residual_value,
-                            planned_end,
+                            mode,
+                            residual_value: residual,
+                            planned_end: planned,
+                            odometer_at_purchase,
+                            lifetime_km,
+                            end_value,
                             sold_on,
                             sale_price,
                         }),
@@ -1056,6 +1174,7 @@ pub async fn chart(
             "variable": { "name": lang.t("vehicle-variable"), "data": series(|p| p.cost.variable) },
             "fixed": { "name": lang.t("vehicle-fixed"), "data": series(|p| p.cost.fixed) },
             "depreciation": { "name": lang.t("vehicle-depreciation"), "data": series(|p| p.cost.depreciation) },
+            "fuel_price": { "name": lang.t("asset-unit-price"), "data": r.fuel_price.as_ref().map(|p| p.points.iter().map(|(date, price)| json!([date.to_string(), price.round_dp(3).to_f64()])).collect::<Vec<_>>()).unwrap_or_default() },
         }
     })))
 }

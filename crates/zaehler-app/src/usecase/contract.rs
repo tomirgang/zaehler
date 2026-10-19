@@ -38,7 +38,7 @@ pub const MAX_TIERS: usize = 10;
 const MAX_MONEY: Decimal = Decimal::from_parts(1_000_000_000, 0, 0, false, 0);
 
 /// Preisstand im Formular; `id` ist bei vorhandenen Preisständen gesetzt.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ComponentInput {
     pub id: Option<PriceComponentId>,
     pub valid_from: NaiveDate,
@@ -50,7 +50,7 @@ pub struct ComponentInput {
 }
 
 /// Kostenposition im Formular.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PositionInput {
     pub id: Option<PositionId>,
     pub name: String,
@@ -62,7 +62,7 @@ pub struct PositionInput {
 }
 
 /// Eingaben für Anlegen und Ändern eines Vertrags.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ContractInput {
     pub direction: Direction,
     pub provider: String,
@@ -476,10 +476,22 @@ impl CreateContract {
     ) -> Result<ContractId, AppError> {
         t.require(Role::Owner)?;
         let mut uow = self.p.uow.begin().await?;
-        let agg = load_meter(uow.as_mut(), t, meter).await?;
-        let id = create_in(&self.p, uow.as_mut(), t, &agg, &input).await?;
+        let id = self.execute_in(t, meter, input, uow.as_mut()).await?;
         uow.commit().await?;
         Ok(id)
+    }
+
+    /// Legt einen Vertrag in der vom Aufrufer verwalteten Transaktion an.
+    pub async fn execute_in(
+        &self,
+        t: &Tenant,
+        meter: MeterId,
+        input: ContractInput,
+        uow: &mut dyn UnitOfWork,
+    ) -> Result<ContractId, AppError> {
+        t.require(Role::Owner)?;
+        let agg = load_meter(uow, t, meter).await?;
+        create_in(&self.p, uow, t, &agg, &input).await
     }
 }
 

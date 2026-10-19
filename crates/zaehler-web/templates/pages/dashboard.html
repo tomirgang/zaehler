@@ -2,52 +2,58 @@
 
 {% block content %}
 <h1>{{ ctx.lang.t("dashboard-title") }}</h1>
-{% if !pv.is_empty() %}
-<ul class="cards">
-  {% for p in pv %}
-  <li class="card">
-    <h2><a href="/pv/grid/{{ p.id }}">{{ ctx.lang.t("pv-card-title") }}: {{ p.name }}</a></h2>
-    {% if p.month.is_empty() %}
-    <p class="muted">{{ ctx.lang.t("pv-card-no-month") }}</p>
-    {% else %}
-    <p class="muted">{{ p.month }}</p>
-    <dl class="facts">
-      <dt>{{ ctx.lang.t("pv-generation") }}</dt><dd>{{ p.generation }}{% if !p.status.is_empty() %} <span class="traffic traffic-{{ p.status }}"><span class="traffic-dot" aria-hidden="true"></span>{{ p.status_label }}</span>{% endif %}</dd>
-      <dt>{{ ctx.lang.t("pv-autarky") }}</dt><dd>{{ p.autarky }}</dd>
-      <dt>{{ ctx.lang.t("pv-ratio") }}</dt><dd>{{ p.ratio }}</dd>
-    </dl>
-    {% endif %}
-    {% if ctx.can_write %}<div class="actions"><a class="button" href="/pv/grid/{{ p.id }}/readings">{{ ctx.lang.t("pv-bulk") }}</a></div>{% endif %}
-  </li>
-  {% endfor %}
-</ul>
+{% if ctx.is_owner %}
+<div class="actions">
+  <a class="button secondary" href="/setup">{% if setup_has_draft %}{{ ctx.lang.t("setup-resume") }}{% else %}{{ ctx.lang.t("setup-start") }}{% endif %}</a>
+</div>
 {% endif %}
-{% if cards.is_empty() %}
+{% if empty %}
 <p>{{ ctx.lang.t("dashboard-empty") }}</p>
 <div class="actions">
   {% if ctx.is_owner %}<a class="button" href="/meters/new">{{ ctx.lang.t("dashboard-create-meter") }}</a>{% endif %}
   {% if ctx.can_write %}<a class="button secondary" href="/import">{{ ctx.lang.t("dashboard-import") }}</a>{% endif %}
 </div>
-{% else %}
-<ul class="cards">
-  {% for c in cards %}
-  <li class="card{% if c.overdue %} overdue{% endif %}">
-    <h2><a href="/meters/{{ c.id }}">{{ c.name }}</a></h2>
-    <p class="muted">{{ c.kind }}</p>
-    <p>{{ ctx.lang.t("dashboard-last-reading") }}:
-      {% if let Some(l) = c.last %}{{ l }}{% else %}{{ ctx.lang.t("dashboard-no-reading") }}{% endif %}</p>
-    {% if !c.values.is_empty() %}<p>{% for v in c.values %}<span class="tag">{{ v }}</span> {% endfor %}</p>{% endif %}
-    {% if let Some(m) = c.last_month %}<p>{{ m }}{% if let Some(v) = c.vs_previous %} <span class="muted">({{ v }})</span>{% endif %}{% if let Some(tv) = c.traffic %} {% include "partials/traffic_light.html" %}{% endif %}</p>{% endif %}
-    {% if let Some(f) = c.forecast %}<p>{{ f }}</p>{% endif %}
-    {% if let Some(d) = c.due %}<p class="{% if c.overdue %}warning{% else if c.due_now %}due{% else %}muted{% endif %}">{{ d }}</p>{% endif %}
-    {% if ctx.can_write %}
-    <div class="actions">
-      <a class="button" href="/meters/{{ c.id }}/readings/new">{{ ctx.lang.t("dashboard-record") }}</a>
-      <a class="button secondary" href="/capture">{{ ctx.lang.t("dashboard-photo") }}</a>
-    </div>
-    {% endif %}
-  </li>
-  {% endfor %}
-</ul>
 {% endif %}
+{# Gruppen in fester Reihenfolge, je Gruppe nach Name (SPEC_UI_DASHBOARD_GROUPS) #}
+{% for g in groups %}
+<section class="dashboard-group" aria-labelledby="group-{{ g.key }}">
+  <h2 id="group-{{ g.key }}">{{ g.title }}</h2>
+  <ul class="cards">
+    {% for p in g.pv %}
+    <li class="card">
+      <h3><a href="/pv/grid/{{ p.id }}">{{ ctx.lang.t("pv-card-title") }}: {{ p.name }}</a></h3>
+      {% if p.month.is_empty() %}
+      <p class="muted">{{ ctx.lang.t("pv-card-no-month") }}</p>
+      {% else %}
+      <p class="muted">{{ p.month }}</p>
+      <dl class="facts">
+        <dt>{{ ctx.lang.t("pv-generation") }}</dt><dd>{{ p.generation }}{% if !p.status.is_empty() %} <span class="traffic traffic-{{ p.status }}"><span class="traffic-dot" aria-hidden="true"></span>{{ p.status_label }}</span>{% endif %}</dd>
+        <dt>{{ ctx.lang.t("pv-autarky") }}</dt><dd>{{ p.autarky }}</dd>
+        <dt>{{ ctx.lang.t("pv-ratio") }}</dt><dd>{{ p.ratio }}</dd>
+      </dl>
+      {% endif %}
+      {% if ctx.can_write %}<div class="actions"><a class="button" href="/pv/grid/{{ p.id }}/readings">{{ ctx.lang.t("pv-bulk") }}</a></div>{% endif %}
+    </li>
+    {% endfor %}
+    {% for c in g.cards %}
+    <li class="card{% if c.overdue %} overdue{% endif %}">
+      <h3><a href="/meters/{{ c.id }}">{{ c.name }}</a></h3>
+      <p class="muted">{{ c.kind }}</p>
+      <p>{{ ctx.lang.t("dashboard-last-reading") }}:
+        {% if let Some(l) = c.last %}{{ l }}{% else %}{{ ctx.lang.t("dashboard-no-reading") }}{% endif %}</p>
+      {% if !c.values.is_empty() %}<p>{% for v in c.values %}<span class="tag">{{ v }}</span> {% endfor %}</p>{% endif %}
+      {% if let Some(m) = c.last_month %}<p>{{ m }}{% if let Some(v) = c.vs_previous %} <span class="muted">({{ v }})</span>{% endif %}{% if let Some(tv) = c.traffic %} {% include "partials/traffic_light.html" %}{% endif %}</p>{% endif %}
+      {% if let Some(f) = c.forecast %}<p>{{ f }}</p>{% endif %}
+      {% if let Some(d) = c.due %}<p class="{% if c.overdue %}warning{% else if c.due_now %}due{% else %}muted{% endif %}">{{ d }}</p>{% endif %}
+      {% if ctx.can_write %}
+      <div class="actions">
+        <a class="button" href="/meters/{{ c.id }}/readings/new">{{ ctx.lang.t("dashboard-record") }}</a>
+        <a class="button secondary" href="/capture">{{ ctx.lang.t("dashboard-photo") }}</a>
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endfor %}
 {% endblock %}

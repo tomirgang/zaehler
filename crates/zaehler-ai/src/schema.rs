@@ -55,6 +55,8 @@ pub struct ReceiptSuggestion {
     /// Kategorie gemäß `zaehler_domain::assets::VehicleCostCategory` (`snake_case`).
     pub category: String,
     pub quantity: Option<String>,
+    #[serde(default)]
+    pub unit_price: Option<String>,
     pub quantity_unit: Option<String>,
     pub vendor: Option<String>,
     /// Kilometerstand, falls auf dem Beleg vermerkt
@@ -68,7 +70,7 @@ pub struct ReceiptSuggestion {
 
 impl ReceiptSuggestion {
     pub(crate) const PROMPT: &'static str = "Extrahiere aus dem Beleg Datum (ISO 8601), Bruttobetrag in EUR, \
-        Kostenkategorie, bei Tank-/Ladebelegen die Menge (Liter bzw. kWh), den Händler, \
+        Kostenkategorie, bei Tank-/Ladebelegen die Menge (Liter bzw. kWh), bei Tankbelegen den Preis pro Liter in EUR, den Händler, \
         einen vermerkten Kilometerstand und bei Ladebelegen die Ladeart (ac oder dc). \
         Unlesbares als null. Erfinde keine Werte.";
 
@@ -76,12 +78,13 @@ impl ReceiptSuggestion {
         json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["date", "total_amount", "category", "quantity", "quantity_unit", "vendor", "odometer", "charging_kind", "confidence"],
+            "required": ["date", "total_amount", "category", "quantity", "unit_price", "quantity_unit", "vendor", "odometer", "charging_kind", "confidence"],
             "properties": {
                 "date": { "type": ["string", "null"] },
                 "total_amount": { "type": ["string", "null"] },
                 "category": { "type": "string", "enum": ["fuel", "charging", "insurance", "tax", "workshop", "tires", "inspection", "care", "parking", "financing", "other"] },
                 "quantity": { "type": ["string", "null"] },
+                "unit_price": { "type": ["string", "null"] },
                 "quantity_unit": { "type": ["string", "null"] },
                 "vendor": { "type": ["string", "null"] },
                 "odometer": { "type": ["string", "null"] },

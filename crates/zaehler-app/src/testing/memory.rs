@@ -24,15 +24,15 @@ use crate::{
         MeterAggregate, MeterData, MeterSummary, NewInvitation, Notification, NotificationKind,
         NotificationLogEntry, NotificationSettings, OutboxEntry, OutboxEvent, OutboxResult,
         OutboxStatus, Reading, ReadingUpdate, Recipient, Recognition, Register, RegisterData,
-        Revision, User,
+        Revision, SetupDraft, User,
     },
     port::{
         BlobStore, Clock, ContractRepository, DraftRepository, HouseholdRepository,
         ImageNormalizer, InvitationRepository, JobRepository, MaintenanceRepository,
         MembershipRepository, MeterRecognizer, MeterRepository, NormalizedJpeg,
         NotificationSettingsRepository, Notifier, OutboxRepository, PhotoTime, PortResult,
-        Readiness, ReadingRepository, RecognitionError, RevisionRepository, UnitOfWork,
-        UnitOfWorkFactory, UserRepository,
+        Readiness, ReadingRepository, RecognitionError, RevisionRepository, SetupDraftRepository,
+        UnitOfWork, UnitOfWorkFactory, UserRepository,
     },
 };
 
@@ -55,6 +55,7 @@ struct State {
     /// Ablaufzeitpunkte von Sitzungen (nur für `MaintenanceRepository`)
     sessions: Vec<DateTime<Utc>>,
     drafts: Vec<StoredDraft>,
+    setup_drafts: BTreeMap<HouseholdId, SetupDraft>,
     invitations: Vec<StoredInvitation>,
     revisions: Vec<(HouseholdId, Revision)>,
     outbox: Vec<StoredOutbox>,
@@ -214,6 +215,34 @@ impl MaintenanceRepository for InMemoryStore {
                 d.draft.photo_key.clone()
             })
             .collect())
+    }
+
+    async fn expire_setup_drafts(&self, cutoff: DateTime<Utc>) -> PortResult<Vec<BlobKey>> {
+        let mut s = self.shared.lock().map_err(poisoned)?;
+        let expired: Vec<_> = s
+            .setup_drafts
+            .iter()
+            .filter(|(_, draft)| draft.updated_at < cutoff)
+            .map(|(household, draft)| {
+                (
+                    *household,
+                    draft.photos.values().cloned().collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        let mut keys = Vec::new();
+        for (household, photos) in expired {
+            for photo in photos {
+                let key = BlobKey::parse(&photo)
+                    .ok_or_else(|| PortError::Backend("invalid setup photo key".into()))?;
+                if key.household() != household {
+                    return Err(PortError::Backend("setup photo household mismatch".into()));
+                }
+                keys.push(key);
+            }
+            s.setup_drafts.remove(&household);
+        }
+        Ok(keys)
     }
 
     async fn delete_expired_sessions(&self, now: DateTime<Utc>) -> PortResult<u64> {
@@ -562,6 +591,7 @@ impl DraftRepository for MemoryUow {
         if draft.photo_key.household() != t.household_id() {
             return Err(PortError::NotFound);
         }
+
         self.state.drafts.push(StoredDraft {
             household: t.household_id(),
             draft: draft.clone(),
@@ -668,6 +698,42 @@ impl DraftRepository for MemoryUow {
     }
 }
 
+#[async_trait]
+impl SetupDraftRepository for MemoryUow {
+    async fn get(&mut self, t: &Tenant) -> PortResult<Option<SetupDraft>> {
+        Ok(self.state.setup_drafts.get(&t.household_id()).cloned())
+    }
+
+    async fn save(&mut self, t: &Tenant, draft: &SetupDraft) -> PortResult<()> {
+        if draft.photos.values().any(|key| {
+            BlobKey::parse(key).is_none_or(|parsed| parsed.household() != t.household_id())
+        }) {
+            return Err(PortError::NotFound);
+        }
+        self.state
+            .setup_drafts
+            .insert(t.household_id(), draft.clone());
+        Ok(())
+    }
+
+    async fn delete(&mut self, t: &Tenant) -> PortResult<Vec<BlobKey>> {
+        let Some(draft) = self.state.setup_drafts.remove(&t.household_id()) else {
+            return Ok(Vec::new());
+        };
+        draft
+            .photos
+            .values()
+            .map(|key| {
+                let parsed = BlobKey::parse(key).ok_or(PortError::NotFound)?;
+                if parsed.household() != t.household_id() {
+                    return Err(PortError::NotFound);
+                }
+                Ok(parsed)
+            })
+            .collect()
+    }
+}
+
 /// Ersatz für die Erkennung mit festem Ergebnis.
 pub struct StubRecognizer(pub Result<Recognition, RecognitionError>);
 
@@ -759,6 +825,9 @@ impl UnitOfWork for MemoryUow {
         self
     }
     fn api_tokens(&mut self) -> &mut dyn crate::port::ApiTokenRepository {
+        self
+    }
+    fn setup_drafts(&mut self) -> &mut dyn SetupDraftRepository {
         self
     }
     async fn commit(self: Box<Self>) -> PortResult<()> {

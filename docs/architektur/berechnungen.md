@@ -248,7 +248,7 @@ Bei Verkauf ersetzt der Verkaufserlös den geschätzten Restwert.
 
 ```{spec} Wertverlust nach Lebenslaufleistung
 :id: SPEC_CAR_MILEAGE_DEPRECIATION
-:status: draft
+:status: implemented
 :satisfies: REQ_CAR_012
 :links: SPEC_CAR_DEPRECIATION, SPEC_CAR_COST_PER_KM, SPEC_FC_PERIOD_FORECAST
 
@@ -278,12 +278,14 @@ erst bei der Ausgabe gerundet ({need}`SPEC_STORE_FIXED_POINT`).
 
 ```{spec} Preis pro Liter
 :id: SPEC_CAR_FUEL_PRICE
-:status: draft
+:status: implemented
 :satisfies: REQ_CAR_013, REQ_CAR_014
 :links: SPEC_CAR_FUEL_CONSUMPTION, SPEC_CAR_REPORT, SPEC_ASSET_COSTS
 
-Erfassung: Von Betrag *B*, Menge *M* und Preis pro Liter *p* sind zwei
-anzugeben. Fehlt *B*, gilt `B = round(M · p, 2)`; fehlt *M*, gilt
+Erfassung: Von Betrag *B*, Menge *M* und Preis pro Liter *p* genügen zwei
+Angaben. Ein Betrag ohne Menge und Literpreis bleibt zulässig; dann ist
+kein einzelner Literpreis bekannt und nur die folgende Durchschnittsschätzung
+möglich. Fehlt *B*, gilt `B = round(M · p, 2)`; fehlt *M*, gilt
 `M = round(B / p, 3)`; fehlt *p*, gilt `p = round(B / M, 3)`. Sind alle drei
 angegeben und ist `|B - M · p| > 0,01`, wird die Eingabe abgelehnt
 (`asset_cost.price_mismatch`). Gespeichert wird *p* wie eingegeben bzw.
@@ -292,6 +294,8 @@ verfälscht wird.
 
 Bekannter Literpreis eines Tankvorgangs: das gespeicherte *p*. Letzter
 bekannter Literpreis: *p* des jüngsten Tankvorgangs mit *p*.
+Bei v1-Bestandsdaten ohne gespeichertes *p*, aber mit Menge, wird
+`round(B / M, 3)` verwendet; ein eingegebener Preis wird nie ersetzt.
 
 Geschätzter Durchschnittspreis, falls kein Tankvorgang einen bekannten
 Literpreis hat, über die letzten 3 Monate [*t* - 3 Monate, *t*):

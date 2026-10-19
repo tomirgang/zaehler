@@ -26,7 +26,8 @@ use crate::{
 /// Kennung des Formats im Manifest.
 pub const FORMAT: &str = "zaehler-backup";
 /// Aktuelle Formatversion; Importe akzeptieren diese und ältere Versionen.
-pub const FORMAT_VERSION: u32 = 1;
+/// Version 2 (v1.1): Laufleistungsmodus, Literpreis, Energieart der Profile.
+pub const FORMAT_VERSION: u32 = 2;
 const MANIFEST: &str = "manifest.json";
 const DATA: &str = "data.json";
 const BLOB_PREFIX: &str = "blobs/";
@@ -359,6 +360,17 @@ pub struct ConsumptionProfileRecord {
     pub kwh_per_100km_milli: i64,
     pub charging_loss_pct_milli: i64,
     pub electric_share_pct_milli: Option<i64>,
+    /// `electric` oder `fuel` (ab Format 2, `m20261019_000017_fuel_price`)
+    #[serde(default = "default_energy")]
+    pub energy: String,
+}
+
+fn default_energy() -> String {
+    "electric".into()
+}
+
+fn default_mode() -> String {
+    "time".into()
 }
 
 /// Anschaffung (ab `m20261018_000013_vehicles`).
@@ -367,10 +379,59 @@ pub struct AcquisitionRecord {
     pub vehicle_id: Uuid,
     pub purchased_on: NaiveDate,
     pub price_micro: i64,
-    pub residual_micro: i64,
-    pub planned_end_on: NaiveDate,
+    pub residual_micro: Option<i64>,
+    pub planned_end_on: Option<NaiveDate>,
     pub sold_on: Option<NaiveDate>,
     pub sale_price_micro: Option<i64>,
+    /// `time` oder `mileage` (ab Format 2, `m20261019_000016_vehicle_mileage`)
+    #[serde(default = "default_mode")]
+    pub depreciation_mode: String,
+    #[serde(default)]
+    pub odometer_at_purchase_milli: Option<i64>,
+    #[serde(default)]
+    pub lifetime_km_milli: Option<i64>,
+    #[serde(default)]
+    pub end_value_micro: Option<i64>,
+}
+
+impl AcquisitionRecord {
+    /// Gespeicherte Spalten einer Anschaffung (SPEC_CAR_MILEAGE_UI).
+    ///
+    /// # Panics
+    /// Wenn die Anschaffung nicht auf gültige Festkommawerte geprüft wurde.
+    #[must_use]
+    pub fn from_holding(vehicle_id: Uuid, h: &zaehler_domain::vehicle::Holding) -> Self {
+        Self {
+            vehicle_id,
+            purchased_on: h.purchased_on,
+            price_micro: scaled(h.price, 6),
+            residual_micro: h.residual_value.map(|v| scaled(v, 6)),
+            planned_end_on: h.planned_end,
+            sold_on: h.sold_on,
+            sale_price_micro: h.sale_price.map(|p| scaled(p, 6)),
+            depreciation_mode: h.mode.as_str().into(),
+            odometer_at_purchase_milli: h.odometer_at_purchase.map(|v| scaled(v, 3)),
+            lifetime_km_milli: h.lifetime_km.map(|v| scaled(v, 3)),
+            end_value_micro: h.end_value.map(|v| scaled(v, 6)),
+        }
+    }
+
+    /// Anschaffung aus den gespeicherten Spalten.
+    pub fn to_holding(&self) -> Result<zaehler_domain::vehicle::Holding, String> {
+        use rust_decimal::Decimal;
+        Ok(zaehler_domain::vehicle::Holding {
+            purchased_on: self.purchased_on,
+            price: Decimal::new(self.price_micro, 6),
+            mode: self.depreciation_mode.parse()?,
+            residual_value: self.residual_micro.map(|v| Decimal::new(v, 6)),
+            planned_end: self.planned_end_on,
+            odometer_at_purchase: self.odometer_at_purchase_milli.map(|v| Decimal::new(v, 3)),
+            lifetime_km: self.lifetime_km_milli.map(|v| Decimal::new(v, 3)),
+            end_value: self.end_value_micro.map(|v| Decimal::new(v, 6)),
+            sold_on: self.sold_on,
+            sale_price: self.sale_price_micro.map(|p| Decimal::new(p, 6)),
+        })
+    }
 }
 
 /// Externer Ladevorgang (ab `m20261018_000013_vehicles`).
@@ -402,6 +463,9 @@ pub struct AssetCostRecord {
     pub category: String,
     pub amount_micro: i64,
     pub quantity_milli: Option<i64>,
+    /// Preis pro Liter (ab Format 2, `m20261019_000017_fuel_price`)
+    #[serde(default)]
+    pub unit_price_micro: Option<i64>,
     pub odometer_milli: Option<i64>,
     pub full_tank: Option<bool>,
     pub recurrence_months: Option<i16>,
@@ -945,11 +1009,52 @@ impl<R: Read + Seek> ArchiveReader<R> {
     }
 }
 
+/// Festkommawert einer bereits validierten Anschaffung.
+fn scaled(d: rust_decimal::Decimal, scale: u32) -> i64 {
+    use rust_decimal::prelude::ToPrimitive;
+    d.checked_mul(rust_decimal::Decimal::from(10_i64.pow(scale)))
+        .and_then(|v| v.trunc().to_i64())
+        .expect("validated acquisition fits fixed-point storage")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ids::{HouseholdId, ReadingId};
     use std::io::Cursor;
+
+    // @test SPEC_BACKUP_FORMAT, SPEC_CAR_MILEAGE_UI
+    #[test]
+    fn v1_acquisition_and_archive_remain_readable() {
+        let record: AcquisitionRecord = serde_json::from_value(serde_json::json!({
+            "vehicle_id": Uuid::nil(),
+            "purchased_on": "2025-01-01",
+            "price_micro": 30_000_000_000_i64,
+            "residual_micro": 5_000_000_000_i64,
+            "planned_end_on": "2030-01-01",
+            "sold_on": null,
+            "sale_price_micro": null
+        }))
+        .unwrap();
+        let holding = record.to_holding().unwrap();
+        assert_eq!(
+            holding.mode,
+            zaehler_domain::vehicle::DepreciationMode::Time
+        );
+        assert_eq!(
+            holding.residual_value,
+            Some(rust_decimal::Decimal::from(5000))
+        );
+        assert_eq!(
+            AcquisitionRecord::from_holding(Uuid::nil(), &holding),
+            record
+        );
+        let mut data = BackupData::default();
+        data.acquisitions.push(record);
+        let raw = archive(&data, &[], |m| m.format_version = 1);
+        let mut reader = ArchiveReader::open(Cursor::new(raw)).unwrap();
+        assert_eq!(reader.data().unwrap(), data);
+    }
 
     fn manifest() -> Manifest {
         Manifest {

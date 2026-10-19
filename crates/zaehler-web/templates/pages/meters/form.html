@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/meters", ctx.lang.t("nav-meters")) %}{% endcall %}{% if form.is_new %}{% call bc::here(ctx.lang.t("meters-new")) %}{% endcall %}{% else %}{% call bc::crumb("/meters/{}"|format(form.meter_id), form.name) %}{% endcall %}{% call bc::here(ctx.lang.t("meters-edit")) %}{% endcall %}{% endif %}{% endblock %}
 
 {% block content %}
 <h1>{% if form.is_new %}{{ ctx.lang.t("meters-new") }}{% else %}{{ ctx.lang.t("meters-edit") }}{% endif %}</h1>

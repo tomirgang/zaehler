@@ -61,6 +61,7 @@ fn cost(asset: AssetRef, doc: Option<DocumentId>) -> AssetCost {
         category: AssetCategory::Vehicle(VehicleCostCategory::Insurance),
         amount: Decimal::new(48_000, 2),
         quantity: None,
+        unit_price: None,
         odometer: Some(Decimal::from(12_345)),
         full_tank: None,
         recurrence: Some(Recurrence {
@@ -105,13 +106,18 @@ pub(super) async fn vehicles(f: &dyn UnitOfWorkFactory) {
             kwh_per_100km: Decimal::new(18_500, 3),
             charging_loss_pct: Decimal::from(10),
             electric_share_pct: Some(Decimal::from(60)),
+            energy: zaehler_domain::vehicle::ProfileEnergy::Electric,
         },
     };
     let holding = Holding {
         purchased_on: day(1, 1),
         price: Decimal::new(3_000_000, 2),
-        residual_value: Decimal::from(10_000),
-        planned_end: NaiveDate::from_ymd_opt(2031, 1, 1).unwrap_or_default(),
+        mode: zaehler_domain::vehicle::DepreciationMode::Mileage,
+        residual_value: Some(Decimal::from(10_000)),
+        planned_end: NaiveDate::from_ymd_opt(2031, 1, 1),
+        odometer_at_purchase: Some(Decimal::from(12_000)),
+        lifetime_km: Some(Decimal::from(250_000)),
+        end_value: Some(Decimal::from(1_500)),
         sold_on: None,
         sale_price: None,
     };

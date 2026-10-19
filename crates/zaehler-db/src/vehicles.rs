@@ -52,6 +52,21 @@ fn charging_from(c: charging_session::Model) -> PortResult<ChargingSession> {
     })
 }
 
+fn holding_from(a: &vehicle_acquisition::Model) -> PortResult<Holding> {
+    Ok(Holding {
+        purchased_on: a.purchased_on,
+        price: fixed::money_from_db(a.price_micro),
+        mode: a.depreciation_mode.parse().map_err(data_err)?,
+        residual_value: a.residual_micro.map(fixed::money_from_db),
+        planned_end: a.planned_end_on,
+        odometer_at_purchase: a.odometer_at_purchase_milli.map(fixed::quantity_from_db),
+        lifetime_km: a.lifetime_km_milli.map(fixed::quantity_from_db),
+        end_value: a.end_value_micro.map(fixed::money_from_db),
+        sold_on: a.sold_on,
+        sale_price: a.sale_price_micro.map(fixed::money_from_db),
+    })
+}
+
 fn cost_from(c: asset_cost::Model) -> PortResult<AssetCost> {
     let asset_type = c.asset_type.parse().map_err(data_err)?;
     Ok(AssetCost {
@@ -65,6 +80,7 @@ fn cost_from(c: asset_cost::Model) -> PortResult<AssetCost> {
             .ok_or_else(|| data_err("asset_costs.category"))?,
         amount: fixed::money_from_db(c.amount_micro),
         quantity: c.quantity_milli.map(fixed::quantity_from_db),
+        unit_price: c.unit_price_micro.map(fixed::money_from_db),
         odometer: c.odometer_milli.map(fixed::quantity_from_db),
         full_tank: c.full_tank,
         recurrence: c
@@ -91,6 +107,7 @@ fn cost_model(household: Uuid, c: &AssetCost) -> PortResult<asset_cost::ActiveMo
         category: Set(c.category.as_str().to_owned()),
         amount_micro: Set(money(c.amount)?),
         quantity_milli: Set(c.quantity.map(quantity).transpose()?),
+        unit_price_micro: Set(c.unit_price.map(money).transpose()?),
         odometer_milli: Set(c.odometer.map(quantity).transpose()?),
         full_tank: Set(c.full_tank),
         recurrence_months: Set(c.recurrence.map(|r| i16::from(r.every_months))),
@@ -159,31 +176,28 @@ impl SeaOrmUow {
                     profiles: profiles
                         .iter()
                         .filter(|p| p.vehicle_id == v.meter_id)
-                        .map(|p| ProfileRow {
-                            id: ProfileId(p.id),
-                            profile: ConsumptionProfile {
-                                valid_from: p.valid_from,
-                                kwh_per_100km: fixed::quantity_from_db(p.kwh_per_100km_milli),
-                                charging_loss_pct: fixed::quantity_from_db(
-                                    p.charging_loss_pct_milli,
-                                ),
-                                electric_share_pct: p
-                                    .electric_share_pct_milli
-                                    .map(fixed::quantity_from_db),
-                            },
+                        .map(|p| {
+                            Ok(ProfileRow {
+                                id: ProfileId(p.id),
+                                profile: ConsumptionProfile {
+                                    valid_from: p.valid_from,
+                                    kwh_per_100km: fixed::quantity_from_db(p.kwh_per_100km_milli),
+                                    charging_loss_pct: fixed::quantity_from_db(
+                                        p.charging_loss_pct_milli,
+                                    ),
+                                    electric_share_pct: p
+                                        .electric_share_pct_milli
+                                        .map(fixed::quantity_from_db),
+                                    energy: p.energy.parse().map_err(data_err)?,
+                                },
+                            })
                         })
-                        .collect(),
+                        .collect::<PortResult<_>>()?,
                     holding: acquisitions
                         .iter()
                         .find(|a| a.vehicle_id == v.meter_id)
-                        .map(|a| Holding {
-                            purchased_on: a.purchased_on,
-                            price: fixed::money_from_db(a.price_micro),
-                            residual_value: fixed::money_from_db(a.residual_micro),
-                            planned_end: a.planned_end_on,
-                            sold_on: a.sold_on,
-                            sale_price: a.sale_price_micro.map(fixed::money_from_db),
-                        }),
+                        .map(holding_from)
+                        .transpose()?,
                 })
             })
             .collect()
@@ -245,6 +259,7 @@ impl VehicleRepository for SeaOrmUow {
             kwh_per_100km_milli: Set(quantity(x.kwh_per_100km)?),
             charging_loss_pct_milli: Set(quantity(x.charging_loss_pct)?),
             electric_share_pct_milli: Set(x.electric_share_pct.map(quantity).transpose()?),
+            energy: Set(x.energy.as_str().to_owned()),
         })
         .exec_without_returning(&self.txn)
         .await
@@ -289,10 +304,14 @@ impl VehicleRepository for SeaOrmUow {
             vehicle_id: Set(id.0),
             purchased_on: Set(h.purchased_on),
             price_micro: Set(money(h.price)?),
-            residual_micro: Set(money(h.residual_value)?),
+            residual_micro: Set(h.residual_value.map(money).transpose()?),
             planned_end_on: Set(h.planned_end),
             sold_on: Set(h.sold_on),
             sale_price_micro: Set(h.sale_price.map(money).transpose()?),
+            depreciation_mode: Set(h.mode.as_str().to_owned()),
+            odometer_at_purchase_milli: Set(h.odometer_at_purchase.map(quantity).transpose()?),
+            lifetime_km_milli: Set(h.lifetime_km.map(quantity).transpose()?),
+            end_value_micro: Set(h.end_value.map(money).transpose()?),
         })
         .exec_without_returning(&self.txn)
         .await

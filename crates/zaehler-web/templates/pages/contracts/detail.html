@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/meters", ctx.lang.t("nav-meters")) %}{% endcall %}{% call bc::crumb("/meters/{}"|format(meter_id), meter_name) %}{% endcall %}{% call bc::here(provider) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <div class="page-head">
@@ -240,7 +242,7 @@
       {% for r in settlements %}
       <tr>
         <td>{{ r.cells[0] }}</td>
-        <td class="num">{{ r.cells[1] }}{% if !r.cells[2].is_empty() %} <a href="/documents/{{ r.cells[2] }}/file">{{ ctx.lang.t("document-receipt") }}</a>{% endif %}</td>
+        <td class="num">{{ r.cells[1] }}{% if !r.cells[2].is_empty() %} <a href="/documents/{{ r.cells[2] }}/view?back={{ "/contracts/{}"|format(id)|urlencode }}">{{ ctx.lang.t("document-receipt") }}</a>{% endif %}</td>
         {% if ctx.can_write %}
         <td>
           <form method="post" action="/contracts/{{ id }}/settlements/{{ r.id }}/delete" class="inline" hx-confirm="{{ ctx.lang.t("entry-delete-confirm") }}">

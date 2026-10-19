@@ -27,6 +27,7 @@ pub mod meter;
 pub mod notify;
 pub mod pv;
 pub mod reading;
+pub mod setup;
 mod validate;
 pub mod vehicle;
 pub mod vehicle_report;
@@ -53,6 +54,8 @@ mod notify_tests;
 mod pv_tests;
 #[cfg(test)]
 mod reading_tests;
+#[cfg(test)]
+mod setup_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -154,6 +157,12 @@ pub struct UseCases {
     pub confirm_draft: capture::ConfirmDraft,
     pub discard_draft: capture::DiscardDraft,
     pub get_draft_photo: capture::GetDraftPhoto,
+    pub start_setup: setup::StartSetup,
+    pub get_setup_draft: setup::GetSetupDraft,
+    pub save_setup_draft: setup::SaveSetupDraft,
+    pub discard_setup: setup::DiscardSetup,
+    pub analyse_setup_photo: setup::AnalyseSetupPhoto,
+    pub complete_setup: setup::CompleteSetup,
     pub meter_analysis: analysis::MeterAnalysis,
     pub meter_chart_data: analysis::MeterChartData,
     pub dashboard: analysis::Dashboard,
@@ -262,6 +271,12 @@ impl UseCases {
             confirm_draft: capture::ConfirmDraft::new(p.clone()),
             discard_draft: capture::DiscardDraft::new(p.clone()),
             get_draft_photo: capture::GetDraftPhoto::new(p.clone()),
+            start_setup: setup::StartSetup::new(p.clone()),
+            get_setup_draft: setup::GetSetupDraft::new(p.clone()),
+            save_setup_draft: setup::SaveSetupDraft::new(p.clone()),
+            discard_setup: setup::DiscardSetup::new(p.clone()),
+            analyse_setup_photo: setup::AnalyseSetupPhoto::new(p.clone()),
+            complete_setup: setup::CompleteSetup::new(p.clone()),
             meter_analysis: analysis::MeterAnalysis::new(p.clone()),
             meter_chart_data: analysis::MeterChartData::new(p.clone()),
             dashboard: analysis::Dashboard::new(p.clone()),

@@ -1,0 +1,79 @@
+{% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/setup", ctx.lang.t("setup-title")) %}{% endcall %}{% call bc::here(title) %}{% endcall %}{% endblock %}
+
+{% block content %}
+<h1>{{ title }}</h1>
+<p class="muted">{{ progress }}</p>
+{% if let Some(notice) = notice %}<p class="callout" role="status">{{ notice }}</p>{% endif %}
+
+{% if step == "summary" %}
+{% if !errors.is_empty() %}
+<div class="callout error" role="alert">
+  <p>{{ ctx.lang.t("setup-completion-errors") }}</p>
+  <ul>{% for error in errors %}<li><strong>{{ error.step }}:</strong> {{ error.message }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+<p>{{ ctx.lang.t("setup-summary-intro") }}</p>
+<ul>{% for key in enabled_steps %}<li>{{ ctx.lang.t(&format!("setup-step-{key}")) }}</li>{% endfor %}</ul>
+<div class="actions">
+  <form method="post" action="/setup/complete">
+    <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+    <button type="submit">{{ ctx.lang.t("setup-complete") }}</button>
+  </form>
+  <a class="button secondary" href="/setup/contracts">{{ ctx.lang.t("setup-back") }}</a>
+</div>
+{% else %}
+<form method="post" action="/setup/{{ step }}" class="form" novalidate>
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  {% if step == "grid" %}
+  <input type="hidden" name="enabled" value="true">
+  {% else %}
+  <div class="field">
+    <label><input type="checkbox" name="enabled" value="true"{% if selected %} checked{% endif %}> {{ ctx.lang.t("setup-enable-step") }}</label>
+  </div>
+  {% endif %}
+  {% for field in fields %}
+  <div class="field">
+    <label for="{{ field.name }}">{{ ctx.lang.t(&format!("setup-field-{}", field.name)) }}</label>
+    {% if field.input_type == "checkbox" %}
+    <input id="{{ field.name }}" name="{{ field.name }}" type="checkbox" value="true"{% if field.value == "true" %} checked{% endif %}>
+    {% else if field.input_type == "select" %}
+    <select id="{{ field.name }}" name="{{ field.name }}">
+      {% for option in field.options %}<option value="{{ option.value }}"{% if option.value == field.value %} selected{% endif %}>{{ option.label }}</option>{% endfor %}
+    </select>
+    {% else %}
+    <input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.input_type }}" value="{{ field.value }}">
+    {% endif %}
+  </div>
+  {% endfor %}
+  <div class="actions">
+    <button type="submit" name="action" value="next">{{ ctx.lang.t("setup-next") }}</button>
+    {% if index > 1 %}<button class="secondary" type="submit" name="action" value="back">{{ ctx.lang.t("setup-back") }}</button>{% endif %}
+    {% if step != "grid" %}<button class="secondary" type="submit" name="action" value="skip">{{ ctx.lang.t("setup-skip") }}</button>{% endif %}
+  </div>
+</form>
+
+{% for slot in photos %}
+<form method="post" action="/setup/photo" enctype="multipart/form-data" class="form">
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <input type="hidden" name="object_key" value="{{ slot.key }}">
+  <input type="hidden" name="return_step" value="{{ step }}">
+  <div class="field">
+    <label for="setup-photo-{{ slot.key }}">{{ slot.label }}</label>
+    <input id="setup-photo-{{ slot.key }}" name="photo" type="file" accept="image/jpeg,image/png,image/webp" required>
+  </div>
+  {% if slot.saved %}
+  <p class="callout">{{ ctx.lang.t("setup-photo-saved") }}</p>
+  {% if let Some(confidence) = slot.confidence %}<p class="muted">{{ ctx.lang.t("setup-photo-confidence") }}: {{ confidence }}</p>{% endif %}
+  {% endif %}
+  <button type="submit">{{ ctx.lang.t("setup-photo-upload") }}</button>
+</form>
+{% endfor %}
+{% endif %}
+
+<form method="post" action="/setup/discard">
+  <input type="hidden" name="_csrf" value="{{ ctx.csrf }}">
+  <button class="secondary" type="submit">{{ ctx.lang.t("setup-discard") }}</button>
+</form>
+{% endblock %}

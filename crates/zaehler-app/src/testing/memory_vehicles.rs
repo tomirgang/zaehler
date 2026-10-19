@@ -69,18 +69,12 @@ pub(super) fn export(s: &State, data: &mut BackupData) {
                 kwh_per_100km_milli: scaled(p.profile.kwh_per_100km, 3),
                 charging_loss_pct_milli: scaled(p.profile.charging_loss_pct, 3),
                 electric_share_pct_milli: p.profile.electric_share_pct.map(|x| scaled(x, 3)),
+                energy: p.profile.energy.as_str().into(),
             });
         }
         if let Some(h) = &v.holding {
-            data.acquisitions.push(AcquisitionRecord {
-                vehicle_id: v.meter_id.0,
-                purchased_on: h.purchased_on,
-                price_micro: scaled(h.price, 6),
-                residual_micro: scaled(h.residual_value, 6),
-                planned_end_on: h.planned_end,
-                sold_on: h.sold_on,
-                sale_price_micro: h.sale_price.map(|p| scaled(p, 6)),
-            });
+            data.acquisitions
+                .push(AcquisitionRecord::from_holding(v.meter_id.0, h));
         }
     }
     for c in &s.charging {
@@ -107,6 +101,7 @@ pub(super) fn export(s: &State, data: &mut BackupData) {
             category: c.category.as_str().into(),
             amount_micro: scaled(c.amount, 6),
             quantity_milli: c.quantity.map(|q| scaled(q, 3)),
+            unit_price_micro: c.unit_price.map(|p| scaled(p, 6)),
             odometer_milli: c.odometer.map(|o| scaled(o, 3)),
             full_tank: c.full_tank,
             recurrence_months: c.recurrence.map(|r| i16::from(r.every_months)),
@@ -130,6 +125,7 @@ pub(super) fn import(s: &mut State, d: &BackupData) -> PortResult<()> {
                     kwh_per_100km: Decimal::new(p.kwh_per_100km_milli, 3),
                     charging_loss_pct: Decimal::new(p.charging_loss_pct_milli, 3),
                     electric_share_pct: p.electric_share_pct_milli.map(|x| Decimal::new(x, 3)),
+                    energy: p.energy.parse().unwrap_or_default(),
                 },
             })
             .collect();
@@ -138,14 +134,9 @@ pub(super) fn import(s: &mut State, d: &BackupData) -> PortResult<()> {
             .acquisitions
             .iter()
             .find(|a| a.vehicle_id == v.meter_id)
-            .map(|a| Holding {
-                purchased_on: a.purchased_on,
-                price: Decimal::new(a.price_micro, 6),
-                residual_value: Decimal::new(a.residual_micro, 6),
-                planned_end: a.planned_end_on,
-                sold_on: a.sold_on,
-                sale_price: a.sale_price_micro.map(|p| Decimal::new(p, 6)),
-            });
+            .map(AcquisitionRecord::to_holding)
+            .transpose()
+            .map_err(invalid)?;
         s.vehicles.push(Vehicle {
             meter_id: MeterId(v.meter_id),
             data: VehicleData {
@@ -188,6 +179,7 @@ pub(super) fn import(s: &mut State, d: &BackupData) -> PortResult<()> {
                     .ok_or(PortError::Invalid("backup.invalid"))?,
                 amount: Decimal::new(c.amount_micro, 6),
                 quantity: c.quantity_milli.map(|q| Decimal::new(q, 3)),
+                unit_price: c.unit_price_micro.map(|p| Decimal::new(p, 6)),
                 odometer: c.odometer_milli.map(|o| Decimal::new(o, 3)),
                 full_tank: c.full_tank,
                 recurrence: c

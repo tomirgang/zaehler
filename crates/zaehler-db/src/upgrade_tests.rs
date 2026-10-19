@@ -620,6 +620,7 @@ fn vehicles_fixture(data: &mut BackupData) {
         vehicle_id: id(50),
         valid_from: day(1, 1),
         kwh_per_100km_milli: 18_750,
+        energy: "electric".into(),
         charging_loss_pct_milli: 10_000,
         electric_share_pct_milli: Some(60_000),
     });
@@ -627,8 +628,12 @@ fn vehicles_fixture(data: &mut BackupData) {
         vehicle_id: id(50),
         purchased_on: day(1, 15),
         price_micro: 32_990_000_000,
-        residual_micro: 12_000_000_000,
-        planned_end_on: chrono::NaiveDate::from_ymd_opt(2032, 1, 15).unwrap(),
+        residual_micro: Some(12_000_000_000),
+        planned_end_on: chrono::NaiveDate::from_ymd_opt(2032, 1, 15),
+        depreciation_mode: "time".into(),
+        odometer_at_purchase_milli: None,
+        lifetime_km_milli: None,
+        end_value_micro: None,
         sold_on: None,
         sale_price_micro: None,
     });
@@ -652,6 +657,7 @@ fn vehicles_fixture(data: &mut BackupData) {
         booked_on: day(2, 1),
         category: "insurance".into(),
         amount_micro: 612_400_000,
+        unit_price_micro: None,
         quantity_milli: None,
         odometer_milli: None,
         full_tank: None,
@@ -668,6 +674,7 @@ fn vehicles_fixture(data: &mut BackupData) {
         booked_on: day(3, 2),
         category: "fuel".into(),
         amount_micro: 71_230_000,
+        unit_price_micro: Some(1_732_000),
         quantity_milli: Some(41_120),
         odometer_milli: Some(12_800_000),
         full_tank: Some(true),
@@ -718,6 +725,7 @@ fn pv_fixture(data: &mut BackupData) {
         booked_on: chrono::NaiveDate::from_ymd_opt(2025, 4, 10).unwrap(),
         category: "investment".into(),
         amount_micro: 14_500_000_000,
+        unit_price_micro: None,
         quantity_milli: None,
         odometer_milli: None,
         full_tank: None,
@@ -759,4 +767,156 @@ fn api_fixture(data: &mut BackupData) {
         updated_at: None,
         api_token_id: Some(id(63)),
     });
+}
+
+// @test SPEC_CAR_MILEAGE_UI, SPEC_CAR_FUEL_PRICE_UI, SPEC_OPS_UPGRADE
+#[tokio::test]
+async fn upgrade_v1_vehicle_acquisition_preserves_time_values() {
+    let (db, dir) = temp_db().await;
+    Migrator::up(&db, Some(15)).await.unwrap();
+    insert_core(&db).await;
+    assert_acquisition_upgrade(&db).await;
+    db.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+async fn insert_values(db: &DatabaseConnection, table: &str, columns: &[&str], values: Vec<Value>) {
+    use sea_orm::sea_query::{Alias, Query};
+    let mut insert = Query::insert();
+    insert
+        .into_table(Alias::new(table))
+        .columns(columns.iter().map(|name| Alias::new(*name)))
+        .values_panic(values.into_iter().map(Into::into));
+    db.execute_raw(db.get_database_backend().build(&insert))
+        .await
+        .unwrap();
+}
+
+async fn assert_acquisition_upgrade(db: &DatabaseConnection) {
+    use sea_orm::sea_query::{Alias, Expr, ExprTrait, Query};
+    let backend = db.get_database_backend();
+    insert_values(
+        db,
+        "vehicles",
+        &["meter_id", "plate", "model", "drive_type"],
+        vec![id(3).into(), "".into(), "".into(), "combustion".into()],
+    )
+    .await;
+    insert_values(
+        db,
+        "vehicle_acquisitions",
+        &[
+            "vehicle_id",
+            "purchased_on",
+            "price_micro",
+            "residual_micro",
+            "planned_end_on",
+        ],
+        vec![
+            id(3).into(),
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap().into(),
+            30_000_000_000_i64.into(),
+            5_000_000_000_i64.into(),
+            chrono::NaiveDate::from_ymd_opt(2030, 1, 1).unwrap().into(),
+        ],
+    )
+    .await;
+    let store = SeaOrmStore::new(db.clone());
+    let before = store.export().await.unwrap();
+    assert_eq!(before.acquisitions[0].depreciation_mode, "time");
+    migrate(db).await.unwrap();
+    assert_eq!(store.export().await.unwrap(), before);
+    let mut update = Query::update();
+    update
+        .table(Alias::new("vehicle_acquisitions"))
+        .value(Alias::new("depreciation_mode"), "mileage")
+        .value(Alias::new("residual_micro"), Option::<i64>::None)
+        .value(
+            Alias::new("planned_end_on"),
+            Option::<chrono::NaiveDate>::None,
+        )
+        .value(Alias::new("odometer_at_purchase_milli"), 20_000_000_i64)
+        .value(Alias::new("lifetime_km_milli"), 220_000_000_i64)
+        .and_where(Expr::col(Alias::new("vehicle_id")).eq(id(3)));
+    db.execute_raw(backend.build(&update)).await.unwrap();
+    let after = store.export().await.unwrap();
+    assert_eq!(after.acquisitions[0].residual_micro, None);
+    assert_eq!(after.acquisitions[0].planned_end_on, None);
+    assert_eq!(
+        after.acquisitions[0].to_holding().unwrap().lifetime_km,
+        Some(rust_decimal::Decimal::from(220_000))
+    );
+}
+
+// @test SPEC_CAR_MILEAGE_UI, SPEC_OPS_UPGRADE
+#[tokio::test]
+#[ignore = "benötigt eine leere PostgreSQL-Datenbank in ZAEHLER_TEST_UPGRADE_DATABASE_URL"]
+async fn upgrade_v1_vehicle_acquisition_postgres() {
+    let url =
+        std::env::var("ZAEHLER_TEST_UPGRADE_DATABASE_URL").expect("Upgrade-Testdatenbank fehlt");
+    let db = connect(&url, 1).await.unwrap();
+    assert_eq!(db.get_database_backend(), DbBackend::Postgres);
+    assert!(
+        schema_status(&db).await.unwrap().applied.is_empty(),
+        "Upgrade-Test benötigt eine leere Datenbank"
+    );
+    Migrator::up(&db, Some(15)).await.unwrap();
+    insert_values(
+        &db,
+        "users",
+        &[
+            "id",
+            "oidc_issuer",
+            "oidc_subject",
+            "display_name",
+            "locale",
+            "created_at",
+        ],
+        vec![
+            id(1).into(),
+            "dev".into(),
+            "anna".into(),
+            "Anna".into(),
+            "de".into(),
+            at(1, 1).into(),
+        ],
+    )
+    .await;
+    insert_values(
+        &db,
+        "households",
+        &["id", "name", "timezone", "created_at"],
+        vec![
+            id(2).into(),
+            "Haus".into(),
+            "Europe/Berlin".into(),
+            at(1, 2).into(),
+        ],
+    )
+    .await;
+    insert_values(
+        &db,
+        "meters",
+        &[
+            "id",
+            "household_id",
+            "name",
+            "kind",
+            "unit",
+            "archived",
+            "created_at",
+        ],
+        vec![
+            id(3).into(),
+            id(2).into(),
+            "Auto".into(),
+            "vehicle".into(),
+            "km".into(),
+            false.into(),
+            at(1, 3).into(),
+        ],
+    )
+    .await;
+    assert_acquisition_upgrade(&db).await;
+    db.close().await.unwrap();
 }

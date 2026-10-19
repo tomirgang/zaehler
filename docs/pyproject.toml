@@ -1,6 +1,6 @@
 [project]
 name = "zaehler-docs"
-version = "0.1.0"
+version = "1.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "furo>=2025.12.19",

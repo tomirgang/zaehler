@@ -21,7 +21,12 @@
   <a class="skip-link" href="#main">{{ ctx.lang.t("skip-to-content") }}</a>
   <header class="topbar">
     <a class="brand" href="/">{{ ctx.lang.t("app-name") }}</a>
-    <nav>
+    {# Menü auf kleinen Bildschirmen (SPEC_UI_MENU); ohne JavaScript ausgeblendet #}
+    <button type="button" class="menu-toggle secondary" aria-controls="topnav" aria-expanded="false">
+      <span aria-hidden="true">&#9776;</span> {{ ctx.lang.t("nav-menu") }}
+    </button>
+    <div id="topnav" class="topnav">
+    <nav aria-label="{{ ctx.lang.t("nav-label") }}">
       <a href="/">{{ ctx.lang.t("nav-overview") }}</a>
       <a href="/meters">{{ ctx.lang.t("nav-meters") }}</a>
       {% if ctx.has_contracts %}<a href="/costs">{{ ctx.lang.t("nav-costs") }}</a>{% endif %}
@@ -55,8 +60,10 @@
         <button type="submit" class="link">{{ ctx.lang.t("nav-logout") }}</button>
       </form>
     </div>
+    </div>
   </header>
   <main id="main" class="container">
+    {% block breadcrumb %}{% endblock %}
     {% if let Some(f) = ctx.flash %}<p class="flash" role="status">{{ ctx.lang.t(f) }}</p>{% endif %}
     {% block content %}{% endblock %}
   </main>

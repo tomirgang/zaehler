@@ -154,6 +154,7 @@ pub struct MeterRow {
 struct ListPage {
     ctx: PageCtx,
     meters: Vec<MeterRow>,
+    setup_has_draft: bool,
     /// Liste der archivierten statt der aktiven Messstellen
     show_archived: bool,
     archived_count: usize,
@@ -548,6 +549,17 @@ pub async fn list(
         .await
         .map_err(|e| ctx.fail(e))?;
     let lang = ctx.page.lang;
+    let setup_has_draft = if ctx.page.is_owner {
+        state
+            .uc
+            .get_setup_draft
+            .execute(&ctx.tenant)
+            .await
+            .map_err(|e| ctx.fail(e))?
+            .is_some()
+    } else {
+        false
+    };
     let archived_count = meters.iter().filter(|m| m.meter.archived).count();
     let rows = meters
         .into_iter()
@@ -569,6 +581,7 @@ pub async fn list(
         ),
         ctx: ctx.page,
         meters: rows,
+        setup_has_draft,
         show_archived: q.archived,
         archived_count,
     }))

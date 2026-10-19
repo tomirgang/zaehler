@@ -51,6 +51,19 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
 
     let app = Router::new()
         .route("/", get(pages::dashboard::show))
+        .route("/setup", get(pages::setup::start))
+        .route(
+            "/setup/{step}",
+            get(pages::setup::step).post(pages::setup::save_step),
+        )
+        .route(
+            "/setup/photo",
+            post(pages::setup::photo).layer(DefaultBodyLimit::max(
+                state.cfg.max_photo_bytes.saturating_add(64 * 1024),
+            )),
+        )
+        .route("/setup/complete", post(pages::setup::complete))
+        .route("/setup/discard", post(pages::setup::discard))
         .route(
             "/meters",
             get(pages::meters::list).post(pages::meters::create),
@@ -166,6 +179,7 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
         )
         .route("/documents/{id}", get(pages::documents::show))
         .route("/documents/{id}/file", get(pages::documents::file))
+        .route("/documents/{id}/view", get(pages::photos::document))
         .route("/documents/{id}/confirm", post(pages::documents::confirm))
         .route("/documents/{id}/receipt", post(pages::receipts::confirm))
         .route("/documents/{id}/analyse", post(pages::documents::analyse))
@@ -197,6 +211,7 @@ pub fn router<S: SessionStore + Clone>(state: WebState, store: S) -> Router {
             post(pages::contracts::delete_entry),
         )
         .route("/readings/{id}/photo", get(pages::readings::photo))
+        .route("/readings/{id}/photo/view", get(pages::photos::reading))
         .route(
             "/capture",
             get(pages::capture::upload_form)

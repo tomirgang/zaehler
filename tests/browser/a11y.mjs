@@ -9,7 +9,7 @@
 // sonst der von Playwright), A11Y_REPORT (JSON-Bericht, optional).
 // @test SPEC_A11Y
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { chromium } from "playwright";
 import { AxeBuilder } from "@axe-core/playwright";
 
@@ -92,6 +92,47 @@ async function readings(token, meter, perMonth) {
   }
 }
 
+async function seedSetup(token) {
+  const opened = await api.get(`${base}/setup`);
+  if (!opened.ok()) throw new Error(`Setup: HTTP ${opened.status()}`);
+  const steps = [
+    ["grid", { name: "Setup Hausstrom", register: "1.8.0", start_value: "100", has_export: "true", export_start: "20" }],
+    ["heat_pump", { mode: "own", name: "Setup Wärmepumpe", register: "main", start_value: "10" }],
+    ["pv", {
+      system_name: "Setup PV", kind: "surplus", kwp: "9.84", commissioned_on: "2025-01-01",
+      generation_name: "Setup Erzeugung", generation_register: "2.8.0", generation_start: "200",
+      battery_name: "Setup Speicher", battery_charge: "10", battery_discharge: "8",
+    }],
+    ["vehicle", {
+      name: "Setup E-Auto", model: "Kombi", drive_type: "electric", odometer: "10000",
+      wallbox_name: "Setup Wallbox", wallbox_start: "12",
+      acquisition_date: "2025-01-01", acquisition_price: "30000",
+      acquisition_mode: "mileage", acquisition_odometer: "10000",
+      acquisition_lifetime_km: "220000", acquisition_end_value: "0",
+    }],
+    ["media", { name: "Setup Wasser", kind: "water", unit: "m³", register: "main", start_value: "25" }],
+    ["contracts", {
+      provider: "Setup Stadtwerke", meter: "grid", second_meter: "heat_pump", direction: "import", starts_on: "2025-01-01",
+      position_name: "Strom", base_price: "120", unit_price: "0.32",
+    }],
+  ];
+  for (const [step, fields] of steps) {
+    await post(`/setup/${step}`, { _csrf: token, action: "next", enabled: "true", ...fields });
+  }
+  const uploaded = await api.post(`${base}/setup/photo`, {
+    maxRedirects: 0,
+    multipart: {
+      _csrf: token, object_key: "grid", return_step: "grid",
+      photo: {
+        name: "zaehler.png", mimeType: "image/png",
+        buffer: readFileSync(new URL("../../crates/zaehler-web/static/icon-192.png", import.meta.url)),
+      },
+    },
+  });
+  if (uploaded.status() !== 303) throw new Error(`Setupfoto: HTTP ${uploaded.status()}`);
+  return steps.map(([step]) => `/setup/${step}`).concat("/setup/summary");
+}
+
 async function seed() {
   const login = await api.get(`${base}/auth/dev-login?name=a11y-${Date.now()}`, { maxRedirects: 0 });
   if (login.status() !== 303) throw new Error(`Login: HTTP ${login.status()}`);
@@ -112,10 +153,19 @@ async function seed() {
     pos0_c0_factor: "", action: "save",
   };
   await post(`${grid}/contracts/new`, contract);
-  await post("/vehicles/new", {
+  const car = await post("/vehicles/new", {
     _csrf: token, name: "Familienauto", plate: "M-ZA 1", model: "Kombi",
     drive_type: "combustion", home_charging_meter_id: "", pv_share_pct: "",
     odometer: "10000", start_at: "2025-01-01",
+  });
+  await post(`${car}/costs`, {
+    _csrf: token, booked_on: "2025-03-01", category: "fuel",
+    quantity: "45,32", unit_price: "1,789",
+  });
+  await post(`${car}/acquisition`, {
+    _csrf: token, purchased_on: "2025-01-01", price: "30000",
+    depreciation_mode: "mileage", odometer_at_purchase: "10000",
+    lifetime_km: "220000", end_value: "0",
   });
   await post("/pv/new", {
     _csrf: token, name: "Dach Süd", kind: "surplus", kwp: "9,84",
@@ -125,32 +175,91 @@ async function seed() {
     [`gen_${pvMeter.replace("/meters/", "")}`]: "1",
   });
   await post("/settings/tokens", { _csrf: token, name: "Home Assistant", role: "member", expires_on: "" });
-  return { grid, water };
+  const uploaded = await api.post(`${base}/documents`, {
+    maxRedirects: 0,
+    multipart: {
+      _csrf: token, kind: "receipt",
+      file: {
+        name: "beleg.png", mimeType: "image/png",
+        buffer: readFileSync(new URL("../../crates/zaehler-web/static/icon-192.png", import.meta.url)),
+      },
+    },
+  });
+  if (uploaded.status() !== 303) {
+    throw new Error(`Fotobeleg: HTTP ${uploaded.status()}\n${(await uploaded.text()).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 1800)}`);
+  }
+  const document = uploaded.headers()["location"];
+  if (!document?.startsWith("/documents/")) throw new Error("Fotobeleg ohne Weiterleitung");
+  const setup = await seedSetup(token);
+  return { grid, water, photo: `${document}/view?back=/documents`, setup };
 }
 
-const { grid, water } = await seed();
+const { grid, water, photo, setup } = await seed();
 const start = [
   "/", "/meters", "/meters/new", grid, `${grid}/edit`, `${grid}/readings/new`,
   `${grid}/history`, `${grid}/swap`, `${grid}/costs`,
   `${grid}/contracts/new?template=electricity`, water, "/costs", "/capture",
   "/import", "/documents", "/vehicles", "/vehicles/new", "/pv",
   "/pv/new", "/settings", "/settings/members", "/settings/notifications",
-  "/settings/tokens",
+  "/settings/tokens", "/setup", photo, ...setup,
 ];
 
-const seen = new Set();
-const queue = [...start];
 const results = [];
 let failed = 0;
-while (queue.length > 0 && results.length < 120) {
+for (const width of [360, 1280]) {
+await page.setViewportSize({ width, height: 900 });
+await page.goto(base, { waitUntil: "networkidle" });
+const toggle = page.locator(".menu-toggle");
+if (width === 360) {
+  await toggle.click();
+  if (await toggle.getAttribute("aria-expanded") !== "true") throw new Error("Menü öffnet nicht");
+  await page.keyboard.press("Escape");
+  if (await toggle.getAttribute("aria-expanded") !== "false" || !await toggle.evaluate((el) => el === document.activeElement)) {
+    throw new Error("Escape schließt das Menü nicht mit Fokusrückgabe");
+  }
+  await toggle.press("Enter");
+  if (await toggle.getAttribute("aria-expanded") !== "true") throw new Error("Menü öffnet nicht per Tastatur");
+  await page.locator("main h1").click();
+  if (await toggle.getAttribute("aria-expanded") !== "false") throw new Error("Klick außerhalb schließt Menü nicht");
+  await toggle.click();
+  await page.locator('#topnav a[href="/meters"]').click();
+  await page.waitForURL(`${base}/meters`);
+  if (await toggle.getAttribute("aria-expanded") !== "false") throw new Error("Menü bleibt nach Navigation offen");
+} else if (await toggle.isVisible()) {
+  throw new Error("Menüschaltfläche auf großem Bildschirm sichtbar");
+}
+await page.goto(`${base}${photo}`, { waitUntil: "networkidle" });
+await page.keyboard.press("Escape");
+await page.waitForURL(`${base}/documents`);
+const seen = new Set();
+const queue = [...start];
+let pageCount = 0;
+while (queue.length > 0 && pageCount < 120) {
   const path = queue.shift();
   const pattern = path.replace(UUID, ":id").replace(/\?.*$/, "");
   if (seen.has(pattern) || SKIP.some((r) => r.test(path))) continue;
   seen.add(pattern);
+  pageCount += 1;
   const res = await page.goto(`${base}${path}`, { waitUntil: "networkidle" });
   if (!res || res.status() >= 400) {
-    console.log(`${path}: HTTP ${res?.status()} (übersprungen)`);
+    console.log(`FEHLER ${width}px ${path}: HTTP ${res?.status()}`);
+    failed += 1;
     continue;
+  }
+  if (path !== "/") {
+    const breadcrumb = page.locator("nav.breadcrumb");
+    const valid = await breadcrumb.count() === 1 && await breadcrumb.evaluate((nav) => {
+      const items = Array.from(nav.querySelectorAll("ol > li"));
+      const last = items.at(-1);
+      return items[0]?.querySelector("a")?.getAttribute("href") === "/"
+        && last?.getAttribute("aria-current") === "page" && !last.querySelector("a");
+    });
+    if (!valid) throw new Error(`Breadcrumb fehlt oder ist ungültig: ${path}`);
+    if (width === 360) {
+      const visible = await breadcrumb.locator("li").evaluateAll((items) =>
+        items.filter((item) => getComputedStyle(item).display !== "none").length);
+      if (visible !== 1) throw new Error(`Mobile Breadcrumb zeigt nicht genau den Rücksprung: ${path}`);
+    }
   }
   // Diagramme außerhalb geschlossener <details> sind gezeichnet
   const charts = await page.$$eval(".chart[data-chart]", (nodes) =>
@@ -169,7 +278,14 @@ while (queue.length > 0 && results.length < 120) {
   pageErrors.length = 0;
   const scan = await new AxeBuilder({ page }).withTags(TAGS).analyze();
   const bad = scan.violations.filter((v) => FAIL.has(v.impact));
-  results.push({ path, violations: scan.violations });
+  results.push({ path, width, violations: scan.violations });
+  if (width === 360 && await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) {
+    console.log(`FEHLER ${path}: horizontaler Seiten-Overflow bei 360px`);
+    console.log(await page.evaluate(() => Array.from(document.querySelectorAll("main *"))
+      .filter((el) => el.getBoundingClientRect().right > innerWidth + 1 && !el.closest(".table"))
+      .slice(0, 8).map((el) => `${el.tagName}.${el.className}: ${Math.round(el.getBoundingClientRect().right)}`).join(", ")));
+    failed += 1;
+  }
   for (const v of scan.violations) {
     const mark = FAIL.has(v.impact) ? "FEHLER" : "Hinweis";
     console.log(`${mark} ${path} [${v.impact}] ${v.id}: ${v.help}`);
@@ -183,6 +299,22 @@ while (queue.length > 0 && results.length < 120) {
     if (href && href.startsWith("/") && !href.startsWith("//")) queue.push(href.split("#")[0]);
   }
 }
+}
+
+const noJs = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 360, height: 900 }, storageState: await context.storageState() });
+const noJsPage = await noJs.newPage();
+await noJsPage.goto(base);
+if (!await noJsPage.locator("#topnav").isVisible()) throw new Error("Navigation ohne JavaScript unsichtbar");
+await noJs.close();
+
+const completed = await post("/setup/complete", { _csrf: await csrf() });
+if (completed !== "/") throw new Error(`Setup nicht abgeschlossen: ${completed}`);
+const dashboard = await (await api.get(base)).text();
+for (const name of ["Setup Hausstrom", "Setup Wärmepumpe", "Setup E-Auto", "Setup Wasser"]) {
+  if (!dashboard.includes(name)) throw new Error(`Setup-Objekt fehlt nach Abschluss: ${name}`);
+}
+const pvList = await (await api.get(`${base}/pv`)).text();
+if (!pvList.includes("Setup PV")) throw new Error("Setup-PV fehlt nach Abschluss");
 
 if (process.env.A11Y_REPORT) writeFileSync(process.env.A11Y_REPORT, JSON.stringify(results, null, 2));
 console.log(`${results.length} Seiten geprüft, ${failed} Verstöße serious/critical`);

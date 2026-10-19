@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/vehicles", ctx.lang.t("nav-vehicles")) %}{% endcall %}{% if meter_id.is_some() %}{% call bc::here(ctx.lang.t("vehicle-edit")) %}{% endcall %}{% else %}{% call bc::here(ctx.lang.t("vehicle-new")) %}{% endcall %}{% endif %}{% endblock %}
 
 {% block content %}
 <h1>{% if meter_id.is_some() %}{{ ctx.lang.t("vehicle-edit") }}{% else %}{{ ctx.lang.t("vehicle-new") }}{% endif %}</h1>

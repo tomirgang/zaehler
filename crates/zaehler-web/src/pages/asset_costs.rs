@@ -31,7 +31,7 @@ use crate::{
         FormData,
         contracts::{date, date_input, decimal, money, plain, required_date},
         field_errors, render, render_status, see_other,
-        vehicles::{parse_meter, required_decimal, warning_of},
+        vehicles::{parse_meter, warning_of},
     },
     state::WebState,
 };
@@ -158,6 +158,9 @@ fn row(lang: Lang, c: &AssetCost, in_year: Decimal) -> CostRow {
     if let Some(q) = c.quantity {
         details.push(format!("{} l", format::decimal(lang, q, 2)));
     }
+    if let Some(price) = c.fuel_unit_price() {
+        details.push(format!("{} €/l", format::decimal(lang, price, 3)));
+    }
     if let Some(o) = c.odometer {
         details.push(format!("{} km", format::decimal(lang, o, 0)));
     }
@@ -201,6 +204,7 @@ fn values_of(lang: Lang, c: &AssetCost) -> HashMap<String, String> {
         ("category", c.category.as_str().to_owned()),
         ("amount", plain(lang, c.amount)),
         ("quantity", opt(c.quantity)),
+        ("unit_price", opt(c.fuel_unit_price())),
         ("odometer", opt(c.odometer)),
         (
             "full_tank",
@@ -306,8 +310,9 @@ fn cost_input_for(
         e.add("category", "form.kind_invalid");
         None
     });
-    let amount = required_decimal(e, "amount", form.get("amount"));
+    let amount = decimal(e, "amount", form.get("amount"));
     let quantity = decimal(e, "quantity", form.get("quantity"));
+    let unit_price = decimal(e, "unit_price", form.get("unit_price"));
     let odometer = decimal(e, "odometer", form.get("odometer"));
     let every = parse::integer::<u8>(form.get("recurrence_months")).unwrap_or_else(|_| {
         e.add("recurrence_months", "form.integer_invalid");
@@ -317,8 +322,9 @@ fn cost_input_for(
     Some(AssetCostInput {
         booked_on: booked_on?,
         category: category?,
-        amount: amount?,
+        amount,
         quantity,
+        unit_price,
         odometer,
         full_tank: form.has("full_tank"),
         recurrence: every.map(|every_months| Recurrence {

@@ -11,7 +11,7 @@ kubectl -n zaehler create secret generic zaehler-ai --from-literal=api-key=sk-or
 kubectl -n zaehler create secret generic zaehler-oidc --from-literal=client-secret=…
 
 helm upgrade --install zaehler deploy/helm/zaehler -n zaehler \
-  --set image.repository=git.example.com/owner/zaehler \
+  --set image.repository=code.do9ita.de/tom/zaehler \
   --set publicUrl=https://zaehler.example.com \
   --set ingress.enabled=true --set ingress.hosts[0].host=zaehler.example.com \
   --set oidc.enabled=true,oidc.issuerUrl=https://auth.example.com/realms/home,oidc.existingSecret=zaehler-oidc \

@@ -159,7 +159,7 @@ pub struct Household {
 }
 
 /// Monat und Tag, z.B. Beginn des Abrechnungsjahres.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MonthDay {
     pub month: u8,
     pub day: u8,
@@ -1211,6 +1211,9 @@ pub struct AssetCost {
     pub amount: Decimal,
     /// Menge (l) bei Kraftstoff
     pub quantity: Option<Decimal>,
+    /// Preis pro Liter bei Kraftstoff, wie eingegeben oder berechnet
+    /// (SPEC_CAR_FUEL_PRICE)
+    pub unit_price: Option<Decimal>,
     pub odometer: Option<Decimal>,
     pub full_tank: Option<bool>,
     pub recurrence: Option<zaehler_domain::assets::Recurrence>,
@@ -1219,6 +1222,20 @@ pub struct AssetCost {
 }
 
 impl AssetCost {
+    /// Gespeicherter Literpreis, bei v1-Einträgen aus Betrag und Litern.
+    #[must_use]
+    pub fn fuel_unit_price(&self) -> Option<Decimal> {
+        use zaehler_domain::assets::{AssetCategory, VehicleCostCategory};
+        if self.category != AssetCategory::Vehicle(VehicleCostCategory::Fuel) {
+            return None;
+        }
+        self.unit_price.or_else(|| {
+            self.quantity
+                .filter(|q| *q > Decimal::ZERO)
+                .map(|q| (self.amount / q).round_dp(3))
+        })
+    }
+
     /// Summe der Buchungen im Zeitraum.
     #[must_use]
     pub fn amount_in(&self, period: Period) -> Decimal {
@@ -1268,6 +1285,8 @@ pub struct ReceiptExtraction {
     pub total_amount: Option<Decimal>,
     pub category: Option<zaehler_domain::assets::VehicleCostCategory>,
     pub quantity: Option<Decimal>,
+    #[serde(default)]
+    pub unit_price: Option<Decimal>,
     /// `l` oder `kWh`
     pub unit: Option<String>,
     pub vendor: Option<String>,
@@ -1328,6 +1347,32 @@ pub struct PvSystem {
     pub data: zaehler_domain::pv::PvSystemData,
     /// Messstellen mit Rolle, nach Rolle sortiert
     pub meters: Vec<(MeterId, zaehler_domain::pv::PvRole)>,
+}
+
+/// Persistierter Stand des Setup-Assistenten (SPEC_SETUP_FLOW).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SetupDraft {
+    pub version: u32,
+    pub steps: std::collections::BTreeMap<String, bool>,
+    pub objects: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Normalisierte Setup-Fotos, keyed by their local object key.
+    pub photos: std::collections::BTreeMap<String, String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl SetupDraft {
+    #[must_use]
+    pub fn new(now: DateTime<Utc>) -> Self {
+        Self {
+            version: 1,
+            steps: std::collections::BTreeMap::new(),
+            objects: std::collections::BTreeMap::new(),
+            photos: std::collections::BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
 }
 
 impl PvSystem {

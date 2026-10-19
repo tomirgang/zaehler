@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% if show_archived %}{% call bc::crumb("/meters", ctx.lang.t("nav-meters")) %}{% endcall %}{% call bc::here(ctx.lang.t("meters-archived-title")) %}{% endcall %}{% else %}{% call bc::here(ctx.lang.t("nav-meters")) %}{% endcall %}{% endif %}{% endblock %}
 
 {% block content %}
 <div class="page-head">
@@ -9,6 +11,7 @@
     <a class="button secondary" href="/capture">{{ ctx.lang.t("meters-new-photo") }}</a>
     <a class="button secondary" href="/pv">{{ ctx.lang.t("nav-pv") }}</a>
     <a class="button secondary" href="/vehicles">{{ ctx.lang.t("nav-vehicles") }}</a>
+    <a class="button secondary" href="/setup">{% if setup_has_draft %}{{ ctx.lang.t("setup-resume") }}{% else %}{{ ctx.lang.t("setup-start") }}{% endif %}</a>
   </div>
   {% endif %}
 </div>

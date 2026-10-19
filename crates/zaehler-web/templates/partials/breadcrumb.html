@@ -1,0 +1,4 @@
+{# Breadcrumb-Leiste (SPEC_UI_BREADCRUMB): start, beliebig viele crumb, here #}
+{% macro start() %}<nav class="breadcrumb" aria-label="{{ ctx.lang.t("breadcrumb-label") }}"><ol><li><a href="/">{{ ctx.lang.t("nav-overview") }}</a></li>{% endmacro %}
+{% macro crumb(href, label) %}<li><a href="{{ href }}">{{ label }}</a></li>{% endmacro %}
+{% macro here(label) %}<li aria-current="page">{{ label }}</li></ol></nav>{% endmacro %}

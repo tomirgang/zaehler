@@ -8,10 +8,15 @@ pub struct Model {
     pub vehicle_id: Uuid,
     pub purchased_on: Date,
     pub price_micro: i64,
-    pub residual_micro: i64,
-    pub planned_end_on: Date,
+    pub residual_micro: Option<i64>,
+    pub planned_end_on: Option<Date>,
     pub sold_on: Option<Date>,
     pub sale_price_micro: Option<i64>,
+    /// `time` oder `mileage` (`m20261019_000016_vehicle_mileage`)
+    pub depreciation_mode: String,
+    pub odometer_at_purchase_milli: Option<i64>,
+    pub lifetime_km_milli: Option<i64>,
+    pub end_value_micro: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

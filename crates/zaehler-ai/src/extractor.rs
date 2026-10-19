@@ -122,6 +122,7 @@ pub(crate) fn to_receipt(s: ReceiptSuggestion) -> Result<ReceiptExtraction, Reco
         total_amount: opt(s.total_amount, |v| decimal(v, "total_amount"))?,
         category: Some(category),
         quantity: opt(s.quantity, |v| decimal(v, "quantity"))?,
+        unit_price: opt(s.unit_price, |v| decimal(v, "unit_price"))?,
         unit,
         vendor: present(s.vendor),
         odometer: opt(s.odometer, |v| decimal(v, "odometer"))?,
@@ -365,6 +366,21 @@ mod tests {
         "charging_kind": "DC",
         "confidence": 0.91
     }"#;
+
+    // @test SPEC_AI_RECEIPT, SPEC_CAR_FUEL_PRICE_UI
+    #[test]
+    fn fuel_receipt_preserves_price_per_litre() {
+        let suggestion: ReceiptSuggestion = serde_json::from_value(serde_json::json!({
+            "date": "2026-03-14", "total_amount": "81.08",
+            "category": "fuel", "quantity": "45.32", "unit_price": "1.789",
+            "quantity_unit": "l", "vendor": "Tankstelle", "confidence": 0.95
+        }))
+        .unwrap();
+        let extracted = to_receipt(suggestion).unwrap();
+        assert_eq!(extracted.unit_price, Some(Decimal::new(1789, 3)));
+        assert_eq!(extracted.quantity, Some(Decimal::new(4532, 2)));
+        assert!(!extracted.is_charging());
+    }
 
     // @test SPEC_AI_RECEIPT, SPEC_AI_EXTRACTION
     #[tokio::test]

@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/pv", ctx.lang.t("nav-pv")) %}{% endcall %}{% if system_id.is_some() %}{% call bc::here(ctx.lang.t("pv-edit")) %}{% endcall %}{% else %}{% call bc::here(ctx.lang.t("pv-new")) %}{% endcall %}{% endif %}{% endblock %}
 
 {% block content %}
 <h1>{% if system_id.is_some() %}{{ ctx.lang.t("pv-edit") }}{% else %}{{ ctx.lang.t("pv-new") }}{% endif %}</h1>

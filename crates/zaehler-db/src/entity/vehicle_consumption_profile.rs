@@ -11,6 +11,8 @@ pub struct Model {
     pub kwh_per_100km_milli: i64,
     pub charging_loss_pct_milli: i64,
     pub electric_share_pct_milli: Option<i64>,
+    /// `electric` oder `fuel` (`m20261019_000017_fuel_price`)
+    pub energy: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

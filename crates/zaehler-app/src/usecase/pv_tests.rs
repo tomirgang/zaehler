@@ -395,8 +395,9 @@ async fn report_with_feed_in_savings_and_break_even() {
     let invest = AssetCostInput {
         booked_on: day(2025, 1, 1),
         category: AssetCategory::Pv(PvCostCategory::Investment),
-        amount: dec!(10000),
+        amount: Some(dec!(10000)),
         quantity: None,
+        unit_price: None,
         odometer: None,
         full_tank: false,
         recurrence: None,
@@ -561,8 +562,9 @@ async fn feed_in_shares_with_rate_change_and_past_break_even() {
             AssetCostInput {
                 booked_on: day(2025, 1, 1),
                 category: AssetCategory::Pv(PvCostCategory::Investment),
-                amount: dec!(10),
+                amount: Some(dec!(10)),
                 quantity: None,
+                unit_price: None,
                 odometer: None,
                 full_tank: false,
                 recurrence: None,

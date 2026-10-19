@@ -26,6 +26,7 @@ pub mod reading_revision;
 pub mod register;
 pub mod session;
 pub mod settlement;
+pub mod setup_draft;
 pub mod user;
 pub mod vehicle;
 pub mod vehicle_acquisition;

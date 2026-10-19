@@ -37,9 +37,70 @@ pub struct Card {
 #[template(path = "pages/dashboard.html")]
 struct DashboardPage {
     ctx: PageCtx,
-    cards: Vec<Card>,
-    /// PV-Karten je Hausanschluss (SPEC_PV_CHARTS)
-    pv: Vec<PvCardView>,
+    /// Keine aktive Messstelle: leerer Zustand
+    empty: bool,
+    setup_has_draft: bool,
+    /// Karten nach Typ gruppiert (SPEC_UI_DASHBOARD_GROUPS)
+    groups: Vec<DashboardGroup>,
+}
+
+/// Abschnitt der Übersicht je Typ: Messstellenart oder PV.
+pub struct DashboardGroup {
+    pub key: &'static str,
+    pub title: String,
+    pub cards: Vec<Card>,
+    /// PV-Karten je Hausanschluss (SPEC_PV_CHARTS), nur in der Gruppe `pv`
+    pub pv: Vec<PvCardView>,
+}
+
+/// Reihenfolge der Gruppen; PV folgt auf Strom.
+const GROUP_ORDER: [&str; 7] = [
+    "electricity",
+    "pv",
+    "heat",
+    "gas",
+    "water",
+    "vehicle",
+    "custom",
+];
+
+/// Gruppiert Karten nach Typ in fester Reihenfolge und sortiert je Gruppe
+/// nach Name ohne Beachtung der Groß- und Kleinschreibung; leere Gruppen
+/// entfallen.
+// @impl SPEC_UI_DASHBOARD_GROUPS
+fn groups(
+    lang: Lang,
+    mut cards: Vec<(&'static str, Card)>,
+    mut pv: Vec<PvCardView>,
+) -> Vec<DashboardGroup> {
+    let key = |name: &str, id: &str| (name.to_lowercase(), id.to_owned());
+    pv.sort_by_cached_key(|p| key(&p.name, &p.id));
+    cards.sort_by_cached_key(|(_, c)| key(&c.name, &c.id));
+    let mut out = Vec::new();
+    for k in GROUP_ORDER {
+        let group = if k == "pv" {
+            DashboardGroup {
+                key: k,
+                title: lang.t("pv-title"),
+                cards: Vec::new(),
+                pv: std::mem::take(&mut pv),
+            }
+        } else {
+            let (members, rest): (Vec<_>, Vec<_>) =
+                cards.into_iter().partition(|(kind, _)| *kind == k);
+            cards = rest;
+            DashboardGroup {
+                key: k,
+                title: lang.t(&format!("kind-{k}")),
+                cards: members.into_iter().map(|(_, c)| c).collect(),
+                pv: Vec::new(),
+            }
+        };
+        if !group.cards.is_empty() || !group.pv.is_empty() {
+            out.push(group);
+        }
+    }
+    out
 }
 
 // @impl SPEC_UI_DASHBOARD
@@ -178,9 +239,97 @@ pub async fn show(State(state): State<WebState>, ctx: Ctx) -> Result<Response, R
         .execute(&ctx.tenant)
         .await
         .map_err(|e| ctx.fail(e))?;
+    let setup_has_draft = if ctx.page.is_owner {
+        state
+            .uc
+            .get_setup_draft
+            .execute(&ctx.tenant)
+            .await
+            .map_err(|e| ctx.fail(e))?
+            .is_some()
+    } else {
+        false
+    };
     Ok(render(&DashboardPage {
-        cards: cards.iter().map(|c| card(lang, tz, c)).collect(),
-        pv: pv.iter().map(|c| pv_card(lang, c)).collect(),
+        empty: cards.is_empty(),
+        setup_has_draft,
+        groups: groups(
+            lang,
+            cards
+                .iter()
+                .map(|c| (c.meter.data.kind.as_str(), card(lang, tz, c)))
+                .collect(),
+            pv.iter().map(|c| pv_card(lang, c)).collect(),
+        ),
         ctx: ctx.page,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Card, PvCardView, groups};
+    use crate::i18n::Lang;
+
+    fn card(id: &str, name: &str) -> Card {
+        Card {
+            id: id.into(),
+            name: name.into(),
+            kind: String::new(),
+            last: None,
+            values: Vec::new(),
+            last_month: None,
+            vs_previous: None,
+            forecast: None,
+            due: None,
+            overdue: false,
+            due_now: false,
+            traffic: None,
+        }
+    }
+
+    fn pv(id: &str, name: &str) -> PvCardView {
+        PvCardView {
+            id: id.into(),
+            name: name.into(),
+            month: String::new(),
+            generation: String::new(),
+            autarky: String::new(),
+            ratio: String::new(),
+            status: "",
+            status_label: String::new(),
+        }
+    }
+
+    // @test SPEC_UI_DASHBOARD_GROUPS
+    #[test]
+    fn cards_are_grouped_by_type_and_sorted_by_name() {
+        let g = groups(
+            Lang::De,
+            vec![
+                ("vehicle", card("1", "Kombi")),
+                ("electricity", card("2", "Wallbox")),
+                ("custom", card("3", "Pellets")),
+                ("electricity", card("4", "anna")),
+                ("water", card("5", "Garten")),
+                ("electricity", card("6", "Bernd")),
+            ],
+            vec![pv("7", "Dach")],
+        );
+        let keys: Vec<_> = g.iter().map(|g| g.key).collect();
+        assert_eq!(keys, ["electricity", "pv", "water", "vehicle", "custom"]);
+        let names: Vec<_> = g[0].cards.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["anna", "Bernd", "Wallbox"]);
+        assert_eq!(g[0].title, "Strom");
+        assert_eq!(g[1].pv.len(), 1);
+        assert_eq!(g[4].title, "Sonstiges");
+    }
+
+    // @test SPEC_UI_DASHBOARD_GROUPS
+    #[test]
+    fn empty_groups_are_left_out() {
+        assert!(groups(Lang::De, Vec::new(), Vec::new()).is_empty());
+        let g = groups(Lang::De, Vec::new(), vec![pv("1", "Dach")]);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].key, "pv");
+    }
 }

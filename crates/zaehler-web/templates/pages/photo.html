@@ -1,0 +1,23 @@
+{% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% if let Some((href, label)) = parent %}{% call bc::crumb(href, label) %}{% endcall %}{% endif %}{% call bc::here(title) %}{% endcall %}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ title }}</h1>
+  <div class="actions">
+    <a class="button" href="{{ back }}" data-close>{{ ctx.lang.t("photo-close") }}</a>
+    <a class="button secondary" href="{{ original }}">{{ ctx.lang.t("photo-original") }}</a>
+  </div>
+</div>
+<div class="photo-view">
+  {% if let Some(src) = image %}
+  <img class="photo-view-image" src="{{ src }}" alt="{{ title }}">
+  {% else %}
+  <p class="muted">{{ ctx.lang.t("photo-no-preview") }}</p>
+  {% endif %}
+  <dl class="facts">
+    {% for (k, v) in facts %}<dt>{{ k }}</dt><dd>{{ v }}</dd>{% endfor %}
+  </dl>
+</div>
+{% endblock %}

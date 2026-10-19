@@ -107,15 +107,18 @@ pub enum BlobKind {
     DocumentPdf,
     /// Dokument als normalisiertes Foto (`documents/{id}.jpg`)
     DocumentJpeg,
+    /// Foto eines Setup-Entwurfs (`setup/{id}`)
+    SetupPhoto,
 }
 
 impl BlobKind {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::ReadingPhoto,
         Self::DraftPhoto,
         Self::Tmp,
         Self::DocumentPdf,
         Self::DocumentJpeg,
+        Self::SetupPhoto,
     ];
 
     fn dir_and_ext(self) -> (&'static str, &'static str) {
@@ -125,6 +128,7 @@ impl BlobKind {
             Self::Tmp => ("tmp", "csv"),
             Self::DocumentPdf => ("documents", "pdf"),
             Self::DocumentJpeg => ("documents", "jpg"),
+            Self::SetupPhoto => ("setup", ""),
         }
     }
 
@@ -173,6 +177,16 @@ impl BlobKey {
         Self::build(household, kind, document.0)
     }
 
+    /// Foto eines Setup-Entwurfs.
+    #[must_use]
+    pub fn setup_photo(household: HouseholdId, id: Uuid) -> Self {
+        Self {
+            key: format!("{}setup/{id}", Self::household_prefix(household)),
+            household,
+            kind: BlobKind::SetupPhoto,
+        }
+    }
+
     /// Präfix aller Objekte eines Haushalts, mit abschließendem `/`.
     #[must_use]
     pub fn household_prefix(household: HouseholdId) -> String {
@@ -187,6 +201,11 @@ impl BlobKey {
         let (household, rest) = rest.split_once('/')?;
         let household = HouseholdId(Uuid::try_parse(household).ok()?);
         let (dir, file) = rest.split_once('/')?;
+        if dir == "setup" {
+            let id = Uuid::try_parse(file).ok()?;
+            let parsed = Self::setup_photo(household, id);
+            return (parsed.key == key).then_some(parsed);
+        }
         let (id, ext) = file.split_once('.')?;
         let id = Uuid::try_parse(id).ok()?;
         let kind = BlobKind::ALL

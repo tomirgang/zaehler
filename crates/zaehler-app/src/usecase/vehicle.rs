@@ -87,6 +87,7 @@ pub struct VehicleDetail {
     pub meter: MeterAggregate,
     pub vehicle: Option<Vehicle>,
     pub charging: Vec<ChargingSession>,
+    pub initial_odometer: Option<Decimal>,
 }
 
 /// Ergebnis einer Erfassung mit optional übernommenem Kilometerstand.
@@ -253,6 +254,12 @@ impl GetVehicle {
         Ok(VehicleDetail {
             vehicle: uow.vehicles().get(t, meter).await?,
             charging: uow.vehicles().charging(t, meter).await?,
+            initial_odometer: uow
+                .readings()
+                .list_for_meter(t, meter)
+                .await?
+                .first()
+                .map(|r| r.value),
             meter: agg,
         })
     }
@@ -264,6 +271,21 @@ impl CreateVehicle {
     // @impl SPEC_CAR_VEHICLES
     #[tracing::instrument(name = "CreateVehicle", skip_all)]
     pub async fn execute(&self, t: &Tenant, input: NewVehicle) -> Result<MeterId, AppError> {
+        t.require(Role::Owner)?;
+        let mut uow = self.p.uow.begin().await?;
+        let id = self.execute_in(t, input, uow.as_mut()).await?;
+        uow.commit().await?;
+        Ok(id)
+    }
+
+    /// Legt Messstelle und Fahrzeug in einer vom Aufrufer verwalteten
+    /// Transaktion an.
+    pub async fn execute_in(
+        &self,
+        t: &Tenant,
+        input: NewVehicle,
+        uow: &mut dyn UnitOfWork,
+    ) -> Result<MeterId, AppError> {
         t.require(Role::Owner)?;
         let meter = MeterInput {
             name: input.name.clone(),
@@ -293,13 +315,11 @@ impl CreateVehicle {
         };
         validate_vehicle(&mut e, &input.vehicle);
         e.into_result()?;
-        let mut uow = self.p.uow.begin().await?;
-        check_home_meter(uow.as_mut(), t, input.vehicle.home_charging_meter_id).await?;
-        let (id, _) = insert_meter(&self.p, uow.as_mut(), t, &meter, None).await?;
+        check_home_meter(uow, t, input.vehicle.home_charging_meter_id).await?;
+        let (id, _) = insert_meter(&self.p, uow, t, &meter, None).await?;
         uow.vehicles()
             .save(t, id, &vehicle_data(&input.vehicle))
             .await?;
-        uow.commit().await?;
         Ok(id)
     }
 }
@@ -351,7 +371,7 @@ fn percent(e: &mut FieldErrors, field: &str, v: Decimal) {
 
 impl SetConsumptionProfile {
     /// Durchschnittsverbrauch, Ladeverlust und elektrischer Fahranteil ab
-    /// `valid_from` (REQ_CAR_009); nur für Fahrzeuge, die laden.
+    /// `valid_from` (REQ_CAR_009, SPEC_CAR_FUEL_PRICE).
     // @impl SPEC_CAR_ENERGY_COST
     #[tracing::instrument(name = "SetConsumptionProfile", skip_all)]
     pub async fn execute(
@@ -364,8 +384,12 @@ impl SetConsumptionProfile {
         let mut uow = self.p.uow.begin().await?;
         let vehicle = load_vehicle(uow.as_mut(), t, meter).await?;
         let mut e = FieldErrors::default();
-        if !vehicle.data.drive_type.charges() {
-            e.add("drive_type", "vehicle.no_charging");
+        let supported = match input.energy {
+            zaehler_domain::vehicle::ProfileEnergy::Electric => vehicle.data.drive_type.charges(),
+            zaehler_domain::vehicle::ProfileEnergy::Fuel => vehicle.data.drive_type.fuels(),
+        };
+        if !supported {
+            e.add("profile_energy", "vehicle.profile_energy_invalid");
         }
         if input.kwh_per_100km <= Decimal::ZERO || input.kwh_per_100km > Decimal::from(200) {
             e.add("profile_kwh", "vehicle.consumption_invalid");
@@ -418,17 +442,25 @@ impl SetAcquisition {
         input: Option<Holding>,
     ) -> Result<(), AppError> {
         t.require(Role::Owner)?;
+        let mut uow = self.p.uow.begin().await?;
+        self.execute_in(t, meter, input, uow.as_mut()).await?;
+        uow.commit().await?;
+        Ok(())
+    }
+
+    /// Validiert und speichert die Anschaffung in der Transaktion des
+    /// Aufrufers.
+    pub async fn execute_in(
+        &self,
+        t: &Tenant,
+        meter: MeterId,
+        input: Option<Holding>,
+        uow: &mut dyn UnitOfWork,
+    ) -> Result<(), AppError> {
+        t.require(Role::Owner)?;
         if let Some(h) = &input {
             let mut e = FieldErrors::default();
-            for (field, v) in [("price", h.price), ("residual_value", h.residual_value)] {
-                if v < Decimal::ZERO {
-                    e.add(field, "contract.amount_negative");
-                }
-                money(&mut e, field, v, 2);
-            }
-            if h.planned_end <= h.purchased_on {
-                e.add("planned_end", "vehicle.end_before_purchase");
-            }
+            validate_holding_modes(&mut e, h);
             if h.sold_on.is_some_and(|s| s < h.purchased_on) {
                 e.add("sold_on", "vehicle.end_before_purchase");
             }
@@ -442,11 +474,69 @@ impl SetAcquisition {
             }
             e.into_result()?;
         }
-        let mut uow = self.p.uow.begin().await?;
-        load_vehicle(uow.as_mut(), t, meter).await?;
+        load_vehicle(uow, t, meter).await?;
         uow.vehicles().set_holding(t, meter, input.as_ref()).await?;
-        uow.commit().await?;
         Ok(())
+    }
+}
+
+/// Werte beider Modi werden geprüft, soweit angegeben; die des gewählten
+/// Modus sind Pflicht (SPEC_CAR_MILEAGE_UI).
+// @impl SPEC_CAR_MILEAGE_UI
+fn validate_holding_modes(e: &mut FieldErrors, h: &Holding) {
+    use zaehler_domain::vehicle::DepreciationMode;
+    let amounts = [
+        ("price", Some(h.price)),
+        ("residual_value", h.residual_value),
+        ("end_value", h.end_value),
+    ];
+    for (field, v) in amounts {
+        if let Some(v) = v {
+            if v < Decimal::ZERO {
+                e.add(field, "contract.amount_negative");
+            }
+            money(e, field, v, 2);
+        }
+    }
+    if h.planned_end.is_some_and(|p| p <= h.purchased_on) {
+        e.add("planned_end", "vehicle.end_before_purchase");
+    }
+    for (field, v) in [
+        ("odometer_at_purchase", h.odometer_at_purchase),
+        ("lifetime_km", h.lifetime_km),
+    ] {
+        if let Some(v) = v {
+            if v < Decimal::ZERO {
+                e.add(field, "reading.negative");
+            }
+            money(e, field, v, 3);
+        }
+    }
+    if let (Some(s0), Some(s)) = (h.odometer_at_purchase, h.lifetime_km)
+        && s <= s0
+    {
+        e.add("lifetime_km", "vehicle.lifetime_below_purchase");
+    }
+    if h.end_value.is_some_and(|w| w > h.price) {
+        e.add("end_value", "vehicle.end_value_above_price");
+    }
+    match h.mode {
+        DepreciationMode::Time => {
+            if h.residual_value.is_none() {
+                e.add("residual_value", "form.number_required");
+            }
+            if h.planned_end.is_none() {
+                e.add("planned_end", "form.date_required");
+            }
+        }
+        DepreciationMode::Mileage => {
+            if h.odometer_at_purchase.is_none() {
+                e.add("odometer_at_purchase", "form.number_required");
+            }
+            if h.lifetime_km.is_none() {
+                e.add("lifetime_km", "form.number_required");
+            }
+        }
     }
 }
 

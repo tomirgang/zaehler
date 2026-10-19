@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% if base.starts_with("/pv") %}{% call bc::crumb("/pv", ctx.lang.t("nav-pv")) %}{% endcall %}{% else %}{% call bc::crumb("/vehicles", ctx.lang.t("nav-vehicles")) %}{% endcall %}{% endif %}{% call bc::crumb(base, name) %}{% endcall %}{% call bc::here(ctx.lang.t("asset-costs-title")) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <div class="page-head">
@@ -31,7 +33,7 @@
       <td>{{ r.category }}</td>
       <td class="num">{{ r.amount }}</td>
       <td class="num">{{ r.year_amount }}</td>
-      <td>{{ r.details }}{% if !r.recurring.is_empty() %} <span class="tag">{{ r.recurring }}</span>{% endif %}{% if !r.document.is_empty() %} <a href="/documents/{{ r.document }}/file">{{ ctx.lang.t("document-receipt") }}</a>{% endif %}</td>
+      <td>{{ r.details }}{% if !r.recurring.is_empty() %} <span class="tag">{{ r.recurring }}</span>{% endif %}{% if !r.document.is_empty() %} <a href="/documents/{{ r.document }}/view?back={{ "{}/costs?year={}"|format(base, year)|urlencode }}">{{ ctx.lang.t("document-receipt") }}</a>{% endif %}</td>
       {% if ctx.can_write %}
       <td>
         <a href="{{ base }}/costs/{{ r.id }}/edit">{{ ctx.lang.t("action-edit") }}</a>
@@ -76,7 +78,7 @@
       </div>
       <div class="field">
         <label for="amount">{{ ctx.lang.t("asset-amount") }}</label>
-        <input id="amount" name="amount" value="{{ self.val("amount") }}" inputmode="decimal" required>
+        <input id="amount" name="amount" value="{{ self.val("amount") }}" inputmode="decimal"{% if !is_vehicle %} required{% endif %}>
         {% for e in self.errs("amount") %}<p class="field-error">{{ e }}</p>{% endfor %}
       </div>
     </div>
@@ -88,6 +90,12 @@
           <label for="quantity">{{ ctx.lang.t("asset-quantity") }}</label>
           <input id="quantity" name="quantity" value="{{ self.val("quantity") }}" inputmode="decimal">
           {% for e in self.errs("quantity") %}<p class="field-error">{{ e }}</p>{% endfor %}
+        </div>
+        <div class="field">
+          <label for="unit_price">{{ ctx.lang.t("asset-unit-price") }}</label>
+          <input id="unit_price" name="unit_price" value="{{ self.val("unit_price") }}" inputmode="decimal">
+          <p class="hint">{{ ctx.lang.t("asset-fuel-price-hint") }}</p>
+          {% for e in self.errs("unit_price") %}<p class="field-error">{{ e }}</p>{% endfor %}
         </div>
         <div class="field">
           <label><input type="checkbox" name="full_tank" value="1"{% if self.checked("full_tank") %} checked{% endif %}> {{ ctx.lang.t("asset-full-tank") }}</label>

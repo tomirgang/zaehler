@@ -222,14 +222,26 @@ impl CreatePvSystem {
     #[tracing::instrument(name = "CreatePvSystem", skip_all)]
     pub async fn execute(&self, t: &Tenant, input: PvSystemInput) -> Result<PvSystemId, AppError> {
         t.require(Role::Owner)?;
+        let mut uow = self.p.uow.begin().await?;
+        let id = self.execute_in(t, input, uow.as_mut()).await?;
+        uow.commit().await?;
+        Ok(id)
+    }
+
+    /// Legt eine PV-Anlage in der vom Aufrufer verwalteten Transaktion an.
+    pub async fn execute_in(
+        &self,
+        t: &Tenant,
+        input: PvSystemInput,
+        uow: &mut dyn UnitOfWork,
+    ) -> Result<PvSystemId, AppError> {
+        t.require(Role::Owner)?;
         let mut e = FieldErrors::default();
         validate_data(&mut e, &input.data);
         e.into_result()?;
-        let mut uow = self.p.uow.begin().await?;
-        check_assignment(uow.as_mut(), t, None, &input).await?;
+        check_assignment(uow, t, None, &input).await?;
         let id = PvSystemId(self.p.ids.new_uuid());
         uow.pv().create(t, &system_of(id, input)).await?;
-        uow.commit().await?;
         Ok(id)
     }
 }

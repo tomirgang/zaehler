@@ -432,7 +432,7 @@ async fn photo_capture_workflow() {
     assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
     assert_eq!(location(&res), format!("/meters/{meter}"));
     let detail = text(c.get(&format!("/meters/{meter}")).await).await;
-    assert!(detail.contains("/photo\""), "Belegfoto verlinkt");
+    assert!(detail.contains("/photo/view?back="), "Belegfoto verlinkt");
     // Entwurf ist abgeschlossen
     assert_eq!(c.get(&draft_page).await.status(), StatusCode::NOT_FOUND);
 
@@ -522,7 +522,7 @@ async fn new_meter_from_photo_is_prefilled_and_keeps_the_photo() {
         .await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
     let detail = text(c.get(&location(&res)).await).await;
-    assert!(detail.contains("/photo\""), "Belegfoto verlinkt");
+    assert!(detail.contains("/photo/view?back="), "Belegfoto verlinkt");
     assert_eq!(c.get(&draft_page).await.status(), StatusCode::NOT_FOUND);
 }
 
@@ -745,9 +745,9 @@ async fn household_archive_download_and_import_as_new_household() {
     );
 }
 
-// @test SPEC_UI_DASHBOARD
+// @test SPEC_UI_DASHBOARD, SPEC_UI_DASHBOARD_GROUPS
 #[tokio::test]
-async fn dashboard_renders_0_1_and_20_meters_with_overdue_first() {
+async fn dashboard_renders_0_1_and_20_meters_grouped_by_name() {
     let app = test_app(true);
     let mut c = Client::new(&app);
     c.login("anna").await;
@@ -771,9 +771,13 @@ async fn dashboard_renders_0_1_and_20_meters_with_overdue_first() {
     assert_eq!(res.status(), StatusCode::OK);
     let html = text(res).await;
     assert_eq!(html.matches("<li class=\"card").count(), 20);
-    let water = html.find(">Wasser<").unwrap();
-    let power = html.find(">Strom<").unwrap();
-    assert!(water < power, "überfällige Messstelle zuerst");
+    let water = html.find(">Wasser</a>").unwrap();
+    let power = html.find(">Strom</a>").unwrap();
+    assert!(
+        power < water,
+        "nach Name sortiert, überfällige bleiben an ihrem Platz"
+    );
+    assert!(html.contains("<h2 id=\"group-electricity\">Strom</h2>"));
     assert!(html.contains("class=\"card overdue\""));
 }
 
@@ -2175,7 +2179,7 @@ async fn invoice_import_workflow() {
     let html = text(c.get(&contract).await).await;
     assert!(html.contains("Stadtwerke Süd") && html.contains("Rechnung übernommen."));
     assert!(
-        html.contains(&format!("{doc}/file")),
+        html.contains(&format!("{doc}/view?back=")),
         "Beleg der Abrechnung"
     );
     assert!(html.contains("50,00 €"), "Abschlag");
@@ -2332,6 +2336,98 @@ async fn vehicle_pages_and_cost_book() {
     assert_eq!(bob.get(&costs).await.status(), StatusCode::NOT_FOUND);
 }
 
+// @test SPEC_CAR_MILEAGE_UI, SPEC_CAR_FUEL_PRICE_UI
+#[tokio::test]
+async fn vehicle_v11_mileage_and_fuel_price_workflow() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("v11-owner").await;
+    let csrf = c.csrf().await;
+    let res = c
+        .post(
+            "/vehicles/new",
+            &[
+                ("_csrf", &csrf),
+                ("name", "v1.1 Auto"),
+                ("drive_type", "combustion"),
+                ("odometer", "20000"),
+                ("start_at", "2025-01-01"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let vehicle = location(&res);
+    let page = text(c.get(&vehicle).await).await;
+    assert!(page.contains("name=\"odometer_at_purchase\" value=\"20000\""));
+    let res = c
+        .post(
+            &format!("{vehicle}/acquisition"),
+            &[
+                ("_csrf", &csrf),
+                ("purchased_on", "2025-01-01"),
+                ("price", "30000"),
+                ("depreciation_mode", "mileage"),
+                ("odometer_at_purchase", "20000"),
+                ("lifetime_km", "220000"),
+                ("end_value", "0"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let page = text(c.get(&vehicle).await).await;
+    assert!(page.contains("Aktueller Restwert"));
+    assert!(page.contains("Zu wenig Daten"));
+    assert!(page.contains("value=\"mileage\" checked"));
+    let res = c
+        .post(
+            &format!("{vehicle}/profiles"),
+            &[
+                ("_csrf", &csrf),
+                ("profile_valid_from", "2025-01-01"),
+                ("profile_kwh", "6,5"),
+                ("profile_energy", "fuel"),
+                ("profile_loss", "0"),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let costs = format!("{vehicle}/costs");
+    let fuel = [
+        ("_csrf", csrf.as_str()),
+        ("booked_on", "2025-03-01"),
+        ("category", "fuel"),
+        ("quantity", "45,32"),
+        ("unit_price", "1,789"),
+    ];
+    let res = c.post(&costs, &fuel).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "{}", text(res).await);
+    let page = text(c.get(&format!("{costs}?year=2025")).await).await;
+    assert!(
+        page.contains("81,08 €") && page.contains("1,789 €/l"),
+        "{page}"
+    );
+    let page = text(c.get(&vehicle).await).await;
+    assert!(page.contains("1,789 €/l") && page.contains("data-chart=\"fuelPrice\""));
+    assert!(page.contains("6,5 l"));
+    let chart: serde_json::Value =
+        serde_json::from_str(&text(c.get(&format!("{vehicle}/chart.json")).await).await).unwrap();
+    assert_eq!(
+        chart["series"]["fuel_price"]["data"],
+        serde_json::json!([["2025-03-01", 1.789]])
+    );
+    let mut mismatch = fuel.to_vec();
+    mismatch.push(("amount", "90"));
+    let res = c.post(&costs, &mismatch).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(text(res).await.contains("mehr als einen Cent"));
+    let mut bob = Client::new(&app);
+    bob.login("v11-other").await;
+    assert_eq!(
+        bob.get(&format!("{vehicle}/chart.json")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
 // @test SPEC_AI_RECEIPT, SPEC_CAR_ENERGY_COST
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
@@ -2348,6 +2444,7 @@ async fn receipt_becomes_charging_session() {
             total_amount: Some(Decimal::new(1899, 2)),
             category: Some(VehicleCostCategory::Charging),
             quantity: Some(Decimal::new(32_125, 3)),
+            unit_price: None,
             unit: Some("kWh".into()),
             vendor: Some("Ladepark Süd".into()),
             odometer: None,
@@ -2452,7 +2549,10 @@ async fn receipt_becomes_charging_session() {
         html.contains("Beleg übernommen.") && html.contains("32,12 kWh"),
         "{html}"
     );
-    assert!(html.contains(&format!("{doc}/file")), "Beleg verlinkt");
+    assert!(
+        html.contains(&format!("{doc}/view?back=")),
+        "Beleg verlinkt"
+    );
 }
 
 async fn post_fields(c: &mut Client, path: &str, fields: &[(&str, String)]) -> Response {
@@ -3020,4 +3120,429 @@ async fn pv_bulk_capture_with_photos() {
     assert!(history.contains("/photo"), "Belegfoto an der Ablesung");
     let page = text(c.get(&form_path).await).await;
     assert!(!page.contains(&draft), "Entwurf abgeschlossen");
+}
+
+/// Breadcrumb-Leiste aus dem HTML einer Seite (ohne Tags).
+fn breadcrumb(html: &str) -> Option<String> {
+    let start = html.find("<nav class=\"breadcrumb\"")?;
+    let end = start + html[start..].find("</nav>")?;
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in html[start..end].chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push('|');
+            }
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    Some(
+        out.split('|')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" › "),
+    )
+}
+
+// @test SPEC_UI_BREADCRUMB
+#[tokio::test]
+async fn pages_show_a_breadcrumb_with_the_overview_as_root() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let csrf = c.csrf().await;
+    let id = create_meter(&mut c, &csrf, "Hausstrom").await;
+
+    let home = text(c.get("/").await).await;
+    assert_eq!(breadcrumb(&home), None, "Übersicht ohne Leiste");
+
+    for (path, expected) in [
+        ("/meters".to_owned(), "Übersicht › Messstellen"),
+        (
+            format!("/meters/{id}"),
+            "Übersicht › Messstellen › Hausstrom",
+        ),
+        (
+            format!("/meters/{id}/edit"),
+            "Übersicht › Messstellen › Hausstrom › Messstelle bearbeiten",
+        ),
+        (
+            format!("/meters/{id}/readings/new"),
+            "Übersicht › Messstellen › Hausstrom › Stand erfassen",
+        ),
+        ("/settings".to_owned(), "Übersicht › Einstellungen"),
+        (
+            "/settings/members".to_owned(),
+            "Übersicht › Einstellungen › Mitglieder",
+        ),
+        (
+            "/vehicles/new".to_owned(),
+            "Übersicht › Fahrzeuge › Fahrzeug anlegen",
+        ),
+        ("/capture".to_owned(), "Übersicht › Foto erfassen"),
+    ] {
+        let res = c.get(&path).await;
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        let html = text(res).await;
+        assert_eq!(breadcrumb(&html).as_deref(), Some(expected), "{path}");
+        assert_eq!(html.matches("class=\"breadcrumb\"").count(), 1, "{path}");
+        assert!(html.contains("aria-current=\"page\""), "{path}");
+    }
+}
+
+// Jede Seite mit dem Hauptlayout außer Übersicht und Fehlerseite hat eine
+// Breadcrumb-Leiste.
+// @test SPEC_UI_BREADCRUMB
+#[test]
+fn every_page_template_defines_a_breadcrumb() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/pages");
+    let mut missing = Vec::new();
+    let mut dirs = vec![root.clone()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let html = std::fs::read_to_string(&path).unwrap();
+            let exempt = ["dashboard.html", "error.html"].contains(&rel.as_str());
+            if html.contains("layout/base.html") && !exempt && !html.contains("bc::here(") {
+                missing.push(rel);
+            }
+        }
+    }
+    assert!(missing.is_empty(), "ohne Breadcrumb: {missing:?}");
+}
+
+// @test SPEC_UI_MENU
+#[tokio::test]
+async fn topbar_has_a_menu_toggle_for_small_screens() {
+    let app = test_app(true);
+    let mut c = Client::new(&app);
+    c.login("anna").await;
+    let html = text(c.get("/").await).await;
+    assert!(html.contains(
+        "<button type=\"button\" class=\"menu-toggle secondary\" aria-controls=\"topnav\" aria-expanded=\"false\">"
+    ));
+    let nav = html.find("id=\"topnav\"").unwrap();
+    assert!(html[nav..].find("href=\"/settings\"").is_some());
+    assert!(html[nav..].find("action=\"/auth/logout\"").is_some());
+}
+
+// @test SPEC_UI_PHOTO_VIEW, SPEC_SEC_TENANT_SCOPE
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // ein zusammenhängender Ablauf
+async fn reading_photo_opens_on_a_view_page_with_a_safe_back_link() {
+    use zaehler_app::{
+        ids::{BlobKey, MeterId, ReadingId},
+        model::{Identity, Reading},
+    };
+    use zaehler_domain::reading::ReadingSource;
+
+    let (ports, store, _clock) = memory_ports();
+    let uc = Arc::new(UseCases::new(&ports));
+    let state = WebState {
+        uc: uc.clone(),
+        readiness: store,
+        cfg: Arc::new(WebConfig::new(
+            "http://localhost:8080",
+            true,
+            false,
+            24,
+            "test",
+        )),
+        oidc: None,
+        analysis: Arc::default(),
+    };
+    let app = router(state, MemoryStore::default());
+    let mut anna = Client::new(&app);
+    anna.login("anna").await;
+    let csrf = anna.csrf().await;
+    let meter: MeterId = create_meter(&mut anna, &csrf, "Strom")
+        .await
+        .parse()
+        .unwrap();
+    let identity = Identity {
+        issuer: "dev".into(),
+        subject: "anna".into(),
+        email: None,
+        display_name: "anna".into(),
+        locale: "de".into(),
+    };
+    let user = uc.sign_in.execute(&identity).await.unwrap().user.id;
+    let tenant = uc.resolve_tenant.execute(user, None).await.unwrap().tenant;
+    let detail = uc.get_meter.execute(&tenant, meter).await.unwrap();
+    let id = ReadingId(uuid::Uuid::now_v7());
+    let key = BlobKey::reading_photo(tenant.household_id(), id);
+    ports
+        .blobs
+        .put(&key, bytes::Bytes::from_static(b"\xFF\xD8\xFFjpeg"))
+        .await
+        .unwrap();
+    let mut uow = ports.uow.begin().await.unwrap();
+    uow.readings()
+        .insert(
+            &tenant,
+            &[Reading {
+                id,
+                register_id: detail.aggregate.registers[0].id,
+                device_id: detail.aggregate.devices[0].id,
+                read_at: detail.readings[0].read_at + chrono::Duration::days(1),
+                value: rust_decimal::Decimal::new(10_010, 1),
+                source: ReadingSource::Photo,
+                note: None,
+                photo_key: Some(key),
+                ai_confidence: None,
+                created_by: Some(user),
+            }],
+        )
+        .await
+        .unwrap();
+    uow.commit().await.unwrap();
+
+    let html = text(anna.get(&format!("/meters/{meter}")).await).await;
+    let link = format!("/readings/{id}/photo/view?back=/meters/{meter}");
+    assert!(html.contains(&link), "Link auf die Ansichtsseite");
+    assert!(!html.contains("target=\"_blank\""));
+
+    let page = text(anna.get(&link).await).await;
+    assert!(page.contains(&format!(
+        "<img class=\"photo-view-image\" src=\"/readings/{id}/photo\""
+    )));
+    assert!(page.contains(&format!("href=\"/meters/{meter}\" data-close")));
+    assert!(
+        page.contains("<dd>1001 kWh</dd>") || page.contains("<dd>1001,0 kWh</dd>"),
+        "{page}"
+    );
+    assert_eq!(
+        breadcrumb(&page).as_deref(),
+        Some("Übersicht › Strom › Foto der Ablesung")
+    );
+    // fremde Ziele fallen auf die Messstelle zurück
+    for bad in [
+        "%2F%2Fevil.example",
+        "https%3A%2F%2Fevil.example",
+        "%2F%5Cevil.example",
+    ] {
+        let page = text(
+            anna.get(&format!("/readings/{id}/photo/view?back={bad}"))
+                .await,
+        )
+        .await;
+        assert!(
+            page.contains(&format!("href=\"/meters/{meter}\" data-close")),
+            "{bad}"
+        );
+        assert!(!page.contains("evil.example"), "{bad}");
+    }
+    // Ablesung ohne Foto und fremder Haushalt
+    let start = detail.readings[0].id;
+    assert_eq!(
+        anna.get(&format!("/readings/{start}/photo/view"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let mut bob = Client::new(&app);
+    bob.login("bob").await;
+    assert_eq!(
+        bob.get(&format!("/readings/{id}/photo/view"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn setup_wizard_persists_and_resumes_an_owner_draft() {
+    let app = test_app(true);
+    let mut owner = Client::new(&app);
+    owner.login("setup-owner").await;
+    let started = owner.get("/setup").await;
+    assert_eq!(started.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&started), "/setup/grid");
+
+    let page = text(owner.get("/setup/grid").await).await;
+    assert!(page.contains("setup-photo"));
+    let csrf = owner.csrf().await;
+    let saved = owner
+        .post(
+            "/setup/grid",
+            &[
+                ("_csrf", &csrf),
+                ("enabled", "true"),
+                ("name", "Grid meter"),
+                ("action", "next"),
+            ],
+        )
+        .await;
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&saved), "/setup/heat_pump");
+
+    let resumed = text(owner.get("/setup/grid").await).await;
+    assert!(resumed.contains("value=\"Grid meter\""));
+    let mut another_household = Client::new(&app);
+    another_household.login("setup-other").await;
+    let isolated = text(another_household.get("/setup/grid").await).await;
+    assert!(!isolated.contains("value=\"Grid meter\""));
+    let discarded = owner.post("/setup/discard", &[("_csrf", &csrf)]).await;
+    assert_eq!(discarded.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&discarded), "/");
+}
+
+#[tokio::test]
+async fn setup_photo_without_ai_is_kept_for_manual_entry() {
+    let app = test_app(true);
+    let mut owner = Client::new(&app);
+    owner.login("setup-photo-owner").await;
+    let _ = owner.get("/setup").await;
+    let csrf = owner.csrf().await;
+    let boundary = "SetupPhotoBoundary";
+    let mut body = Vec::new();
+    for (name, value) in [
+        ("_csrf", csrf.as_str()),
+        ("object_key", "grid"),
+        ("return_step", "grid"),
+    ] {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"meter.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(&[0xff, 0xd8, 0xff]);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let uploaded = owner
+        .send(
+            Request::post("/setup/photo")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(uploaded.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&uploaded), "/setup/grid");
+    let page = text(owner.get("/setup/grid").await).await;
+    assert!(
+        page.contains("Foto im Setup-Entwurf gespeichert.")
+            || page.contains("Photo saved in the setup draft.")
+    );
+    assert!(page.contains("id=\"start_value\""));
+}
+
+#[tokio::test]
+async fn setup_wizard_offers_selects_photo_slots_and_existing_meters() {
+    let app = test_app(true);
+    let mut owner = Client::new(&app);
+    owner.login("setup-extend-owner").await;
+    let _ = owner.get("/setup").await;
+    let csrf = owner.csrf().await;
+
+    let pv = text(owner.get("/setup/pv").await).await;
+    assert!(pv.contains("<select id=\"kind\""));
+    assert!(pv.contains("value=\"full_feed_in\""));
+    assert!(pv.contains("id=\"setup-photo-pv_battery_charge\""));
+    assert!(pv.contains("id=\"setup-photo-pv_battery_discharge\""));
+    let vehicle = text(owner.get("/setup/vehicle").await).await;
+    assert!(vehicle.contains("<select id=\"drive_type\""));
+    assert!(vehicle.contains("id=\"acquisition_price\""));
+    let contracts = text(owner.get("/setup/contracts").await).await;
+    assert!(contracts.contains("<select id=\"direction\""));
+    assert!(contracts.contains("<select id=\"second_meter\""));
+
+    let first = owner
+        .post(
+            "/setup/grid",
+            &[
+                ("_csrf", &csrf),
+                ("enabled", "true"),
+                ("name", "Hausanschluss"),
+                ("start_value", "100"),
+                ("action", "next"),
+            ],
+        )
+        .await;
+    assert_eq!(first.status(), StatusCode::SEE_OTHER);
+    let done = owner.post("/setup/complete", &[("_csrf", &csrf)]).await;
+    assert_eq!(done.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&done), "/");
+
+    let _ = owner.get("/setup").await;
+    let grid = text(owner.get("/setup/grid").await).await;
+    assert!(grid.contains("<select id=\"existing_grid\""));
+    assert!(grid.contains("Hausanschluss"));
+    let media = text(owner.get("/setup/media").await).await;
+    assert!(media.contains("value=\"gas\""));
+}
+
+#[tokio::test]
+async fn setup_skip_reports_removed_photos() {
+    let app = test_app(true);
+    let mut owner = Client::new(&app);
+    owner.login("setup-skip-owner").await;
+    let _ = owner.get("/setup").await;
+    let csrf = owner.csrf().await;
+    let boundary = "SetupSkipBoundary";
+    let mut body = Vec::new();
+    for (name, value) in [
+        ("_csrf", csrf.as_str()),
+        ("object_key", "heat_pump"),
+        ("return_step", "heat_pump"),
+    ] {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"m.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(&[0xff, 0xd8, 0xff]);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let uploaded = owner
+        .send(
+            Request::post("/setup/photo")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(uploaded.status(), StatusCode::SEE_OTHER);
+    let skipped = owner
+        .post("/setup/heat_pump", &[("_csrf", &csrf), ("action", "skip")])
+        .await;
+    assert_eq!(location(&skipped), "/setup/pv?removed=1");
+    let page = text(owner.get("/setup/pv?removed=1").await).await;
+    assert!(page.contains("role=\"status\""));
+    let heat = text(owner.get("/setup/heat_pump").await).await;
+    assert!(!heat.contains("Foto im Setup-Entwurf gespeichert."));
+    assert!(!heat.contains("Photo saved in the setup draft."));
 }

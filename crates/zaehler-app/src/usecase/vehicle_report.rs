@@ -10,8 +10,9 @@ use zaehler_domain::{
     meter::MeterPurpose,
     period::Period,
     vehicle::{
-        ChargingTotals, ConsumptionProfile, CostPerKm, EnergyCost, EnergyInput, FuelFill,
-        FuelSegment, cost_per_km, depreciation_in, energy_cost, fuel_average, fuel_segments,
+        ChargingTotals, ConsumptionProfile, CostPerKm, DepreciationMode, EnergyCost, EnergyInput,
+        FuelFill, FuelSegment, Remaining, cost_per_km, energy_cost, estimated_fuel_price,
+        fuel_average, fuel_profile_consumption, fuel_segments, last_fuel_price, remaining_time,
     },
 };
 
@@ -70,8 +71,49 @@ pub struct VehicleForecast {
     pub fixed: Decimal,
     /// Variable Kosten je km der letzten 12 Monate
     pub variable_per_km: Option<Decimal>,
-    /// Fixkosten + Fahrleistung × variable Kosten je km
+    /// Fixkosten + Fahrleistung × variable Kosten je km; mit
+    /// Kraftstoffprognose ersetzt diese den Kraftstoffanteil
     pub expected: Option<Decimal>,
+    /// Kraftstoffkosten im Rest des Jahres (SPEC_CAR_FUEL_PRICE)
+    pub fuel_cost: Option<Estimated<Decimal>>,
+}
+
+/// Restwert und Restlebensdauer (SPEC_CAR_MILEAGE_DEPRECIATION).
+#[derive(Debug, Clone, Copy)]
+pub struct ResidualInfo {
+    pub mode: DepreciationMode,
+    /// Kaufpreis abzüglich Wertverlust bis heute, bei Verkauf der Erlös
+    pub value: Decimal,
+    pub remaining: Remaining,
+    /// Jahresfahrleistung der letzten 12 Monate (Laufleistungsmodus)
+    pub annual_km: Option<Decimal>,
+}
+
+/// Preis pro Liter (SPEC_CAR_FUEL_PRICE).
+#[derive(Debug, Clone)]
+pub struct FuelPriceInfo {
+    /// Letzter bekannter Preis mit Datum
+    pub last: Option<(NaiveDate, Decimal)>,
+    /// Geschätzter Durchschnitt der letzten 3 Monate, nur ohne bekannten Preis
+    pub estimate: Option<Decimal>,
+    /// Verlauf: Tankvorgänge mit bekanntem Preis, nach Datum
+    pub points: Vec<(NaiveDate, Decimal)>,
+}
+
+impl FuelPriceInfo {
+    /// Preis für die Prognose: letzter bekannter, sonst die Schätzung.
+    #[must_use]
+    pub fn for_forecast(&self) -> Option<Estimated<Decimal>> {
+        self.last
+            .map(|(_, p)| Estimated {
+                value: p,
+                estimated: false,
+            })
+            .or(self.estimate.map(|p| Estimated {
+                value: p,
+                estimated: true,
+            }))
+    }
 }
 
 /// Heimlade-Messstelle der Auswertung.
@@ -97,6 +139,9 @@ pub struct VehicleReportView {
     pub forecast: Option<VehicleForecast>,
     pub fuel_segments: Vec<FuelSegment>,
     pub home: Option<HomeMeter>,
+    pub residual: Option<ResidualInfo>,
+    /// Nur für Fahrzeuge, die tanken
+    pub fuel_price: Option<FuelPriceInfo>,
 }
 
 /// Daten für die Berechnung je Zeitraum.
@@ -120,6 +165,122 @@ impl Inputs {
     fn until_today(&self, p: Period) -> Option<Period> {
         let end = p.end.min(self.today.succ_opt().unwrap_or(self.today));
         (p.start < end).then(|| Period::new(p.start, end))
+    }
+
+    /// Kilometerstand zu Beginn des Tages.
+    fn odometer(&self, d: NaiveDate) -> Option<Decimal> {
+        self.km.value_at(self.cal, d)
+    }
+
+    /// Morgen, Ende der Zeiträume bis einschließlich heute.
+    fn tomorrow(&self) -> NaiveDate {
+        self.today.succ_opt().unwrap_or(self.today)
+    }
+
+    /// Die letzten `months` Monate bis einschließlich heute.
+    fn last_months(&self, months: u32) -> Period {
+        let start = self
+            .today
+            .checked_sub_months(Months::new(months))
+            .unwrap_or(self.today)
+            .succ_opt()
+            .unwrap_or(self.today);
+        Period::new(start, self.tomorrow())
+    }
+
+    /// Jahresfahrleistung aus den letzten 12 Monaten ab der ersten Ablesung;
+    /// mit weniger als 90 Tagen undefiniert.
+    fn annual_km(&self) -> Option<Decimal> {
+        let last12 = self.last_months(12);
+        let first = self.km.first_day(self.cal)?;
+        let p = Period::new(last12.start.max(first), last12.end);
+        if p.days() < 90 {
+            return None;
+        }
+        let km = self.km.import_quantity(self.cal, p)?.value;
+        Some((km * Decimal::from(365) / Decimal::from(p.days())).round_dp(0))
+    }
+
+    /// Restwert und Restlebensdauer heute.
+    // @impl SPEC_CAR_MILEAGE_DEPRECIATION
+    fn residual(&self) -> Option<ResidualInfo> {
+        let h = self.vehicle.holding.as_ref()?;
+        let sold = h.sold_on.is_some_and(|s| s <= self.today);
+        let lost = h.depreciation_in(
+            Period::new(h.purchased_on, self.tomorrow().max(h.purchased_on)),
+            |d| self.odometer(d),
+        );
+        let value = match (sold, h.sale_price) {
+            (true, Some(p)) => p,
+            _ => (h.price - lost).round_dp(2),
+        };
+        let (remaining, annual_km) = match h.mode {
+            DepreciationMode::Time => (
+                h.acquisition().map_or(Remaining::InsufficientData, |a| {
+                    remaining_time(&a, sold, self.today)
+                }),
+                None,
+            ),
+            DepreciationMode::Mileage => {
+                let annual = self.annual_km();
+                (
+                    h.mileage().map_or(Remaining::InsufficientData, |m| {
+                        m.remaining(self.today, self.odometer(self.tomorrow()), annual)
+                    }),
+                    annual,
+                )
+            }
+        };
+        Some(ResidualInfo {
+            mode: h.mode,
+            value,
+            remaining,
+            annual_km,
+        })
+    }
+
+    /// Tankvorgänge (Kategorie Kraftstoff).
+    fn fuel_entries(&self) -> impl Iterator<Item = &AssetCost> {
+        self.costs
+            .iter()
+            .filter(|c| c.category == AssetCategory::Vehicle(VehicleCostCategory::Fuel))
+    }
+
+    /// Ø-Verbrauch l/100 km der letzten 12 Monate, ersatzweise Profil.
+    fn fuel_consumption(&self) -> Option<Decimal> {
+        let last12 = self.last_months(12);
+        fuel_average(&self.segments, last12)
+            .or_else(|| fuel_profile_consumption(&self.profiles, last12))
+    }
+
+    /// Letzter Preis, Schätzung und Verlauf (SPEC_CAR_FUEL_PRICE).
+    // @impl SPEC_CAR_FUEL_PRICE
+    fn fuel_price(&self) -> Option<FuelPriceInfo> {
+        if !self.vehicle.data.drive_type.fuels() {
+            return None;
+        }
+        let mut points: Vec<(NaiveDate, Decimal)> = self
+            .fuel_entries()
+            .filter(|c| c.booked_on <= self.today)
+            .filter_map(|c| Some((c.booked_on, c.fuel_unit_price()?)))
+            .collect();
+        points.sort_by_key(|(d, _)| *d);
+        let last = last_fuel_price(points.iter().map(|(d, p)| (*d, Some(*p))));
+        let estimate = if last.is_none() {
+            let p = self.last_months(3);
+            let cost: Decimal = self.fuel_entries().map(|c| c.amount_in(p)).sum();
+            match (self.km(p), self.fuel_consumption()) {
+                (Some(km), Some(v)) => estimated_fuel_price(cost, km.value, v),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        Some(FuelPriceInfo {
+            last,
+            estimate,
+            points,
+        })
     }
 
     /// Fahrleistung im Zeitraum, nur ab der ersten Ablesung.
@@ -225,11 +386,9 @@ impl Inputs {
             .filter(|(c, _)| !c.is_variable())
             .map(|(_, v)| *v)
             .sum();
-        let depreciation = self
-            .vehicle
-            .holding
-            .as_ref()
-            .map_or(Decimal::ZERO, |h| depreciation_in(&h.acquisition(), p));
+        let depreciation = self.vehicle.holding.as_ref().map_or(Decimal::ZERO, |h| {
+            h.depreciation_in(p, |d| self.odometer(d))
+        });
         categories.retain(|(_, v)| !v.is_zero());
         Some(VehiclePeriod {
             year,
@@ -293,15 +452,52 @@ impl Inputs {
                 .unwrap_or(self.today),
             self.today.succ_opt().unwrap_or(self.today),
         );
-        let variable_per_km = self
-            .period(None, last12)
-            .and_then(|p| p.cost.variable_per_km);
+        let last = self.period(None, last12);
+        let variable_per_km = last.as_ref().and_then(|p| p.cost.variable_per_km);
+        let mut expected = variable_per_km.map(|v| (fixed + km.value * v).round_dp(2));
+        // Kraftstoff im Rest des Jahres aus Literpreis und Verbrauch; ersetzt
+        // den Kraftstoffanteil der variablen Kosten (SPEC_CAR_FUEL_PRICE)
+        let fuel_cost = self.fuel_forecast(year, km.value);
+        if let (Some(fc), Some(last)) = (fuel_cost, &last)
+            && last.cost.km > Decimal::ZERO
+        {
+            let fuel_last: Decimal = last
+                .categories
+                .iter()
+                .filter(|(c, _)| *c == VehicleCostCategory::Fuel)
+                .map(|(_, v)| *v)
+                .sum();
+            let other_per_km = (last.cost.variable - fuel_last) / last.cost.km;
+            let fuel_so_far: Decimal = self
+                .fuel_entries()
+                .map(|c| c.amount_in(Period::new(year.start, self.tomorrow())))
+                .sum();
+            expected = Some((fixed + km.value * other_per_km + fuel_so_far + fc.value).round_dp(2));
+        }
         Some(VehicleForecast {
             year: self.today.year(),
-            expected: variable_per_km.map(|v| (fixed + km.value * v).round_dp(2)),
+            expected,
             km,
             fixed,
             variable_per_km,
+            fuel_cost,
+        })
+    }
+
+    /// `prognostizierte km Restjahr · v / 100 · Preis` (SPEC_CAR_FUEL_PRICE).
+    // @impl SPEC_CAR_FUEL_PRICE
+    fn fuel_forecast(&self, year: Period, km_year: Decimal) -> Option<Estimated<Decimal>> {
+        let price = self.fuel_price()?.for_forecast()?;
+        let v = self.fuel_consumption()?;
+        let driven = self
+            .km(Period::new(year.start, self.tomorrow()))
+            .map_or(Decimal::ZERO, |k| k.value);
+        // Der Vollbetankungsverbrauch bezieht sich auf alle km, beim
+        // Plug-in-Hybrid also bereits auf den Mix aus elektrisch und Kraftstoff
+        let rest = (km_year - driven).max(Decimal::ZERO);
+        Some(Estimated {
+            value: (rest * v / Decimal::ONE_HUNDRED * price.value).round_dp(2),
+            estimated: true,
         })
     }
 }
@@ -400,6 +596,8 @@ impl VehicleReport {
             (None, None) => None,
         };
         Ok(VehicleReportView {
+            residual: inputs.residual(),
+            fuel_price: inputs.fuel_price(),
             forecast: inputs.forecast(),
             meter: inputs.km.agg.clone(),
             fuel_segments: inputs.segments.clone(),

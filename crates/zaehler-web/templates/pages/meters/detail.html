@@ -34,6 +34,9 @@
   </table>
 </details>
 {% endmacro %}
+{% import "partials/breadcrumb.html" as bc %}
+
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/meters", ctx.lang.t("nav-meters")) %}{% endcall %}{% call bc::here(name) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <div class="page-head">
@@ -313,7 +316,7 @@
       <td>{{ r.at }}</td>
       <td>{{ r.register }}</td>
       <td class="num">{{ r.value }}</td>
-      <td>{{ r.source }}{% if r.has_photo %} <a href="/readings/{{ r.id }}/photo" target="_blank" rel="noopener">{{ ctx.lang.t("reading-photo") }}</a>{% endif %}</td>
+      <td>{{ r.source }}{% if r.has_photo %} <a href="/readings/{{ r.id }}/photo/view?back={{ "/meters/{}"|format(id)|urlencode }}">{{ ctx.lang.t("reading-photo") }}</a>{% endif %}</td>
       <td>{{ r.note }}{% if r.changed %} <span class="tag">{{ ctx.lang.t("reading-changed") }}</span>{% endif %}</td>
       {% if ctx.can_write %}
       <td>

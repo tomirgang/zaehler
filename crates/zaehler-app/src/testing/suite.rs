@@ -25,7 +25,7 @@ use crate::{
     model::{
         DeviceData, Draft, DraftAnalysis, DraftOutcome, DraftStatus, HouseholdData, Identity,
         JobRun, MeterData, NewInvitation, OutboxEntry, OutboxEvent, OutboxResult, Reading,
-        ReadingUpdate, Recognition, RegisterData, Revision, RevisionAction,
+        ReadingUpdate, Recognition, RegisterData, Revision, RevisionAction, SetupDraft,
     },
     port::{BlobStore, JobRepository, MaintenanceRepository, UnitOfWorkFactory},
 };
@@ -134,6 +134,7 @@ pub async fn run(f: &dyn UnitOfWorkFactory) {
     rollback_without_commit(f).await;
     tenant_isolation(f).await;
     readings(f).await;
+    setup_drafts(f).await;
     devices(f).await;
     household_delete_cascades(f).await;
     members(f).await;
@@ -143,6 +144,76 @@ pub async fn run(f: &dyn UnitOfWorkFactory) {
     vehicles_suite::vehicles(f).await;
     pv_suite::pv(f).await;
     api_suite::api(f).await;
+}
+
+/// Tenant-Isolation und Commit/Rollback für Setup-Entwürfe.
+// @test SPEC_SETUP_FLOW
+/// Verifies tenant isolation and basic persistence for setup drafts.
+///
+/// # Panics
+///
+/// Panics when the repository does not satisfy the setup-draft contract.
+pub async fn setup_drafts(f: &dyn UnitOfWorkFactory) {
+    let owner = tenant(f, "Setup owner").await;
+    let foreign = tenant(f, "Setup other").await;
+    let mut draft = SetupDraft::new(t0());
+    draft.steps.insert("grid".into(), true);
+    draft
+        .objects
+        .insert("grid".into(), serde_json::json!({"name":"Hausanschluss"}));
+    let photo = BlobKey::setup_photo(owner.household_id(), id());
+    draft.photos.insert("grid".into(), photo.to_string());
+    {
+        let mut uow = f.begin().await.expect("begin");
+        uow.setup_drafts()
+            .save(&owner, &draft)
+            .await
+            .expect("save draft");
+        assert_eq!(
+            uow.setup_drafts().get(&foreign).await.expect("foreign get"),
+            None,
+            "setup draft must be tenant scoped"
+        );
+        drop(uow);
+    }
+    {
+        let mut uow = f.begin().await.expect("begin");
+        assert_eq!(
+            uow.setup_drafts()
+                .get(&owner)
+                .await
+                .expect("uncommitted get"),
+            None,
+            "uncommitted setup draft must roll back"
+        );
+        let persisted = draft.clone();
+        uow.setup_drafts()
+            .save(&owner, &persisted)
+            .await
+            .expect("save");
+        uow.commit().await.expect("commit");
+    }
+    {
+        let mut uow = f.begin().await.expect("begin");
+        assert_eq!(
+            uow.setup_drafts().get(&owner).await.expect("get"),
+            Some(draft)
+        );
+        assert!(
+            uow.setup_drafts()
+                .delete(&foreign)
+                .await
+                .expect("foreign delete")
+                .is_empty()
+        );
+        assert_eq!(
+            uow.setup_drafts().delete(&owner).await.expect("delete"),
+            vec![photo]
+        );
+        uow.commit().await.expect("commit");
+    }
+    let mut uow = f.begin().await.expect("begin");
+    assert_eq!(uow.setup_drafts().get(&owner).await.expect("get"), None);
 }
 
 #[path = "suite_documents.rs"]

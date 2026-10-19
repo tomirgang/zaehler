@@ -43,8 +43,12 @@ use_case!(
 pub struct AssetCostInput {
     pub booked_on: NaiveDate,
     pub category: AssetCategory,
-    pub amount: Decimal,
+    /// Bei Kraftstoff genügen zwei von Betrag, Menge und Preis pro Liter
+    /// (SPEC_CAR_FUEL_PRICE), sonst Pflicht
+    pub amount: Option<Decimal>,
     pub quantity: Option<Decimal>,
+    /// Preis pro Liter bei Kraftstoff
+    pub unit_price: Option<Decimal>,
     pub odometer: Option<Decimal>,
     pub full_tank: bool,
     pub recurrence: Option<Recurrence>,
@@ -107,13 +111,63 @@ async fn check_asset(
     }
 }
 
+/// Betrag, Menge und Preis pro Liter nach der Prüfung.
+#[derive(Debug, Clone, Copy)]
+struct Amounts {
+    amount: Decimal,
+    quantity: Option<Decimal>,
+    unit_price: Option<Decimal>,
+}
+
+/// Bei Kraftstoff ergänzt die fehlende von drei Angaben
+/// (SPEC_CAR_FUEL_PRICE); sonst ist der Betrag Pflicht.
+// @impl SPEC_CAR_FUEL_PRICE
+fn amounts(e: &mut FieldErrors, fuel: bool, input: &AssetCostInput) -> Amounts {
+    use zaehler_domain::vehicle::{FuelFieldsError, complete_fuel_fields};
+    let fallback = Amounts {
+        amount: input.amount.unwrap_or_default(),
+        quantity: input.quantity,
+        unit_price: input.unit_price,
+    };
+    if !fuel {
+        if input.amount.is_none() {
+            e.add("amount", "form.number_required");
+        }
+        if input.unit_price.is_some() {
+            e.add("unit_price", "asset.quantity_fuel_only");
+        }
+        return fallback;
+    }
+    match complete_fuel_fields(input.amount, input.quantity, input.unit_price) {
+        Ok(f) => Amounts {
+            amount: f.amount,
+            quantity: f.quantity,
+            unit_price: f.unit_price,
+        },
+        Err(err) => {
+            match err {
+                FuelFieldsError::Missing => e.add("amount", "asset_cost.price_fields_missing"),
+                FuelFieldsError::Mismatch => e.add("unit_price", "asset_cost.price_mismatch"),
+                FuelFieldsError::NotPositive => {
+                    if input.quantity.is_some_and(|q| q <= Decimal::ZERO) {
+                        e.add("quantity", "vehicle.energy_invalid");
+                    } else {
+                        e.add("unit_price", "asset_cost.price_invalid");
+                    }
+                }
+            }
+            fallback
+        }
+    }
+}
+
 // @impl SPEC_ASSET_COSTS, SPEC_CAR_VEHICLES
 fn validate(
     e: &mut FieldErrors,
     asset: AssetRef,
     drive: Option<zaehler_domain::vehicle::DriveType>,
     input: &AssetCostInput,
-) {
+) -> Amounts {
     if input.category.asset_type() != asset.asset_type {
         e.add("category", "asset.category_invalid");
     }
@@ -123,17 +177,36 @@ fn validate(
     {
         e.add("category", "vehicle.category_not_allowed");
     }
-    if input.amount < Decimal::ZERO {
-        e.add("amount", "contract.amount_negative");
+    if let Some(amount) = input.amount {
+        money(e, "amount", amount, 2);
     }
-    money(e, "amount", input.amount, 2);
     if let Some(q) = input.quantity {
         if !fuel {
             e.add("quantity", "asset.quantity_fuel_only");
-        } else if q <= Decimal::ZERO {
-            e.add("quantity", "vehicle.energy_invalid");
         }
         money(e, "quantity", q, 3);
+    }
+    if let Some(p) = input.unit_price {
+        money(e, "unit_price", p, 3);
+    }
+    let a = if e.is_empty() {
+        amounts(e, fuel, input)
+    } else {
+        Amounts {
+            amount: input.amount.unwrap_or_default(),
+            quantity: input.quantity,
+            unit_price: input.unit_price,
+        }
+    };
+    if a.amount < Decimal::ZERO {
+        e.add("amount", "contract.amount_negative");
+    }
+    money(e, "amount", a.amount, 2);
+    if let Some(quantity) = a.quantity {
+        money(e, "quantity", quantity, 3);
+    }
+    if let Some(price) = a.unit_price {
+        money(e, "unit_price", price, 3);
     }
     if input.full_tank && !fuel {
         e.add("full_tank", "asset.quantity_fuel_only");
@@ -163,12 +236,14 @@ fn validate(
         }
     }
     text_opt(e, "note", input.note.as_ref(), MAX_NOTE);
+    a
 }
 
 fn entry(
     id: AssetCostId,
     asset: AssetRef,
     input: &AssetCostInput,
+    a: Amounts,
     document: Option<DocumentId>,
 ) -> AssetCost {
     let fuel = input.category == AssetCategory::Vehicle(VehicleCostCategory::Fuel);
@@ -177,8 +252,9 @@ fn entry(
         asset,
         booked_on: input.booked_on,
         category: input.category,
-        amount: input.amount,
-        quantity: input.quantity,
+        amount: a.amount,
+        quantity: a.quantity,
+        unit_price: a.unit_price,
         odometer: input.odometer,
         full_tank: fuel.then_some(input.full_tank),
         recurrence: input.recurrence,
@@ -199,7 +275,7 @@ pub(crate) async fn add_in(
 ) -> Result<SaveOutcome<AssetCostId>, AppError> {
     let drive = check_asset(uow, t, asset).await?;
     let mut e = FieldErrors::default();
-    validate(&mut e, asset, drive, input);
+    let a = validate(&mut e, asset, drive, input);
     e.into_result()?;
     if input.odometer_as_reading
         && let Some(o) = input.odometer
@@ -219,7 +295,7 @@ pub(crate) async fn add_in(
     }
     let id = AssetCostId(p.ids.new_uuid());
     uow.asset_costs()
-        .create(t, &entry(id, asset, input, document))
+        .create(t, &entry(id, asset, input, a, document))
         .await?;
     Ok(SaveOutcome::Saved(id))
 }
@@ -307,7 +383,7 @@ impl UpdateAssetCost {
             .ok_or(AppError::NotFound)?;
         let drive = check_asset(uow.as_mut(), t, current.asset).await?;
         let mut e = FieldErrors::default();
-        validate(
+        let a = validate(
             &mut e,
             current.asset,
             drive,
@@ -318,7 +394,7 @@ impl UpdateAssetCost {
         );
         e.into_result()?;
         uow.asset_costs()
-            .update(t, &entry(id, current.asset, &input, current.document_id))
+            .update(t, &entry(id, current.asset, &input, a, current.document_id))
             .await?;
         uow.commit().await?;
         Ok(())

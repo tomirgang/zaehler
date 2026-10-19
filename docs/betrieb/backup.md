@@ -21,6 +21,13 @@ Haushalte); IDs, Zeitstempel, Fotos und Anmeldungen (OIDC-Issuer und
 Subject) bleiben erhalten. Sitzungen und temporäre Dateien des CSV-Imports
 gehören nicht zum Archiv; nach dem Import melden sich alle Nutzer neu an.
 
+Ab **1.1.0** schreibt der Export Archivformat **2**: Es enthält zusätzlich
+den Wertverlustmodus und die Laufleistungsdaten der Fahrzeuganschaffung,
+die Energieart der Verbrauchsprofile und gespeicherte Literpreise.
+Archive im Format **1** bleiben importierbar; bestehende Anschaffungen
+verwenden weiterhin den Zeitmodus, bestehende Verbrauchsprofile Strom.
+Ältere Programmversionen können Format 2 nicht importieren.
+
 In docker compose:
 
 ```bash

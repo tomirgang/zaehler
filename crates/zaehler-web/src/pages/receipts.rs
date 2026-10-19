@@ -128,6 +128,7 @@ fn values_of(
         .unwrap_or(VehicleCostCategory::Other);
     if category == VehicleCostCategory::Fuel {
         v.insert("quantity".into(), quantity);
+        v.insert("unit_price".into(), p(x.and_then(|x| x.unit_price)));
         v.insert("full_tank".into(), "1".into());
     }
     v.insert("category".into(), category.as_str().into());

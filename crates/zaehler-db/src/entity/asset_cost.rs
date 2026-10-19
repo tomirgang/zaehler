@@ -14,6 +14,8 @@ pub struct Model {
     pub category: String,
     pub amount_micro: i64,
     pub quantity_milli: Option<i64>,
+    /// Preis pro Liter (`m20261019_000017_fuel_price`)
+    pub unit_price_micro: Option<i64>,
     pub odometer_milli: Option<i64>,
     pub full_tank: Option<bool>,
     pub recurrence_months: Option<i16>,

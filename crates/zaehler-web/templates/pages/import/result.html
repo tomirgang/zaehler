@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/import", ctx.lang.t("nav-import")) %}{% endcall %}{% call bc::here(ctx.lang.t("import-result-title")) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <h1>{{ ctx.lang.t("import-result-title") }}</h1>

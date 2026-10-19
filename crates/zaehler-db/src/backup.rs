@@ -794,6 +794,7 @@ async fn read_vehicles(db: &DatabaseTransaction, data: &mut BackupData) -> PortR
             kwh_per_100km_milli: r.get("kwh_per_100km_milli")?,
             charging_loss_pct_milli: r.get("charging_loss_pct_milli")?,
             electric_share_pct_milli: r.get("electric_share_pct_milli")?,
+            energy: r.or("energy", "electric".to_owned())?,
         })
     })
     .await?;
@@ -806,6 +807,10 @@ async fn read_vehicles(db: &DatabaseTransaction, data: &mut BackupData) -> PortR
             planned_end_on: r.get("planned_end_on")?,
             sold_on: r.get("sold_on")?,
             sale_price_micro: r.get("sale_price_micro")?,
+            depreciation_mode: r.or("depreciation_mode", "time".to_owned())?,
+            odometer_at_purchase_milli: r.opt("odometer_at_purchase_milli")?,
+            lifetime_km_milli: r.opt("lifetime_km_milli")?,
+            end_value_micro: r.opt("end_value_micro")?,
         })
     })
     .await?;
@@ -834,6 +839,7 @@ async fn read_vehicles(db: &DatabaseTransaction, data: &mut BackupData) -> PortR
             category: r.get("category")?,
             amount_micro: r.get("amount_micro")?,
             quantity_milli: r.get("quantity_milli")?,
+            unit_price_micro: r.opt("unit_price_micro")?,
             odometer_milli: r.get("odometer_milli")?,
             full_tank: r.get("full_tank")?,
             recurrence_months: r.get("recurrence_months")?,
@@ -879,6 +885,7 @@ async fn write_vehicles(txn: &DatabaseTransaction, d: &BackupData) -> PortResult
                 kwh_per_100km_milli: Set(x.kwh_per_100km_milli),
                 charging_loss_pct_milli: Set(x.charging_loss_pct_milli),
                 electric_share_pct_milli: Set(x.electric_share_pct_milli),
+                energy: Set(x.energy.clone()),
             })
             .collect(),
     )
@@ -895,6 +902,10 @@ async fn write_vehicles(txn: &DatabaseTransaction, d: &BackupData) -> PortResult
                 planned_end_on: Set(x.planned_end_on),
                 sold_on: Set(x.sold_on),
                 sale_price_micro: Set(x.sale_price_micro),
+                depreciation_mode: Set(x.depreciation_mode.clone()),
+                odometer_at_purchase_milli: Set(x.odometer_at_purchase_milli),
+                lifetime_km_milli: Set(x.lifetime_km_milli),
+                end_value_micro: Set(x.end_value_micro),
             })
             .collect(),
     )
@@ -931,6 +942,7 @@ async fn write_vehicles(txn: &DatabaseTransaction, d: &BackupData) -> PortResult
                 category: Set(x.category.clone()),
                 amount_micro: Set(x.amount_micro),
                 quantity_milli: Set(x.quantity_milli),
+                unit_price_micro: Set(x.unit_price_micro),
                 odometer_milli: Set(x.odometer_milli),
                 full_tank: Set(x.full_tank),
                 recurrence_months: Set(x.recurrence_months),

@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/meters", ctx.lang.t("nav-meters")) %}{% endcall %}{% call bc::crumb("/meters/{}"|format(id), name) %}{% endcall %}{% call bc::here(ctx.lang.t("swap-title")) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <h1>{{ ctx.lang.t("swap-title") }}: {{ name }}</h1>

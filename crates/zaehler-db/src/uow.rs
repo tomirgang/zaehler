@@ -30,14 +30,15 @@ use zaehler_app::{
         Device, DeviceData, Draft, DraftAnalysis, DraftOutcome, DraftStatus, Household,
         HouseholdData, HouseholdSummary, Identity, Invitation, Member, Meter, MeterAggregate,
         MeterData, MeterSummary, MeterTargets, MonthDay, NewInvitation, NotificationSettings,
-        OutboxEvent, OutboxStatus, Reading, ReadingUpdate, Register, RegisterData, Revision, User,
-        schedule_columns, schedule_from_columns, season_weights_from_json, season_weights_to_json,
+        OutboxEvent, OutboxStatus, Reading, ReadingUpdate, Register, RegisterData, Revision,
+        SetupDraft, User, schedule_columns, schedule_from_columns, season_weights_from_json,
+        season_weights_to_json,
     },
     port::{
         ContractRepository, DraftRepository, HouseholdRepository, InvitationRepository,
         MaintenanceRepository, MembershipRepository, MeterRepository,
         NotificationSettingsRepository, OutboxRepository, PortResult, Readiness, ReadingRepository,
-        RevisionRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
+        RevisionRepository, SetupDraftRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
     },
     secret,
 };
@@ -45,7 +46,7 @@ use zaehler_app::{
 use crate::{
     entity::{
         ai_draft, household, invitation, membership, meter, meter_device, notification_settings,
-        outbox, reading, reading_revision, register, user,
+        outbox, reading, reading_revision, register, setup_draft, user,
     },
     fixed,
 };
@@ -149,6 +150,37 @@ impl MaintenanceRepository for SeaOrmStore {
             .collect()
     }
 
+    async fn expire_setup_drafts(&self, cutoff: DateTime<Utc>) -> PortResult<Vec<BlobKey>> {
+        let expired = setup_draft::Entity::find()
+            .filter(setup_draft::Column::UpdatedAt.lt(cutoff))
+            .all(&self.db)
+            .await
+            .map_err(db_err)?;
+        let mut keys = Vec::new();
+        for row in &expired {
+            let draft: SetupDraft = serde_json::from_str(&row.payload).map_err(data_err)?;
+            for key in draft.photos.values() {
+                let parsed = BlobKey::parse(key).ok_or_else(|| data_err("setup photo key"))?;
+                if parsed.household() != HouseholdId(row.household_id) {
+                    return Err(data_err("setup photo household"));
+                }
+                keys.push(parsed);
+            }
+        }
+        if !expired.is_empty() {
+            setup_draft::Entity::delete_many()
+                .filter(
+                    setup_draft::Column::HouseholdId
+                        .is_in(expired.iter().map(|row| row.household_id)),
+                )
+                .filter(setup_draft::Column::UpdatedAt.lt(cutoff))
+                .exec(&self.db)
+                .await
+                .map_err(db_err)?;
+        }
+        Ok(keys)
+    }
+
     // @impl SPEC_OPS_HOUSEKEEPING
     async fn delete_expired_sessions(&self, now: DateTime<Utc>) -> PortResult<u64> {
         crate::session_store::delete_expired(&self.db, now)
@@ -226,6 +258,9 @@ impl UnitOfWork for SeaOrmUow {
         self
     }
     fn api_tokens(&mut self) -> &mut dyn zaehler_app::port::ApiTokenRepository {
+        self
+    }
+    fn setup_drafts(&mut self) -> &mut dyn SetupDraftRepository {
         self
     }
     async fn commit(self: Box<Self>) -> PortResult<()> {
@@ -1635,6 +1670,9 @@ mod pv;
 
 #[path = "api.rs"]
 mod api;
+
+#[path = "setup.rs"]
+mod setup;
 
 /// Neue Zeile einer Ablesung; `token` bei automatisch gelieferten Ständen.
 fn reading_model(r: &Reading, token: Option<Uuid>) -> PortResult<reading::ActiveModel> {

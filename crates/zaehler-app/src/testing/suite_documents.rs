@@ -279,6 +279,7 @@ pub async fn documents(f: &dyn UnitOfWorkFactory, m: &dyn MaintenanceRepository)
         total_amount: Some(Decimal::new(1899, 2)),
         category: Some(zaehler_domain::assets::VehicleCostCategory::Charging),
         quantity: Some(Decimal::new(32_125, 3)),
+        unit_price: None,
         unit: Some("kWh".into()),
         vendor: Some("Ladepark".into()),
         odometer: Some(Decimal::from(12_345)),

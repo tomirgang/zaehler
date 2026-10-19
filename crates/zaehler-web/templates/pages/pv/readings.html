@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/pv", ctx.lang.t("nav-pv")) %}{% endcall %}{% call bc::crumb("/pv/grid/{}"|format(id), name) %}{% endcall %}{% call bc::here(ctx.lang.t("pv-bulk")) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <h1>{{ ctx.lang.t("pv-bulk") }}: {{ name }}</h1>

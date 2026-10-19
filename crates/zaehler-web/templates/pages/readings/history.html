@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/meters", ctx.lang.t("nav-meters")) %}{% endcall %}{% call bc::crumb("/meters/{}"|format(meter_id), meter_name) %}{% endcall %}{% call bc::here(ctx.lang.t("history-title")) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <div class="page-head">

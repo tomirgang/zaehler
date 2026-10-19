@@ -319,6 +319,46 @@ impl CreateMeter {
         self.create(t, input, None).await
     }
 
+    /// Validiert und legt eine Messstelle in einer bereits laufenden
+    /// Unit of Work an; der Aufrufer besitzt Commit/Rollback.
+    pub async fn execute_in(
+        &self,
+        t: &Tenant,
+        input: MeterInput,
+        uow: &mut dyn crate::port::UnitOfWork,
+    ) -> Result<MeterId, AppError> {
+        t.require(Role::Owner)?;
+        validate_new(&input)?;
+        let (id, _) = insert_meter(&self.p, uow, t, &input, None).await?;
+        Ok(id)
+    }
+
+    /// Creates a meter inside a caller-owned transaction, copying setup
+    /// photos (indexed like `input.registers`) to the initial readings
+    /// created from this input. Returns the copied reading photo keys.
+    pub async fn execute_in_setup(
+        &self,
+        t: &Tenant,
+        input: MeterInput,
+        setup_photos: &[Option<BlobKey>],
+        uow: &mut dyn crate::port::UnitOfWork,
+    ) -> Result<(MeterId, Vec<BlobKey>), AppError> {
+        t.require(Role::Owner)?;
+        validate_new(&input)?;
+        let (id, _, copies) =
+            insert_meter_inner(&self.p, uow, t, &input, None, setup_photos).await?;
+        let mut targets = Vec::new();
+        for (source, target) in copies {
+            self.p
+                .blobs
+                .copy(&source, &target)
+                .await
+                .map_err(AppError::from_storage)?;
+            targets.push(target);
+        }
+        Ok((id, targets))
+    }
+
     /// Legt die Messstelle aus einem offenen Entwurf der Foto-Erfassung an:
     /// Der erste Startstand erhält das Foto (`source = photo`), der Entwurf
     /// wird als bestätigt abgeschlossen.
@@ -409,6 +449,24 @@ pub(crate) async fn insert_meter(
     input: &MeterInput,
     draft: Option<&Draft>,
 ) -> Result<(MeterId, Option<(ReadingId, BlobKey, Option<bool>)>), AppError> {
+    let (id, photo, _) = insert_meter_inner(p, uow, t, input, draft, &[]).await?;
+    Ok((id, photo))
+}
+
+type InsertedMeter = (
+    MeterId,
+    Option<(ReadingId, BlobKey, Option<bool>)>,
+    Vec<(BlobKey, BlobKey)>,
+);
+
+async fn insert_meter_inner(
+    p: &Ports,
+    uow: &mut dyn crate::port::UnitOfWork,
+    t: &Tenant,
+    input: &MeterInput,
+    draft: Option<&Draft>,
+    setup_photos: &[Option<BlobKey>],
+) -> Result<InsertedMeter, AppError> {
     check_unique(uow, t, input, None).await?;
     check_parent(uow, t, None, input.parent_meter_id).await?;
     let meter_id = MeterId(p.ids.new_uuid());
@@ -427,7 +485,8 @@ pub(crate) async fn insert_meter(
         .add_device(t, meter_id, device_id, &device)
         .await?;
     let mut starts = Vec::new();
-    for r in &input.registers {
+    let mut copies = Vec::new();
+    for (index, r) in input.registers.iter().enumerate() {
         let register_id = RegisterId(p.ids.new_uuid());
         let data = RegisterData {
             code: r.code.trim().to_owned(),
@@ -437,14 +496,16 @@ pub(crate) async fn insert_meter(
             .add_register(t, meter_id, register_id, &data)
             .await?;
         if let Some(value) = r.start_value {
-            starts.push(new_reading(
-                p,
-                t,
-                register_id,
-                device_id,
-                input.start_at,
-                value,
-            ));
+            let mut reading = new_reading(p, t, register_id, device_id, input.start_at, value);
+            if draft.is_none()
+                && let Some(Some(source)) = setup_photos.get(index)
+            {
+                let key = BlobKey::reading_photo(t.household_id(), reading.id);
+                reading.source = ReadingSource::Photo;
+                reading.photo_key = Some(key.clone());
+                copies.push((source.clone(), key));
+            }
+            starts.push(reading);
         }
     }
     // Foto des Entwurfs wird Belegfoto des ersten Startstands
@@ -458,7 +519,7 @@ pub(crate) async fn insert_meter(
     if !starts.is_empty() {
         uow.readings().insert(t, &starts).await?;
     }
-    Ok((meter_id, photo))
+    Ok((meter_id, photo, copies))
 }
 
 /// Eingaben einer neuen Messstelle prüfen (Feldfehler).

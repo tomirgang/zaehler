@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/meters", ctx.lang.t("nav-meters")) %}{% endcall %}{% call bc::crumb("/meters/{}"|format(id), name) %}{% endcall %}{% call bc::here(ctx.lang.t("costs-title")) %}{% endcall %}{% endblock %}
 
 {% macro contract_costs(c, title) %}
 <section class="card" aria-labelledby="costs-{{ c.id }}">

@@ -104,6 +104,28 @@
   };
 
   const builders = {
+    fuelPrice(data) {
+      const s = data.series.fuel_price;
+      const locale = document.documentElement.lang || undefined;
+      const nf = new Intl.NumberFormat(locale, { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+      const option = base({ ...data, unit: "€/l" });
+      return {
+        ...option,
+        grid: { ...option.grid, bottom: 64 },
+        xAxis: { ...option.xAxis, type: "time", data: undefined },
+        dataZoom: [{ type: "inside" }, { type: "slider", bottom: 8 }],
+        tooltip: {
+          trigger: "axis",
+          formatter(params) {
+            const p = params[0];
+            const box = document.createElement("div");
+            box.textContent = `${new Date(p.value[0]).toLocaleDateString(locale)}: ${nf.format(p.value[1])} €/l`;
+            return box;
+          },
+        },
+        series: [{ type: "line", name: s.name, data: s.data, symbolSize: 7, itemStyle: { color: css("--accent") } }],
+      };
+    },
     // Monatsbalken laufendes Jahr und Vorjahr; teilweise abgedeckte Monate
     // als gemessener Anteil mit gestapelter, schraffierter Prognose
     // (SPEC_ANA_PARTIAL_MONTHS); nicht abgedeckte Monate bleiben leer

@@ -11,10 +11,7 @@ Zählerständen: Strom, Gas, Wasser, Wärme, Fahrzeug-Kilometer und weitere Verb
 - Erinnerungen und Alarme per E-Mail
 - PostgreSQL (CloudNativePG) oder SQLite, Helm-Chart und docker compose
 
-> Status: MVP-Meilenstein M1 umgesetzt: Anmeldung (OIDC, Entwicklungs-Login),
-> Haushalte, Messstellen mit Registern und Zählerwechsel, Erfassung per
-> Formular mit Plausibilitätsprüfung, Deutsch und Englisch. Weitere Funktionen
-> gemäß [Umsetzungsplan](docs/impl/MVP.md).
+Version **1.1.0**: siehe [Umsetzungsplan v1.1](docs/impl/V1.1.md).
 
 ## Schnellstart
 
@@ -50,6 +47,37 @@ cargo fmt --all
 
 Konventionen zum Tracing (`// @impl SPEC_…`, `// @test SPEC_…`) stehen in
 [docs/entwicklung/index.md](docs/entwicklung/index.md).
+
+## Container-Release auf Forgejo
+
+Docker mit Buildx wird benötigt. Zuerst bei der Registry anmelden:
+
+```bash
+docker login code.do9ita.de
+scripts/release.sh
+```
+
+Das Skript baut mit dem vorhandenen Dockerfile und überträgt
+`code.do9ita.de/tom/zaehler:1.1.0` und `code.do9ita.de/tom/zaehler:latest`.
+Die Version wird aus `Cargo.toml` gelesen und mit `version` und `appVersion`
+des Helm-Charts verglichen. Nicht committete Änderungen verhindern einen
+Release; `--allow-dirty` erlaubt bewusst einen lokalen Entwicklungsstand.
+`--dry-run` baut ohne Push und ohne Anmeldung.
+
+Für CI können `FORGEJO_USER` und `FORGEJO_TOKEN` (Paket-Schreibrecht) gemeinsam
+gesetzt werden. Das Token gelangt ausschließlich über Standardeingabe an
+`docker login`, nicht als Kommandozeilenargument. Alternativ wird die bestehende
+Docker-Anmeldung verwendet. `REGISTRY`, `IMAGE` (mit Registry-Präfix) und
+`PLATFORMS` sind überschreibbar, beispielsweise:
+
+```bash
+PLATFORMS=linux/amd64,linux/arm64 scripts/release.sh
+bash scripts/test-release.sh
+```
+
+Für mehrere Plattformen wird bei Bedarf der Buildx-Builder `zaehler-release`
+mit dem Treiber `docker-container` angelegt. Image-Build und Push erfolgen
+gemeinsam mit beiden Tags; das Skript legt weder Git-Tags noch Commits an.
 
 ## Lizenz
 

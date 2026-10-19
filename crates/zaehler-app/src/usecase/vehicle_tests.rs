@@ -62,8 +62,9 @@ fn cost(on: NaiveDate, category: VehicleCostCategory, amount: Decimal) -> AssetC
     AssetCostInput {
         booked_on: on,
         category: AssetCategory::Vehicle(category),
-        amount,
+        amount: Some(amount),
         quantity: None,
+        unit_price: None,
         odometer: None,
         full_tank: false,
         recurrence: None,
@@ -73,6 +74,74 @@ fn cost(on: NaiveDate, category: VehicleCostCategory, amount: Decimal) -> AssetC
     }
 }
 
+// @test SPEC_CAR_FUEL_PRICE_UI, SPEC_CAR_FUEL_PRICE
+#[tokio::test]
+async fn fuel_price_is_preserved_and_fuel_profile_supports_combustion() {
+    use zaehler_domain::vehicle::ProfileEnergy;
+    let (uc, t, _) = setup().await;
+    let car = vehicle(
+        &uc,
+        &t,
+        "Benziner",
+        DriveType::Combustion,
+        None,
+        dec!(20000),
+    )
+    .await;
+    uc.set_consumption_profile
+        .execute(
+            &t,
+            car,
+            ConsumptionProfile {
+                valid_from: day(2025, 1, 1),
+                kwh_per_100km: dec!(6.5),
+                charging_loss_pct: Decimal::ZERO,
+                electric_share_pct: None,
+                energy: ProfileEnergy::Fuel,
+            },
+        )
+        .await
+        .unwrap();
+    let mut entry = cost(day(2025, 3, 1), VehicleCostCategory::Fuel, dec!(0));
+    entry.amount = None;
+    entry.quantity = Some(dec!(45.32));
+    entry.unit_price = Some(dec!(1.789));
+    let id = saved(
+        uc.add_asset_cost
+            .execute(&t, AssetRef::vehicle(car), entry.clone())
+            .await,
+    );
+    let stored = uc.get_asset_cost.execute(&t, id).await.unwrap();
+    assert_eq!(stored.amount, dec!(81.08));
+    assert_eq!(stored.unit_price, Some(dec!(1.789)));
+    assert_eq!(stored.fuel_unit_price(), Some(dec!(1.789)));
+    let legacy = crate::model::AssetCost {
+        unit_price: None,
+        ..stored
+    };
+    assert_eq!(legacy.fuel_unit_price(), Some(dec!(1.789)));
+    entry.amount = Some(dec!(81.10));
+    field(
+        uc.update_asset_cost.execute(&t, id, entry).await,
+        "unit_price",
+        "asset_cost.price_mismatch",
+    );
+    let mut future = cost(day(2099, 1, 1), VehicleCostCategory::Fuel, dec!(20));
+    future.quantity = Some(dec!(10));
+    future.unit_price = Some(dec!(2));
+    saved(
+        uc.add_asset_cost
+            .execute(&t, AssetRef::vehicle(car), future)
+            .await,
+    );
+    let report = uc.vehicle_report.execute(&t, car).await.unwrap();
+    assert_eq!(report.fuel_price.as_ref().unwrap().points.len(), 1);
+    assert_eq!(
+        report.fuel_price.unwrap().last,
+        Some((day(2025, 3, 1), dec!(1.789)))
+    );
+}
+
 fn fuel(on: NaiveDate, litres: Decimal, amount: Decimal, odometer: Decimal) -> AssetCostInput {
     AssetCostInput {
         quantity: Some(litres),
@@ -80,6 +149,51 @@ fn fuel(on: NaiveDate, litres: Decimal, amount: Decimal, odometer: Decimal) -> A
         full_tank: true,
         ..cost(on, VehicleCostCategory::Fuel, amount)
     }
+}
+
+// @test SPEC_CAR_FUEL_PRICE
+#[tokio::test]
+async fn fuel_forecast_without_quantities_is_marked_as_estimated() {
+    use zaehler_domain::vehicle::ProfileEnergy;
+    let (uc, t, clock) = setup().await;
+    let car = vehicle(&uc, &t, "Auto", DriveType::Combustion, None, dec!(10000)).await;
+    record(&uc, &t, car, berlin(2026, 1, 1), dec!(22000)).await;
+    super::contract_tests::set_today(&clock, day(2026, 7, 2));
+    record(&uc, &t, car, berlin(2026, 7, 2), dec!(28000)).await;
+    uc.set_consumption_profile
+        .execute(
+            &t,
+            car,
+            ConsumptionProfile {
+                valid_from: day(2025, 1, 1),
+                kwh_per_100km: dec!(6.5),
+                charging_loss_pct: Decimal::ZERO,
+                electric_share_pct: None,
+                energy: ProfileEnergy::Fuel,
+            },
+        )
+        .await
+        .unwrap();
+    saved(
+        uc.add_asset_cost
+            .execute(
+                &t,
+                AssetRef::vehicle(car),
+                cost(day(2026, 5, 1), VehicleCostCategory::Fuel, dec!(300)),
+            )
+            .await,
+    );
+    let report = uc.vehicle_report.execute(&t, car).await.unwrap();
+    let price = report.fuel_price.unwrap();
+    assert!(price.last.is_none() && price.points.is_empty());
+    assert!(price.estimate.unwrap() > Decimal::ZERO);
+    let forecast = report.forecast.unwrap();
+    let fuel = forecast.fuel_cost.unwrap();
+    assert!(fuel.estimated && fuel.value > Decimal::ZERO);
+    assert_eq!(
+        forecast.expected,
+        Some((dec!(300) + fuel.value).round_dp(2))
+    );
 }
 
 fn charging(at: DateTime<Utc>, kwh: Decimal, amount: Decimal) -> ChargingInput {
@@ -409,6 +523,7 @@ async fn estimate_without_submeter_is_marked() {
                 kwh_per_100km: dec!(18),
                 charging_loss_pct: dec!(10),
                 electric_share_pct: Some(dec!(50)),
+                energy: zaehler_domain::vehicle::ProfileEnergy::Electric,
             },
         )
         .await
@@ -474,8 +589,12 @@ async fn combustion_report_with_full_tank_method_and_sale() {
             Some(Holding {
                 purchased_on: day(2025, 1, 1),
                 price: dec!(30000),
-                residual_value: dec!(10000),
-                planned_end: day(2030, 1, 1),
+                mode: zaehler_domain::vehicle::DepreciationMode::Time,
+                residual_value: Some(dec!(10000)),
+                planned_end: Some(day(2030, 1, 1)),
+                odometer_at_purchase: None,
+                lifetime_km: None,
+                end_value: None,
                 sold_on: Some(day(2026, 1, 10)),
                 sale_price: Some(dec!(22000)),
             }),
@@ -651,6 +770,7 @@ async fn receipts_become_charging_sessions_and_cost_entries() {
         total_amount: Some(dec!(18.99)),
         category: Some(VehicleCostCategory::Charging),
         quantity: Some(dec!(32.125)),
+        unit_price: None,
         unit: Some("kWh".into()),
         vendor: Some("Ladepark".into()),
         odometer: None,

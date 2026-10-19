@@ -66,7 +66,11 @@ Start und danach im Abstand von `housekeeping.interval_minutes`: offene
 Foto-Entwürfe älter als `housekeeping.draft_ttl_hours` werden verworfen und
 ihre Fotos gelöscht, temporäre Objekte unter `households/*/tmp/` älter als
 24 Stunden und abgelaufene Sitzungen werden entfernt. Parallele Läufe
-mehrerer Replicas sind zulässig.
+mehrerer Replicas sind zulässig. Setup-Entwürfe samt Fotos verfallen nach
+30 Tagen. Diese Frist ist fest und in v1.1 bewusst nicht konfigurierbar
+(akzeptierte Einschränkung); `Housekeeping` kennt intern
+`setup.draft_ttl_days`, die Server-Konfiguration stellt die Option nicht
+bereit.
 
 Ohne Abschnitt `ai` ist die automatische Erkennung abgeschaltet
 ({need}`REQ_AI_006`); die Foto-Erfassung speichert dann das Foto und

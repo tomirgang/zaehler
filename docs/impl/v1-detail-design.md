@@ -321,8 +321,9 @@ Ablesung; eine Ablesung bis zu 3 Tage vor dem Stichtag zählt für diesen
 Stichtag. Ohne Ablesung ist eine Messstelle mit Plan sofort fällig. Überfällig
 ist eine Messstelle ab dem Tag nach der Fälligkeit (Kalendertage in der
 Zeitzone des Haushalts). Archivierte Messstellen sind nie fällig. Das
-Dashboard ({need}`SPEC_UI_DASHBOARD`) zeigt fällig und überfällig getrennt und
-sortiert überfällige zuerst.
+Dashboard ({need}`SPEC_UI_DASHBOARD`) zeigt fällig und überfällig getrennt.
+Ab v1.1 gilt die Gruppierung nach {need}`SPEC_UI_DASHBOARD_GROUPS` statt
+der bisherigen Sortierung „überfällige zuerst“.
 
 Umsetzung: Statt einer Datenmigration gilt bei fehlendem `schedule_kind` der
 bisherige Turnus `reading_interval_days` als `EveryDays(n)`; beim Speichern
@@ -640,7 +641,7 @@ und `zaehler_document_analysis_seconds`.
 
 Foto oder PDF → `DocumentExtractor::receipt`: Datum, Betrag, Menge mit
 Einheit (l, kWh), Kategorie (aus der Liste der Fahrzeugkategorien), Anbieter,
-Kilometerstand, Ladeart. Vorschlag: Ladevorgang (Einheit kWh) oder
+Kilometerstand, Ladeart und ab v1.1 Preis pro Liter (`unit_price`). Vorschlag: Ladevorgang (Einheit kWh) oder
 Kostenbuch-Eintrag; das Fahrzeug wird gewählt (vorbelegt, wenn der Haushalt
 genau eines hat). Bestätigung speichert den Eintrag mit Verweis auf das
 Dokument (`source = receipt`).

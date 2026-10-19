@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/pv", ctx.lang.t("nav-pv")) %}{% endcall %}{% call bc::here("{}: {}"|format(ctx.lang.t("pv-grid-title"), name)) %}{% endcall %}{% endblock %}
 
 {% macro kpi_table(rows, has_battery) %}
 <div class="table-scroll">

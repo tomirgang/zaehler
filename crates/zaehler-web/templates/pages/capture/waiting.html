@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/capture", ctx.lang.t("nav-capture")) %}{% endcall %}{% call bc::here(ctx.lang.t("capture-confirm-title")) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <h1>{{ ctx.lang.t("capture-confirm-title") }}</h1>

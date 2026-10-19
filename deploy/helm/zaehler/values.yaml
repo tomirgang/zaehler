@@ -1,5 +1,5 @@
 image:
-  repository: git.example.com/owner/zaehler
+  repository: code.do9ita.de/tom/zaehler
   tag: ""            # Default: .Chart.AppVersion
   pullPolicy: IfNotPresent
 

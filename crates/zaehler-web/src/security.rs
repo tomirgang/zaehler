@@ -119,11 +119,12 @@ fn origin_allowed(origin: &str, public_origin: &str) -> bool {
 }
 
 /// Routen mit Multipart-Body; ihre Handler prüfen das Feld `_csrf` selbst.
-const MULTIPART_ROUTES: [&str; 4] = [
+const MULTIPART_ROUTES: [&str; 5] = [
     "/capture",
     "/import/upload",
     "/settings/import",
     "/documents",
+    "/setup/photo",
 ];
 
 /// Antwort bei fehlgeschlagener CSRF-Prüfung.

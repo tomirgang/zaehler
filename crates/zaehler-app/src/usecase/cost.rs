@@ -429,6 +429,21 @@ impl MeterPricing {
         self.readings.first().map(|r| cal.local_date(r.read_at))
     }
 
+    /// Stand zu Beginn des Tages `d`: erste Ablesung plus Menge bis `d`;
+    /// bis einschließlich zum Tag der ersten Ablesung `None`
+    /// (Kilometerstand für SPEC_CAR_MILEAGE_DEPRECIATION).
+    pub(crate) fn value_at(&self, cal: Calendar, d: NaiveDate) -> Option<Decimal> {
+        let first = self.readings.first()?;
+        let first_day = cal.local_date(first.read_at);
+        if d <= first_day {
+            return None;
+        }
+        let driven = self
+            .import_quantity(cal, Period::new(first_day, d))
+            .map_or(Decimal::ZERO, |q| q.value);
+        Some(first.value + driven)
+    }
+
     /// Durchschnittlicher Arbeitspreis der Bezugsverträge im Zeitraum, ohne
     /// Grundpreis und Anpassungen (`p_haus`, SPEC_CAR_ENERGY_COST).
     // @impl SPEC_CAR_ENERGY_COST

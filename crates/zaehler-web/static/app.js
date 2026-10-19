@@ -111,3 +111,55 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   });
 }
+
+// @impl SPEC_UI_MENU
+// Menü auf kleinen Bildschirmen. Die Klasse `js` blendet die Navigation erst
+// aus, wenn dieses Skript läuft; ohne JavaScript bleibt sie sichtbar.
+document.documentElement.classList.add("js");
+
+function menuParts() {
+  return [document.querySelector(".menu-toggle"), document.getElementById("topnav")];
+}
+
+function setMenu(open, focusToggle) {
+  const [toggle, menu] = menuParts();
+  if (!toggle || !menu) {
+    return;
+  }
+  toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  menu.classList.toggle("open", open);
+  if (!open && focusToggle) {
+    toggle.focus();
+  }
+}
+
+function menuOpen() {
+  const [toggle] = menuParts();
+  return toggle !== null && toggle.getAttribute("aria-expanded") === "true";
+}
+
+document.addEventListener("htmx:afterSwap", () => setMenu(false, false));
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".menu-toggle")) {
+    setMenu(!menuOpen(), false);
+  } else if (menuOpen() && !e.target.closest("#topnav")) {
+    setMenu(false, false);
+  }
+});
+
+// @impl SPEC_UI_PHOTO_VIEW
+// Escape schließt zuerst das Menü, sonst eine Ansicht mit `data-close`.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") {
+    return;
+  }
+  if (menuOpen()) {
+    setMenu(false, true);
+    return;
+  }
+  const close = document.querySelector("[data-close]");
+  if (close) {
+    close.click();
+  }
+});

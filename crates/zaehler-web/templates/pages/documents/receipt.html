@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/documents", ctx.lang.t("documents-title")) %}{% endcall %}{% call bc::here(ctx.lang.t("document-receipt-title")) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <div class="page-head">
@@ -116,6 +118,11 @@
         <label for="quantity">{{ ctx.lang.t("asset-quantity") }}</label>
         <input id="quantity" name="quantity" value="{{ self.val("quantity") }}" inputmode="decimal">
         <label><input type="checkbox" name="full_tank" value="1"{% if self.checked("full_tank") %} checked{% endif %}> {{ ctx.lang.t("asset-full-tank") }}</label>
+      </div>
+      <div class="field">
+        <label for="unit_price">{{ ctx.lang.t("asset-unit-price") }}</label>
+        <input id="unit_price" name="unit_price" value="{{ self.val("unit_price") }}" inputmode="decimal">
+        <p class="hint">{{ ctx.lang.t("asset-fuel-price-hint") }}</p>
       </div>
       <div class="field">
         <label for="odometer">{{ ctx.lang.t("asset-odometer") }}</label>

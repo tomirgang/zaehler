@@ -299,6 +299,7 @@ async fn role_matrix() {
                         kwh_per_100km: Decimal::ONE,
                         charging_loss_pct: Decimal::ZERO,
                         electric_share_pct: None,
+                        energy: zaehler_domain::vehicle::ProfileEnergy::Electric,
                     },
                 )
                 .await,
@@ -457,8 +458,9 @@ async fn role_matrix() {
                 crate::usecase::document::ReceiptEntry::Cost(AssetCostInput {
                     booked_on: contract_input().starts_on,
                     category: AssetCategory::Vehicle(VehicleCostCategory::Tax),
-                    amount: Decimal::ONE,
+                    amount: Some(Decimal::ONE),
                     quantity: None,
+                    unit_price: None,
                     odometer: None,
                     full_tank: false,
                     recurrence: None,
@@ -510,8 +512,9 @@ async fn role_matrix() {
     let entry = AssetCostInput {
         booked_on: contract_input().starts_on,
         category: AssetCategory::Vehicle(VehicleCostCategory::Tax),
-        amount: Decimal::ONE,
+        amount: Some(Decimal::ONE),
         quantity: None,
+        unit_price: None,
         odometer: None,
         full_tank: false,
         recurrence: None,

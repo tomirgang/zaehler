@@ -1,4 +1,6 @@
 {% extends "layout/base.html" %}
+{% import "partials/breadcrumb.html" as bc %}
+{% block breadcrumb %}{% call bc::start() %}{% endcall %}{% call bc::crumb("/settings", ctx.lang.t("nav-settings")) %}{% endcall %}{% call bc::here(ctx.lang.t("tokens-title")) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <div class="page-head">
