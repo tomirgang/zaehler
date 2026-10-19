@@ -42,6 +42,11 @@ den Code):
 uv run --project docs sphinx-autobuild docs docs/_build/html
 ```
 
+Auf dem GitHub-Spiegel veröffentlicht der Workflow
+[`.github/workflows/docs.yaml`](.github/workflows/docs.yaml) die Dokumentation
+bei jedem Push auf `main` über GitHub Pages (einmalig unter *Settings → Pages
+→ Source* „GitHub Actions“ auswählen).
+
 ## Entwicklung
 
 ```bash
